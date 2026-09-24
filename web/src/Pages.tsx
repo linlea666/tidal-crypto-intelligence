@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { ArrowRight, Copy, Trash, WarningCircle } from "@phosphor-icons/react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, Copy, WarningCircle } from "@phosphor-icons/react";
 import { api, amount, price, clock, venue, useAPI } from "./data";
 import { Chart } from "./Chart";
 import { Empty } from "./App";
@@ -7,12 +7,11 @@ import type {
   Asset,
   Frame,
   Health,
-  Flow,
-  DerivativesResponse,
-  WhalesResponse,
   Settings,
-  Annotation,
+  Flow,
+  WhalesResponse,
 } from "./types";
+
 type Props = {
   view: string;
   asset: Asset;
@@ -20,790 +19,151 @@ type Props = {
   health: Health | null;
   onNavigate: (v: string) => void;
 };
+type Meta = {
+  status: string;
+  observedAt: string | null;
+  fetchedAt: string;
+  expiresAt: string;
+  resolutionSeconds: number;
+};
+type FlowData = Flow & {
+  hasData: boolean;
+  meta: Meta;
+  footprintVenues: string[];
+  footprintPartial: boolean;
+  anchor: string;
+};
+type Derivatives = {
+  totalOiCents: number | null;
+  items: {
+    venue: string;
+    oiUsdCents: number;
+    oiBase: number;
+    valid: boolean;
+  }[];
+  series: { time: number; oiUsdCents: number }[];
+  funding: {
+    asset: string;
+    venue: string;
+    ratePercent: string;
+    intervalHours: number | null;
+    margin: string;
+  }[];
+  meta: Meta;
+  fundingMeta: Meta;
+  longLiquidationCents: number | null;
+  shortLiquidationCents: number | null;
+  coverage: string;
+};
+type Whales = WhalesResponse & {
+  hasData: boolean;
+  longCents: number;
+  shortCents: number;
+  nearLiquidationCents: number;
+  meta: Meta;
+  distributionScope: string;
+  monitor: WhalesResponse["monitor"] & { fresh: number };
+};
+type Dataset = {
+  id: string;
+  kind: string;
+  asset: string;
+  venue?: string;
+  source: string;
+  refreshSeconds: number;
+  ttlSeconds: number;
+};
+type Job = {
+  id: string;
+  dataset: Dataset;
+  next: string;
+  error?: string;
+  inFlight: boolean;
+  mode: string;
+  completed: boolean;
+  disabled: boolean;
+  calls: number;
+};
+type DataStatus = {
+  datasets: {
+    dataset: Dataset;
+    status: string;
+    observedAt: string | null;
+    fetchedAt: string;
+  }[];
+  scheduler: {
+    enabled: boolean;
+    limitPerMinute: number;
+    usedLastMinute: number;
+    calls: number;
+    rateLimited: number;
+    authFailed: boolean;
+    jobs: Job[];
+  };
+  storage: {
+    usedBytes: number;
+    freeBytes: number;
+    fineHistoryPaused: boolean;
+    sqlite: string;
+  };
+  rulesVersion: string;
+  legacyCollectorsRunning: boolean;
+};
+type Model = {
+  bins: { price: number; strength: number; venue?: string }[];
+  prices?: number[];
+  times?: number[];
+  cells?: [number, number, number][];
+  referencePrice: number;
+};
+type Liquidations = {
+  map: { data: Model | null; meta: Meta };
+  heatmap: { data: Model | null; meta: Meta };
+  note: string;
+};
+type Large = {
+  id: string;
+  venue: string;
+  side: string;
+  price: string;
+  quote: string;
+  usdCents: number | null;
+  executedUsd: string;
+  startAt: string | null;
+  changedAt: string | null;
+  valid: boolean;
+  state: string;
+};
 const baseAxis = {
   axisLabel: { color: "#95a29d" },
   splitLine: { lineStyle: { color: "#293330" } },
   axisLine: { lineStyle: { color: "#35423d" } },
 };
-export function MarketPages(p: Props) {
-  if (p.view === "flow") return <FlowPage {...p} />;
-  if (p.view === "derivatives") return <DerivativesPage {...p} />;
-  if (p.view === "whales") return <WhalesPage {...p} />;
-  if (p.view === "health") return <HealthPage {...p} />;
-  return <Empty text="选择上方页面查看数据。" />;
-}
-function FlowPage({ asset }: Props) {
-  const [hours, setHours] = useState(1);
-  const [market, setMarket] = useState("spot");
-  const { data, error } = useAPI<Flow>(
-    `flow?asset=${asset}&hours=${hours}&market=${market}`,
-    15000,
-  );
-  const option = useMemo(
-    () => ({
-      grid: { left: 85, right: 30, top: 25, bottom: 35 },
-      tooltip: {
-        trigger: "axis",
-        valueFormatter: (v: number) => amount(v) + " USD",
-      },
-      xAxis: {
-        type: "time",
-        ...baseAxis,
-        axisLabel: { formatter: (t: number) => clock(t / 1000) },
-      },
-      yAxis: {
-        type: "value",
-        ...baseAxis,
-        axisLabel: { formatter: (n: number) => amount(n) },
-      },
-      series: [
-        {
-          name: "累计主动净买入",
-          type: "line",
-          symbol: "none",
-          lineStyle: { color: "#7deba9", width: 2 },
-          data: data?.series.map((p) => [p.time * 1000, p.cvdCents]) ?? [],
-        },
-      ],
-    }),
-    [data],
-  );
-  const bins = Object.entries(data?.footprint ?? {})
-    .map(([p, [buy, sell]]) => ({ price: +p * (data?.step ?? 1), buy, sell }))
-    .sort((a, b) => b.buy + b.sell - a.buy - a.sell)
-    .slice(0, 30)
-    .sort((a, b) => b.price - a.price);
-  const max = Math.max(1, ...bins.map((b) => Math.max(b.buy, b.sell)));
+const names: Record<string, string> = {
+  fresh: "有效",
+  retrieval_only: "已获取 · 来源时间未知",
+  stale: "已过期",
+  missing: "等待数据",
+};
+function Status({ meta }: { meta?: Meta }) {
+  if (!meta) return null;
+  const expired =
+    meta.status === "stale" ||
+    meta.status === "missing" ||
+    new Date(meta.expiresAt).getTime() < Date.now();
   return (
-    <>
-      <div className="toolbar page-toolbar">
-        <div className="segmented">
-          {[
-            ["spot", "现货"],
-            ["perp", "合约"],
-          ].map(([v, t]) => (
-            <button
-              key={v}
-              className={market === v ? "selected" : ""}
-              onClick={() => setMarket(v)}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-        <label>
-          统计窗口{" "}
-          <select value={hours} onChange={(e) => setHours(+e.target.value)}>
-            {[
-              [0.25, "15分钟"],
-              [1, "1小时"],
-              [4, "4小时"],
-              [24, "24小时"],
-              [168, "7天"],
-              [720, "30天"],
-            ].map(([v, t]) => (
-              <option value={v} key={v}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="helper">主动净买入 = 主动买入额 − 主动卖出额</span>
-      </div>
-      {error && <div className="notice danger">{error}</div>}
-      <div className="metric-strip">
-        <Metric
-          title="主动买入"
-          value={data ? amount(data.buyCents) : "—"}
-          tone="buy"
-        />
-        <Metric
-          title="主动卖出"
-          value={data ? amount(data.sellCents) : "—"}
-          tone="sell"
-        />
-        <Metric
-          title="主动净买入"
-          value={data ? amount(data.netCents, true) : "—"}
-          tone={(data?.netCents ?? 0) >= 0 ? "buy" : "sell"}
-        />
-        <Metric
-          title="成交量加权均价 · VWAP"
-          value={data?.vwap ? "$" + price(data.vwap) : "—"}
-        />
-      </div>
-      <p className="helper">
-        这是已接收成交的主动方向统计，不是交易所充值提现或新增资金。
-        {data?.partial && (
-          <strong className="amber">
-            {" "}
-            当前窗口包含缺口或未完整覆盖，仅为已观察成交。
-          </strong>
-        )}
-        {data && new Date(data.startedAt) > new Date(data.from)
-          ? "采集起点晚于所选窗口，当前为部分历史。"
-          : ""}
-      </p>
-      <section className="data-section">
-        <h2>累计主动净买入 · CVD</h2>
-        {data?.series.length ? (
-          <Chart option={option} label="累计主动净买入时间曲线" />
-        ) : (
-          <Empty text="正在积累实际成交，暂无该窗口的有效统计。" />
-        )}
-      </section>
-      <section className="data-section">
-        <div className="section-heading">
-          <h2>成交足迹</h2>
-          <span>成交最活跃的30个价位 · 按价格排列</span>
-        </div>
-        <div className="footprint-header">
-          <span>价格区间</span>
-          <span className="sell">主动卖出</span>
-          <span className="buy">主动买入</span>
-          <span>净买入</span>
-        </div>
-        {bins.map((b) => (
-          <div className="footprint-row" key={b.price}>
-            <span>${price(b.price, 0)}</span>
-            <div className="sell">
-              <meter max={max} value={b.sell} />
-              <span>{amount(b.sell)}</span>
-            </div>
-            <div className="buy">
-              <meter max={max} value={b.buy} />
-              <span>{amount(b.buy)}</span>
-            </div>
-            <strong className={b.buy >= b.sell ? "buy" : "sell"}>
-              {amount(b.buy - b.sell, true)}
-            </strong>
-          </div>
-        ))}
-        {!bins.length && <Empty text="暂无有效成交价位。" />}
-      </section>
-    </>
-  );
-}
-function DerivativesPage({ asset }: Props) {
-  const [hours, setHours] = useState(1);
-  const { data, error } = useAPI<DerivativesResponse>(
-    `derivatives?asset=${asset}&hours=${hours}`,
-    30000,
-  );
-  const option = useMemo(
-    () => ({
-      color: ["#7deba9", "#f17369", "#80a9e0"],
-      grid: { left: 90, right: 25, top: 40, bottom: 30 },
-      legend: { textStyle: { color: "#aebfb5" } },
-      tooltip: {
-        trigger: "axis",
-        valueFormatter: (n: number) => amount(n) + " USD",
-      },
-      xAxis: { type: "time", ...baseAxis },
-      yAxis: {
-        type: "value",
-        ...baseAxis,
-        axisLabel: { formatter: (n: number) => amount(n) },
-        scale: true,
-      },
-      series: ["binance", "okx", "bybit"].map((v, i) => ({
-        name: venue(v),
-        type: "line",
-        symbol: "none",
-        lineStyle: { color: ["#7deba9", "#f17369", "#80a9e0"][i] },
-        data: (data?.series ?? [])
-          .filter((d) => d.venue === v)
-          .map((d) => [d.time * 1000, d.oiUsdCents]),
-      })),
-    }),
-    [data],
-  );
-  return (
-    <>
-      <div className="toolbar page-toolbar">
-        <label>
-          观察窗口{" "}
-          <select value={hours} onChange={(e) => setHours(+e.target.value)}>
-            {[
-              [1, "1小时"],
-              [24, "1天"],
-              [168, "7天"],
-              [720, "30天"],
-            ].map(([h, t]) => (
-              <option value={h} key={h}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="helper">变化从窗口内最早有效采样计算</span>
-      </div>
-      <div className="notice">
-        <WarningCircle size={18} />
-        现货与合约分开统计；OI 采用单边持仓口径，美元价值变化也受价格影响。
-      </div>
-      {error && <p className="sell">{error}</p>}
-      <section className="data-section">
-        <h2>永续合约概览</h2>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>平台</th>
-                <th>OI · {asset}</th>
-                <th>OI · 美元</th>
-                <th>窗口内 OI 数量变化</th>
-                <th>资金费率 / 周期</th>
-                <th>下次结算</th>
-                <th>标记价格</th>
-                <th>相对指数基差</th>
-                <th>状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data?.items.map((d) => (
-                <tr key={d.venue} className={!d.valid ? "stale-row" : ""}>
-                  <td>{venue(d.venue)}</td>
-                  <td>{price(d.oiBase, 2)}</td>
-                  <td>{amount(d.oiUsdCents)}</td>
-                  <td>
-                    {data?.changes[d.venue]
-                      ? price(data.changes[d.venue].oiBase, 2) + " " + asset
-                      : "历史不足"}
-                  </td>
-                  <td className={d.funding >= 0 ? "buy" : "sell"}>
-                    {(d.funding * 100).toFixed(4)}%{" "}
-                    <small>/ {d.intervalHours}h</small>
-                  </td>
-                  <td>{d.nextFunding ? clock(d.nextFunding / 1000) : "—"}</td>
-                  <td>${price(d.mark)}</td>
-                  <td>
-                    {d.index
-                      ? ((d.mark / d.index - 1) * 100).toFixed(3) + "%"
-                      : "—"}
-                  </td>
-                  <td>
-                    <span className={`status-dot ${!d.valid ? "warn" : ""}`} />
-                    {d.valid ? "有效" : "过期 / 不完整"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {!data?.items.length && <Empty text="正在读取合约持仓和资金费率。" />}
-      </section>
-      <section className="data-section">
-        <h2>OI 变化轨迹</h2>
-        {data?.series.length ? (
-          <Chart label="分交易所 OI 历史" option={option} />
-        ) : (
-          <Empty text="历史正在积累。" />
-        )}
-      </section>
-      <section className="data-section">
-        <div className="section-heading">
-          <h2>已观察到的清算</h2>
-          <span>最近24小时已观察事件 · 最新100条</span>
-        </div>
-        <p className="helper">
-          Binance 为每秒最新事件快照，OKX 为抽样发布，Bybit
-          为平台公开清算推送。破产价格与实际成交均价分别标注，无法保证全市场完整性。
-        </p>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>时间</th>
-                <th>平台</th>
-                <th>被清算方向</th>
-                <th>涉及金额</th>
-                <th>价格</th>
-                <th>价格含义</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data?.liquidations
-                .slice()
-                .reverse()
-                .slice(0, 100)
-                .map((l, i) => (
-                  <tr key={`${l.venue}-${l.at}-${i}`}>
-                    <td>{clock(l.at)}</td>
-                    <td>{venue(l.venue)}</td>
-                    <td className={l.side === "long" ? "buy" : "sell"}>
-                      {l.side === "long" ? "多头" : "空头"}
-                    </td>
-                    <td>{amount(l.usdCents)}</td>
-                    <td>${price(l.price)}</td>
-                    <td>
-                      {l.priceType === "bankruptcy"
-                        ? "破产价格"
-                        : "实际成交均价"}
-                    </td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-        </div>
-        {!data?.liquidations.length && (
-          <Empty text="当前未收到该币种的清算事件；这不代表市场没有发生清算。" />
-        )}
-      </section>
-    </>
-  );
-}
-function WhalesPage({ asset }: Props) {
-  const [limit, setLimit] = useState(10);
-  const [side, setSide] = useState("all");
-  const [kind, setKind] = useState("liquidation");
-  const [address, setAddress] = useState("");
-  const [msg, setMsg] = useState("");
-  const { data, error, refresh } = useAPI<WhalesResponse>(
-    `whales?asset=${asset}&limit=${limit}&side=${side}`,
-    15000,
-  );
-  const buckets = (data?.buckets ?? [])
-    .filter((b) => b.kind === kind && (side === "all" || b.side === side))
-    .sort((a, b) => b.usdCents - a.usdCents)
-    .slice(0, 15)
-    .sort((a, b) => b.price - a.price);
-  const max = Math.max(1, ...buckets.map((b) => b.usdCents));
-  return (
-    <>
-      <div className="toolbar page-toolbar">
-        <div className="segmented">
-          {[
-            ["liquidation", "预估清算分布"],
-            ["entry", "持仓均价分布"],
-          ].map(([v, t]) => (
-            <button
-              key={v}
-              className={kind === v ? "selected" : ""}
-              onClick={() => setKind(v)}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-        <label>
-          方向{" "}
-          <select value={side} onChange={(e) => setSide(e.target.value)}>
-            <option value="all">全部方向</option>
-            <option value="long">多头</option>
-            <option value="short">空头</option>
-          </select>
-        </label>
-        <span className="helper">
-          Hyperliquid · {data?.monitor.candidates ?? 0}个候选地址 ·
-          最多100个核心监控地址
-        </span>
-      </div>
-      {error && <p className="sell">{error}</p>}
-      <div className="whale-layout">
-        <section className="data-section">
-          <h2>
-            {kind === "liquidation" ? "动态预估清算价位" : "当前持仓均价集中区"}
-          </h2>
-          <p className="helper">
-            柱长表示涉及的当前仓位金额。
-            {kind === "liquidation"
-              ? "不是必然一次性爆仓金额；空清算价不参与统计。"
-              : "持仓均价不是含全部费用的盈亏平衡价。"}
-          </p>
-          <div className="whale-bucket-head">
-            <span>价格 · USD</span>
-            <span>涉及仓位金额</span>
-            <span>地址数</span>
-            <span>最大单一占比</span>
-          </div>
-          {buckets.map((b) => (
-            <div
-              className={`whale-bucket ${b.side === "long" ? "buy" : "sell"}`}
-              key={`${b.side}/${b.price}`}
-            >
-              <span>
-                ${price(b.price, 0)}
-                <small>{b.side === "long" ? "多头" : "空头"}</small>
-              </span>
-              <div>
-                <meter value={b.usdCents} max={max} />
-                <strong>{amount(b.usdCents)}</strong>
-              </div>
-              <span>{b.addresses}</span>
-              <span>{(b.largestShare * 100).toFixed(0)}%</span>
-            </div>
-          ))}
-          {!buckets.length && (
-            <Empty text="正在发现并查询公开地址。只有90秒内成功更新且字段有效的核心持仓才参与分布。" />
-          )}
-        </section>
-        <aside className="watchlist">
-          <h2>关注公开地址</h2>
-          <p className="helper">
-            最多20个，优先纳入监控。地址可能对应多个策略，不据此判断真实身份或整体方向。
-          </p>
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              try {
-                await api("watchlist", {
-                  method: "POST",
-                  body: JSON.stringify({ address, pinned: true }),
-                });
-                setAddress("");
-                setMsg("已加入监控队列");
-                refresh();
-              } catch (e) {
-                setMsg((e as Error).message);
-              }
-            }}
-          >
-            <label className="sr-only" htmlFor="watch-address">
-              Hyperliquid 地址
-            </label>
-            <input
-              id="watch-address"
-              placeholder="0x…"
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              required
-            />
-            <button className="primary full">
-              加入关注 <ArrowRight size={17} />
-            </button>
-          </form>
-          {msg && (
-            <p className="helper" role="status">
-              {msg}
-            </p>
-          )}
-          {data?.monitor.pinned.map((a) => (
-            <div className="pin-row" key={a}>
-              <span title={a}>
-                {a.slice(0, 8)}…{a.slice(-6)}
-              </span>
-              <button
-                className="icon-button"
-                aria-label="取消关注"
-                onClick={() =>
-                  api("watchlist", {
-                    method: "POST",
-                    body: JSON.stringify({ address: a, pinned: false }),
-                  }).then(refresh)
-                }
-              >
-                <Trash size={17} />
-              </button>
-            </div>
-          ))}
-          <p className="helper">
-            实时订阅 {data?.monitor.websocketUsers ?? 0}/10
-            个重点地址，其余核心持仓约每30秒查询。
-          </p>
-        </aside>
-      </div>
-      <section className="data-section">
-        <div className="section-heading">
-          <h2>已监控地址持仓榜</h2>
-          <div className="segmented">
-            {[10, 50].map((n) => (
-              <button
-                key={n}
-                className={limit === n ? "selected" : ""}
-                onClick={() => setLimit(n)}
-              >
-                前{n}
-              </button>
-            ))}
-          </div>
-          <span className="push-right">按当前仓位金额排序 · 非全市场排名</span>
-        </div>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>地址</th>
-                <th>方向</th>
-                <th>仓位金额</th>
-                <th>持仓均价</th>
-                <th>设置杠杆</th>
-                <th>预估清算价</th>
-                <th>距清算</th>
-                <th>浮盈亏</th>
-                <th>较上次采样数量变化</th>
-                <th>状态</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data?.items.map((w) => (
-                <tr key={w.address} className={!w.valid ? "stale-row" : ""}>
-                  <td>
-                    <button
-                      className="address"
-                      title={w.address}
-                      onClick={() =>
-                        navigator.clipboard
-                          .writeText(w.address)
-                          .then(() => setMsg("地址已复制"))
-                      }
-                    >
-                      {w.address.slice(0, 8)}…{w.address.slice(-4)}{" "}
-                      <Copy size={13} />
-                    </button>
-                  </td>
-                  <td className={w.side === "long" ? "buy" : "sell"}>
-                    {w.side === "long" ? "多头" : "空头"}
-                  </td>
-                  <td>{amount(w.usdCents)}</td>
-                  <td title={`原始 ${w.entry} USDC`}>
-                    ${price(+w.entry * +w.rate)}
-                  </td>
-                  <td>
-                    {w.margin === "cross" ? "全仓" : "逐仓"} {w.leverage}×
-                  </td>
-                  <td>
-                    {w.liquidation
-                      ? "$" + price(+w.liquidation * +w.rate)
-                      : "暂无可用价格"}
-                  </td>
-                  <td>
-                    {w.distance === null ? "—" : w.distance.toFixed(2) + "%"}
-                  </td>
-                  <td className={w.unrealizedCents >= 0 ? "buy" : "sell"}>
-                    {amount(w.unrealizedCents, true)}
-                  </td>
-                  <td>
-                    {+w.changeSize === 0
-                      ? "—"
-                      : price(+w.changeSize, 4) + " " + asset}
-                  </td>
-                  <td>{w.valid ? clock(w.at) + "更新" : "过期，未参与聚合"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {!data?.items.length && (
-          <Empty text="尚无已确认的核心持仓。发现地址后会逐步形成榜单。" />
-        )}
-        <p className="helper">
-          清算以 Hyperliquid
-          标记价格判断；保证金、其他持仓盈亏与资金费变化都可能移动清算位置。持仓均价和清算价按采样时
-          USDC/USD 换算。
-        </p>
-      </section>
-    </>
-  );
-}
-function HealthPage({ health, frame, asset }: Props) {
-  const settings = useAPI<Settings>("settings", 60000);
-  const annotations = useAPI<Annotation[]>("annotations?asset=" + asset, 30000);
-  const [retention, setRetention] = useState<number | null>(null);
-  const [message, setMessage] = useState("");
-  const gb = (n: number) => (n / 2 ** 30).toFixed(2) + " GB";
-  return (
-    <>
-      <div className="metric-strip">
-        <Metric
-          title="项目磁盘占用"
-          value={gb(health?.storage.usedBytes ?? 0)}
-          unit=""
-        />
-        <Metric
-          title="磁盘剩余空间"
-          value={gb(health?.storage.freeBytes ?? 0)}
-          unit=""
-        />
-        <Metric
-          title="当前采集模式"
-          value={health?.storage.fineHistoryPaused ? "保护模式" : "正常采集"}
-          unit=""
-        />
-        <Metric title="版本" value={health?.version ?? "—"} unit="" />
-      </div>
-      {health?.storage.error && (
-        <div className="notice danger">{health.storage.error}</div>
-      )}
-      <div className="settings-grid">
-        <section className="data-section">
-          <h2>自动保留与清理</h2>
-          <form
-            className="settings-form"
-            onSubmit={async (e) => {
-              e.preventDefault();
-              try {
-                await api("settings", {
-                  method: "PUT",
-                  body: JSON.stringify({
-                    ...settings.data,
-                    retentionDays: retention ?? settings.data?.retentionDays,
-                  }),
-                });
-                setMessage("保留策略已保存，后台执行清理");
-                settings.refresh();
-              } catch (e) {
-                setMessage((e as Error).message);
-              }
-            }}
-          >
-            <label>
-              最长保留{" "}
-              <select
-                value={retention ?? settings.data?.retentionDays ?? 90}
-                onChange={(e) => setRetention(+e.target.value)}
-              >
-                <option value={30}>30天</option>
-                <option value={90}>90天（长期降采样）</option>
-              </select>
-            </label>
-            <p>
-              5秒盘口：24小时
-              <br />
-              1分钟统计：30天
-              <br />
-              地址持仓：5分钟采样，30天
-              <br />
-              15分钟汇总：最长90天
-            </p>
-            <p className="helper">
-              项目预算 {settings.data?.budgetGB ?? 20} GB，保留至少{" "}
-              {settings.data?.minFreeGB ?? 8} GB
-              空闲。自动清理旧细数据；空间不足暂停细历史写入。
-            </p>
-            <button className="primary">保存保留策略</button>
-            {message && <p role="status">{message}</p>}
-          </form>
-        </section>
-        <section className="data-section">
-          <h2>美元换算</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>报价</th>
-                <th>美元汇率</th>
-                <th>采样时间</th>
-              </tr>
-            </thead>
-            <tbody>
-              {frame?.rates
-                .filter((r) => r.quote)
-                .map((r) => (
-                  <tr key={r.quote}>
-                    <td>{r.quote}</td>
-                    <td>{r.usd || "暂无"}</td>
-                    <td>{r.quote === "USD" ? "基准" : clock(r.observedAt)}</td>
-                  </tr>
-                ))}
-            </tbody>
-          </table>
-          <p className="helper">
-            Kraken 买卖中间价，每5秒更新；过期汇率不用于有效实时汇总。
-          </p>
-        </section>
-      </div>
-      <section className="data-section">
-        <h2>现货盘口覆盖 · {asset}</h2>
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th>平台 / 交易对</th>
-                <th>状态</th>
-                <th>已知买单下界</th>
-                <th>已知卖单上界</th>
-                <th>档位数</th>
-                <th>重建次数</th>
-                <th>说明</th>
-              </tr>
-            </thead>
-            <tbody>
-              {frame?.coverage.map((c) => (
-                <tr key={c.venue + c.symbol}>
-                  <td>
-                    {venue(c.venue)} <small>{c.symbol}</small>
-                  </td>
-                  <td>
-                    <span className={`status-dot ${c.valid ? "" : "warn"}`} />
-                    {c.valid ? "有效" : "未覆盖"}
-                  </td>
-                  <td>{c.bidLow ? "$" + price(c.bidLow) : "—"}</td>
-                  <td>{c.askHigh ? "$" + price(c.askHigh) : "—"}</td>
-                  <td>{c.levels}</td>
-                  <td>{c.resyncs}</td>
-                  <td>{c.reason || "已通过盘口校验"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-      <section className="data-section">
-        <h2>采集连接</h2>
-        <div className="feed-grid">
-          {health?.feeds.map((f) => (
-            <div className="feed" key={f.component}>
-              <span className={`status-dot ${f.ok ? "" : "warn"}`} />
-              <div>
-                <strong>{f.component}</strong>
-                <p>{f.detail || "正常运行"}</p>
-                <small>
-                  {clock(f.at)} · 累计异常 {f.errors}
-                </small>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-      <section className="data-section">
-        <h2>我的价格标注 · {asset}</h2>
-        <table>
-          <thead>
-            <tr>
-              <th>方向</th>
-              <th>开仓</th>
-              <th>止损</th>
-              <th>止盈</th>
-              <th>盈亏比</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {annotations.data?.map((a) => (
-              <tr key={a.id}>
-                <td>{a.side === "long" ? "多头" : "空头"}</td>
-                <td>{price(a.entry)}</td>
-                <td>{price(a.stop)}</td>
-                <td>{price(a.target)}</td>
-                <td>
-                  {(
-                    Math.abs(a.target - a.entry) / Math.abs(a.entry - a.stop)
-                  ).toFixed(2)}{" "}
-                  : 1
-                </td>
-                <td>
-                  <button
-                    className="icon-button"
-                    aria-label="删除标注"
-                    onClick={() =>
-                      api("annotations", {
-                        method: "DELETE",
-                        body: JSON.stringify({ id: a.id }),
-                      }).then(annotations.refresh)
-                    }
-                  >
-                    <Trash size={17} />
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        {!annotations.data?.length && (
-          <p className="helper">可在买卖墙右侧创建标注。标注不会触发交易。</p>
-        )}
-      </section>
-    </>
+    <p className={`source-status ${expired ? "amber" : ""}`}>
+      <span className={`status-dot ${expired ? "warn" : ""}`} />
+      {expired ? "缺失或过期，暂停实时判断" : names[meta.status]} ·{" "}
+      {meta.observedAt ? `来源 ${clock(meta.observedAt)}` : "来源时间未知"} ·
+      获取{" "}
+      {new Date(meta.fetchedAt).getFullYear() > 2000
+        ? clock(meta.fetchedAt)
+        : "等待首次采集"}
+      {meta.resolutionSeconds > 0
+        ? ` · ${meta.resolutionSeconds / 60}分钟精度`
+        : ""}
+    </p>
   );
 }
 function Metric({
@@ -827,7 +187,1051 @@ function Metric({
     </div>
   );
 }
-
+function WindowSelect({
+  hours,
+  set,
+}: {
+  hours: number;
+  set: (n: number) => void;
+}) {
+  return (
+    <label>
+      统计窗口{" "}
+      <select value={hours} onChange={(e) => set(+e.target.value)}>
+        {[1, 4, 24, 168, 720, 2160].map((h) => (
+          <option value={h} key={h}>
+            {h < 24 ? `${h}小时` : `${h / 24}天`}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+function lineOption(points: unknown[], name: string) {
+  return {
+    grid: { left: 80, right: 25, top: 20, bottom: 35 },
+    tooltip: { trigger: "axis" },
+    xAxis: { type: "time", ...baseAxis },
+    yAxis: {
+      type: "value",
+      ...baseAxis,
+      axisLabel: { formatter: (n: number) => amount(n) },
+    },
+    series: [
+      {
+        name,
+        type: "line",
+        showSymbol: false,
+        connectNulls: false,
+        lineStyle: { color: "#7deba9", width: 2 },
+        data: points,
+      },
+    ],
+  };
+}
+function Backfill({
+  asset,
+  market,
+  hours,
+}: {
+  asset: Asset;
+  market: string;
+  hours: number;
+}) {
+  const [message, set] = useState("");
+  return (
+    <div className="backfill">
+      <button
+        className="secondary"
+        onClick={async () => {
+          const to = new Date(),
+            from = new Date(to.getTime() - hours * 3600000);
+          try {
+            await api("data-requests", {
+              method: "POST",
+              body: JSON.stringify({
+                dataset: `flow.${asset.toLowerCase()}..${market}`,
+                from: from.toISOString(),
+                to: to.toISOString(),
+                resolutionSeconds: hours > 720 ? 3600 : hours > 24 ? 900 : 60,
+              }),
+            });
+            set("已加入共享补采队列，按剩余额度推进。");
+          } catch (e) {
+            set((e as Error).message);
+          }
+        }}
+      >
+        补齐此窗口历史 <ArrowRight size={15} />
+      </button>
+      <small role="status">{message}</small>
+    </div>
+  );
+}
+export function MarketPages(p: Props) {
+  if (p.view === "flow") return <FlowPage {...p} />;
+  if (p.view === "derivatives") return <DerivativesPage {...p} />;
+  if (p.view === "whales") return <WhalesPage {...p} />;
+  if (p.view === "liquidations") return <LiquidationPage {...p} />;
+  if (p.view === "health") return <HealthPage {...p} />;
+  return <Empty text="选择上方页面查看数据。" />;
+}
+function FlowPage({ asset }: Props) {
+  const [hours, setHours] = useState(1),
+    [market, setMarket] = useState("spot");
+  const anchor = useMemo(
+    () => new Date(Date.now() - hours * 3600000).toISOString(),
+    [asset, hours, market],
+  );
+  const { data, error } = useAPI<FlowData>(
+    `flow?asset=${asset}&hours=${hours}&market=${market}&anchor=${encodeURIComponent(anchor)}`,
+  );
+  const bins = Object.entries(data?.footprint ?? {})
+      .map(([p, [buy, sell]]) => ({
+        p: +p.split(":")[0],
+        high: +p.split(":")[1],
+        buy,
+        sell,
+      }))
+      .sort((a, b) => b.buy + b.sell - (a.buy + a.sell))
+      .slice(0, 40)
+      .sort((a, b) => b.p - a.p),
+    max = Math.max(1, ...bins.flatMap((b) => [b.buy, b.sell]));
+  const option = useMemo(
+    () =>
+      lineOption(
+        data?.series.map((p) => [p.time * 1000, p.cvdCents]) ?? [],
+        "已观察CVD",
+      ),
+    [data],
+  );
+  return (
+    <>
+      <div className="toolbar page-toolbar">
+        <div className="segmented">
+          {[
+            ["spot", "现货"],
+            ["futures", "合约"],
+          ].map(([v, t]) => (
+            <button
+              key={v}
+              className={market === v ? "selected" : ""}
+              onClick={() => setMarket(v)}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <WindowSelect hours={hours} set={setHours} />
+        <span className="helper">主动净买入 = 主动买入额 − 主动卖出额</span>
+      </div>
+      {error && <p className="sell">{error}</p>}
+      <Status meta={data?.meta} />
+      <div className="metric-strip">
+        <Metric
+          title="主动买入"
+          value={data?.hasData ? amount(data.buyCents) : "—"}
+          tone="buy"
+        />
+        <Metric
+          title="主动卖出"
+          value={data?.hasData ? amount(data.sellCents) : "—"}
+          tone="sell"
+        />
+        <Metric
+          title="主动净买入"
+          value={data?.hasData ? amount(data.netCents, true) : "—"}
+          tone={(data?.netCents ?? 0) >= 0 ? "buy" : "sell"}
+        />
+        <Metric
+          title="成交量加权均价 · VWAP"
+          value={data?.vwap ? price(data.vwap) : "—"}
+          unit="USDT"
+        />
+      </div>
+      <p className="helper">
+        这是成交方向统计，不是充值提现。
+        {data?.partial && (
+          <strong className="amber">
+            {" "}
+            当前窗口未完整覆盖，金额仅包含已观察成交。
+          </strong>
+        )}
+      </p>
+      <Backfill asset={asset} market={market} hours={hours} />
+      <section className="data-section">
+        <h2>累计主动净买入 · CVD</h2>
+        <p className="helper">
+          起算点 {data ? new Date(data.anchor).toLocaleString("zh-CN") : "—"} ·
+          缺口处断线，累计值仅含已观察成交。
+        </p>
+        {data?.series.length ? (
+          <Chart option={option} label="累计已观察净买入" />
+        ) : (
+          <Empty text="该窗口暂无有效成交统计。" />
+        )}
+      </section>
+      <section className="data-section">
+        <div className="section-heading">
+          <h2>成交足迹与价位成交分布</h2>
+          <span>{data?.footprintVenues?.join(" / ") || "等待来源"} · USDT</span>
+        </div>
+        <p className="helper">
+          按已完成5分钟周期保存；柱长表示成交额。足迹覆盖与上方聚合买卖量可能不同。
+        </p>
+        <div className="footprint-header">
+          <span>价格区间 · USDT</span>
+          <span className="sell">主动卖出</span>
+          <span className="buy">主动买入</span>
+          <span>净买入</span>
+        </div>
+        {bins.map((b) => (
+          <div className="footprint-row" key={`${b.p}/${b.high}`}>
+            <span>
+              {price(b.p, 0)}–{price(b.high, 0)}
+            </span>
+            <div className="sell">
+              <meter max={max} value={b.sell} />
+              <span>{amount(b.sell)}</span>
+            </div>
+            <div className="buy">
+              <meter max={max} value={b.buy} />
+              <span>{amount(b.buy)}</span>
+            </div>
+            <strong className={b.buy >= b.sell ? "buy" : "sell"}>
+              {amount(b.buy - b.sell, true)}
+            </strong>
+          </div>
+        ))}
+        {!bins.length && (
+          <Empty text="足迹尚未到达或此周期不受支持，空白不表示零成交。" />
+        )}
+      </section>
+    </>
+  );
+}
+function DerivativesPage({ asset }: Props) {
+  const [hours, setHours] = useState(24);
+  const { data, error } = useAPI<Derivatives>(
+    `derivatives?asset=${asset}&hours=${hours}`,
+    30000,
+  );
+  const option = useMemo(
+    () =>
+      lineOption(
+        data?.series.map((x) => [x.time * 1000, x.oiUsdCents]) ?? [],
+        "上游汇总OI",
+      ),
+    [data],
+  );
+  return (
+    <>
+      <div className="toolbar page-toolbar">
+        <WindowSelect hours={hours} set={setHours} />
+        <span className="helper">OI是未平仓规模，不代表某一方向真实开仓量</span>
+      </div>
+      {error && <p className="sell">{error}</p>}
+      <Status meta={data?.meta} />
+      <div className="metric-strip">
+        <Metric
+          title="上游汇总 OI"
+          value={data?.totalOiCents != null ? amount(data.totalOiCents) : "—"}
+        />
+        <Metric
+          title="已观察多头清算"
+          value={
+            data?.longLiquidationCents != null
+              ? amount(data.longLiquidationCents)
+              : "—"
+          }
+          tone="sell"
+        />
+        <Metric
+          title="已观察空头清算"
+          value={
+            data?.shortLiquidationCents != null
+              ? amount(data.shortLiquidationCents)
+              : "—"
+          }
+          tone="buy"
+        />
+      </div>
+      <p className="helper">
+        {data?.coverage} 已发生清算仅统计收到的历史窗口。
+      </p>
+      <section className="data-section">
+        <h2>持仓规模变化</h2>
+        {data?.series.length ? (
+          <Chart option={option} label="未平仓合约规模变化" />
+        ) : (
+          <Empty text="历史正在积累" />
+        )}
+      </section>
+      <div className="v2-columns">
+        <section className="data-section">
+          <h2>交易所持仓规模</h2>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>交易所</th>
+                  <th>OI · USD</th>
+                  <th>基础币数量</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data?.items.map((r) => (
+                  <tr key={r.venue} className={!r.valid ? "stale-row" : ""}>
+                    <td>{r.venue}</td>
+                    <td>{amount(r.oiUsdCents)}</td>
+                    <td>{price(r.oiBase, 2)}</td>
+                    <td>{r.valid ? "有效" : "过期"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section className="data-section">
+          <h2>资金费率</h2>
+          <Status meta={data?.fundingMeta} />
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>交易所</th>
+                  <th>保证金类型</th>
+                  <th>原始费率</th>
+                  <th>周期</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data?.funding.map((r, i) => (
+                  <tr key={`${r.venue}/${r.margin}/${i}`}>
+                    <td>{r.venue}</td>
+                    <td>{r.margin === "stablecoin" ? "稳定币" : "币本位"}</td>
+                    <td className={+r.ratePercent >= 0 ? "buy" : "sell"}>
+                      {(+r.ratePercent).toFixed(5)}%
+                    </td>
+                    <td>
+                      {r.intervalHours ? `${r.intervalHours}小时` : "未知"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="helper">不同结算周期的原始费率不可直接相加比较。</p>
+        </section>
+      </div>
+    </>
+  );
+}
+function WhalesPage({ asset }: Props) {
+  const [limit, setLimit] = useState(50),
+    [side, setSide] = useState("all"),
+    [kind, setKind] = useState("liquidation"),
+    [sort, setSort] = useState("amount"),
+    [address, setAddress] = useState(""),
+    [message, setMessage] = useState(""),
+    [wallet, setWallet] = useState<string | null>(null);
+  const { data, error } = useAPI<Whales>(
+    `whales?asset=${asset}&limit=${limit}&side=${side}&sort=${sort}`,
+  );
+  const detail = useAPI<{ meta: Meta; data: { wallet?: Wallet } }>(
+    wallet ? `data/${wallet}` : null,
+  );
+  const buckets = (data?.buckets ?? [])
+      .filter((b) => b.kind === kind && (side === "all" || side === b.side))
+      .sort((a, b) => b.usdCents - a.usdCents)
+      .slice(0, 20)
+      .sort((a, b) => b.price - a.price),
+    max = Math.max(1, ...buckets.map((b) => b.usdCents));
+  return (
+    <>
+      <div className="toolbar page-toolbar">
+        <div className="segmented">
+          {[
+            ["liquidation", "清算参考价分布"],
+            ["entry", "持仓均价分布"],
+          ].map(([v, t]) => (
+            <button
+              key={v}
+              className={kind === v ? "selected" : ""}
+              onClick={() => setKind(v)}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+        <label>
+          方向{" "}
+          <select value={side} onChange={(e) => setSide(e.target.value)}>
+            <option value="all">全部</option>
+            <option value="long">多头</option>
+            <option value="short">空头</option>
+          </select>
+        </label>
+        <span className="helper">
+          有效 {data?.monitor.fresh ?? 0} / 已覆盖{" "}
+          {data?.monitor.candidates ?? 0} 个大仓
+        </span>
+      </div>
+      <Status meta={data?.meta} />
+      {error && <p className="sell">{error}</p>}
+      <div className="metric-strip">
+        <Metric
+          title="有效多头仓位"
+          value={data?.hasData ? amount(data.longCents) : "—"}
+          tone="buy"
+        />
+        <Metric
+          title="有效空头仓位"
+          value={data?.hasData ? amount(data.shortCents) : "—"}
+          tone="sell"
+        />
+        <Metric
+          title="距清算参考价不足3%"
+          value={data?.hasData ? amount(data.nearLiquidationCents) : "—"}
+        />
+      </div>
+      <div className="whale-layout">
+        <section className="data-section">
+          <h2>
+            {kind === "liquidation"
+              ? "哪些清算参考价附近仓位最多？"
+              : "当前大仓的持仓均价在哪里？"}
+          </h2>
+          <p className="helper">
+            {data?.distributionScope}
+            。柱长表示涉及仓位金额；清算参考价会随保证金和其他持仓变化。
+          </p>
+          <div className="whale-bucket-head">
+            <span>价格 · 平台报价</span>
+            <span>涉及仓位金额</span>
+            <span>地址数</span>
+            <span>最大单一占比</span>
+          </div>
+          {buckets.map((b) => (
+            <div
+              className={`whale-bucket ${b.side === "long" ? "buy" : "sell"}`}
+              key={`${b.side}/${b.price}`}
+            >
+              <span>
+                ${price(b.price, 0)}
+                <small>{b.side === "long" ? "多头" : "空头"}</small>
+              </span>
+              <div>
+                <meter value={b.usdCents} max={max} />
+                <strong>{amount(b.usdCents)}</strong>
+              </div>
+              <span>{b.addresses}</span>
+              <span>{(b.largestShare * 100).toFixed(0)}%</span>
+            </div>
+          ))}
+          {!buckets.length && (
+            <Empty text="只有180秒内更新、字段有效的已覆盖持仓参与分布。" />
+          )}
+        </section>
+        <aside className="watchlist">
+          <h2>公开钱包详情</h2>
+          <p className="helper">
+            详情共用本地缓存。首次查询进入共享队列，不启动逐地址常驻轮询。
+          </p>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              try {
+                const j = await api<Job>("data-requests", {
+                  method: "POST",
+                  body: JSON.stringify({
+                    dataset: "whales.all.hyperliquid.futures",
+                    address,
+                  }),
+                });
+                setWallet(j.dataset.id);
+                setMessage("查询已入队，等待剩余额度。");
+              } catch (e) {
+                setMessage((e as Error).message);
+              }
+            }}
+          >
+            <label className="sr-only" htmlFor="wallet-address">
+              公开地址
+            </label>
+            <input
+              id="wallet-address"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="0x…"
+              required
+              pattern="0x[0-9a-fA-F]{40}"
+            />
+            <button className="primary full">
+              查询钱包 <ArrowRight size={16} />
+            </button>
+          </form>
+          <p className="helper" role="status">
+            {message}
+          </p>
+          {detail.data && (
+            <>
+              <Status meta={detail.data.meta} />
+              <WalletSummary wallet={detail.data.data.wallet} />
+              {detail.error && <p className="amber">{detail.error}</p>}
+            </>
+          )}
+        </aside>
+      </div>
+      <section className="data-section">
+        <div className="section-heading">
+          <h2>已覆盖地址持仓榜</h2>
+          <div className="segmented">
+            {[50, 100].map((n) => (
+              <button
+                key={n}
+                className={limit === n ? "selected" : ""}
+                onClick={() => setLimit(n)}
+              >
+                前{n}
+              </button>
+            ))}
+          </div>
+          <label>
+            排序{" "}
+            <select value={sort} onChange={(e) => setSort(e.target.value)}>
+              <option value="amount">仓位金额</option>
+              <option value="distance">最接近清算价</option>
+            </select>
+          </label>
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>公开地址</th>
+                <th>方向</th>
+                <th>仓位金额</th>
+                <th>持仓均价</th>
+                <th>设置杠杆</th>
+                <th>清算参考价</th>
+                <th>距清算</th>
+                <th>浮盈亏</th>
+                <th>较前次快照数量变化</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data?.items.map((w) => (
+                <tr
+                  key={`${w.address}/${w.asset}`}
+                  className={!w.valid ? "stale-row" : ""}
+                >
+                  <td>
+                    <button
+                      className="address"
+                      title={w.address}
+                      onClick={() =>
+                        navigator.clipboard
+                          .writeText(w.address)
+                          .then(() => setMessage("地址已复制"))
+                      }
+                    >
+                      {w.address.slice(0, 8)}…{w.address.slice(-4)}{" "}
+                      <Copy size={13} />
+                    </button>
+                  </td>
+                  <td className={w.side === "long" ? "buy" : "sell"}>
+                    {w.side === "long" ? "多头" : "空头"}
+                  </td>
+                  <td>{amount(w.usdCents)}</td>
+                  <td>${price(+w.entry)}</td>
+                  <td>
+                    {w.margin === "cross"
+                      ? "全仓"
+                      : w.margin === "isolated"
+                        ? "逐仓"
+                        : w.margin}{" "}
+                    {w.leverage}×
+                  </td>
+                  <td>
+                    {w.liquidation
+                      ? "$" + price(+w.liquidation)
+                      : "暂无可用清算价"}
+                  </td>
+                  <td>
+                    {w.distance === null ? "—" : w.distance.toFixed(2) + "%"}
+                  </td>
+                  <td className={w.unrealizedCents >= 0 ? "buy" : "sell"}>
+                    {amount(w.unrealizedCents, true)}
+                  </td>
+                  <td>
+                    {w.changeSize == null
+                      ? "无可比快照"
+                      : price(+w.changeSize, 4)}
+                  </td>
+                  <td>{w.valid ? clock(w.at) + "更新" : "过期，未参与聚合"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="helper">
+          CoinGlass覆盖的Hyperliquid百万美元级持仓，不是全市场巨鲸榜。清算距离使用平台标记价格；名单消失不等于平仓。
+        </p>
+      </section>
+    </>
+  );
+}
+function LiquidationPage({ asset, frame }: Props) {
+  const [period, setPeriod] = useState("24h"),
+    [heat, setHeat] = useState(false),
+    [message, setMessage] = useState("");
+  const { data, error } = useAPI<Liquidations>(
+    `liquidations?asset=${asset}&period=${period}`,
+    30000,
+  );
+  const model = heat ? data?.heatmap : data?.map;
+  const bins = useMemo(() => {
+    const groups = new Map<number, number>(),
+      step = asset === "BTC" ? 250 : 10;
+    for (const b of data?.map.data?.bins ?? []) {
+      const p = Math.floor(b.price / step) * step;
+      groups.set(p, (groups.get(p) ?? 0) + b.strength);
+    }
+    return [...groups]
+      .map(([p, n]) => ({ p, n }))
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 24)
+      .sort((a, b) => b.p - a.p);
+  }, [data, asset]);
+  const max = Math.max(1, ...bins.map((b) => b.n));
+  const option = useMemo(
+    () => ({
+      grid: { left: 85, right: 85, top: 20, bottom: 45 },
+      tooltip: { position: "top" },
+      xAxis: {
+        type: "category",
+        data: data?.heatmap.data?.times?.map((t) => clock(t)) ?? [],
+        ...baseAxis,
+      },
+      yAxis: {
+        type: "category",
+        data: data?.heatmap.data?.prices ?? [],
+        ...baseAxis,
+      },
+      visualMap: {
+        min: 0,
+        max: (data?.heatmap.data?.cells ?? []).reduce(
+          (max, c) => Math.max(max, c[2]),
+          1,
+        ),
+        calculable: true,
+        orient: "vertical",
+        right: 0,
+        inRange: { color: ["#18231f", "#365b45", "#7deba9"] },
+        textStyle: { color: "#b0c2b8" },
+      },
+      series: [{ type: "heatmap", data: data?.heatmap.data?.cells ?? [] }],
+    }),
+    [data],
+  );
+  async function changePeriod(p: string) {
+    setPeriod(p);
+    if (p !== "24h") {
+      try {
+        for (const kind of ["map", "heatmap"]) {
+          await api("data-requests", {
+            method: "POST",
+            body: JSON.stringify({
+              dataset: `${kind}.${asset.toLowerCase()}..futures`,
+              range: p,
+            }),
+          });
+        }
+        setMessage("所选周期进入共享加载队列，完成后自动显示。");
+      } catch (e) {
+        setMessage((e as Error).message);
+      }
+    }
+  }
+  return (
+    <>
+      <div className="toolbar page-toolbar">
+        <div className="segmented">
+          {["24h", "7d", "30d"].map((p) => (
+            <button
+              key={p}
+              className={period === p ? "selected" : ""}
+              onClick={() => void changePeriod(p)}
+            >
+              {p === "24h" ? "24小时" : p === "7d" ? "7天" : "30天"}
+            </button>
+          ))}
+        </div>
+        <button className="secondary" onClick={() => setHeat(!heat)}>
+          {heat ? "返回清算价位柱状图" : "高级：历史清算热力图"}
+        </button>
+      </div>
+      <p className="helper">{data?.note}</p>
+      <Status meta={model?.meta} />
+      {message && (
+        <p className="helper" role="status">
+          {message}
+        </p>
+      )}
+      {error && <p className="sell">{error}</p>}
+      <section className="data-section">
+        <h2>{heat ? "清算模型随时间的变化" : "清算模型集中价位"}</h2>
+        {heat ? (
+          data?.heatmap.data?.cells?.length ? (
+            <Chart option={option} height={430} label="模型清算历史热力图" />
+          ) : (
+            <Empty text="所选周期尚无可用模型数据。" />
+          )
+        ) : (
+          <>
+            <p className="helper">
+              同一周期内最长柱为100，表示相对强度；不同周期单独比较。
+            </p>
+            {bins.map((b) => (
+              <div
+                className={`liquidation-bar ${(frame?.price ?? 0) > b.p ? "buy" : "sell"}`}
+                key={b.p}
+              >
+                <span>
+                  ${price(b.p, 0)}
+                  <small>
+                    {frame?.price
+                      ? ((b.p / frame.price - 1) * 100).toFixed(2) + "%"
+                      : "—"}
+                  </small>
+                </span>
+                <meter max={max} value={b.n} />
+                <strong>
+                  {((b.n / max) * 100).toFixed(0)}
+                  <small>
+                    {b.n / max >= 0.8
+                      ? "高度集中"
+                      : b.n / max >= 0.5
+                        ? "较集中"
+                        : "一般"}
+                  </small>
+                </strong>
+              </div>
+            ))}
+            {!bins.length && <Empty text="清算地图正在按计划更新。" />}
+          </>
+        )}
+      </section>
+      <div className="notice">
+        <WarningCircle size={18} />
+        模型清算分布、已发生清算、账户清算参考价是三种不同口径，分别查看。
+      </div>
+    </>
+  );
+}
+export function LargeOrders({
+  asset,
+  panorama,
+}: {
+  asset: Asset;
+  panorama: boolean;
+}) {
+  const [open, setOpen] = useState(panorama);
+  const [history, setHistory] = useState(false);
+  useEffect(() => {
+    if (panorama) setOpen(true);
+  }, [panorama]);
+  const { data, error } = useAPI<{ items: Large[]; note: string }>(
+    `large-orders?asset=${asset}&history=${history ? 1 : 0}`,
+    30000,
+  );
+  const rows = (data?.items ?? [])
+    .filter(
+      (x) =>
+        !panorama ||
+        asset !== "BTC" ||
+        (+x.price >= 10000 && +x.price <= 200000),
+    )
+    .slice(0, open ? 300 : 0);
+  return (
+    <section className="large-orders data-section">
+      <div className="section-heading">
+        <h2>
+          {panorama
+            ? "远景大额挂单 · 仅发现大单，不代表完整覆盖"
+            : "大额挂单跟踪"}
+        </h2>
+        <button className="text-button" onClick={() => setOpen(!open)}>
+          {open ? "收起" : "展开大单"}
+        </button>
+      </div>
+      {panorama && (
+        <p className="amber">
+          没有柱子的区间可能未被盘口覆盖，不能读作零挂单。
+        </p>
+      )}
+      <p className="helper">{data?.note}</p>
+      {open && (
+        <label>
+          <input
+            type="checkbox"
+            checked={history}
+            onChange={(e) => setHistory(e.target.checked)}
+          />{" "}
+          查看已结束历史（状态不等于确认撤单）
+        </label>
+      )}
+      {error && <p className="sell">{error}</p>}
+      {open && (
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>交易所</th>
+                <th>方向</th>
+                <th>原始价格</th>
+                <th>金额 · USD</th>
+                <th>首次记录</th>
+                <th>最后变更</th>
+                <th>记录成交 · 上游USD</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className={r.valid ? "" : "stale-row"}>
+                  <td>{r.venue}</td>
+                  <td className={r.side === "bid" ? "buy" : "sell"}>
+                    {r.side === "bid"
+                      ? "买单"
+                      : r.side === "ask"
+                        ? "卖单"
+                        : "未知"}
+                  </td>
+                  <td>
+                    {price(+r.price)} {r.quote}
+                  </td>
+                  <td>
+                    {r.usdCents == null ? "汇率不可用" : amount(r.usdCents)}
+                  </td>
+                  <td>
+                    {r.startAt
+                      ? new Date(r.startAt).toLocaleDateString("zh-CN")
+                      : "—"}
+                  </td>
+                  <td>
+                    {r.changedAt
+                      ? new Date(r.changedAt).toLocaleString("zh-CN")
+                      : "—"}
+                  </td>
+                  <td>{amount(+r.executedUsd * 100)}</td>
+                  <td>{r.valid ? r.state : "过期"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!rows.length && <Empty text="尚无已获取的大额挂单。" />}
+        </div>
+      )}
+    </section>
+  );
+}
+function HealthPage({ health, frame }: Props) {
+  const { data, error } = useAPI<DataStatus>("data-status");
+  const settings = useAPI<Settings>("settings", 60000);
+  const [message, setMessage] = useState(""),
+    [detail, setDetail] = useState(false);
+  const s = data?.scheduler;
+  return (
+    <>
+      <div className="metric-strip">
+        <Metric
+          title="上游额度 · 滚动60秒"
+          value={s ? `${s.usedLastMinute} / ${s.limitPerMinute}` : "—"}
+          unit="次"
+        />
+        <Metric
+          title="项目占用"
+          value={data ? (data.storage.usedBytes / 1073741824).toFixed(2) : "—"}
+          unit="GB"
+        />
+        <Metric
+          title="磁盘剩余"
+          value={data ? (data.storage.freeBytes / 1073741824).toFixed(1) : "—"}
+          unit="GB"
+        />
+        <Metric title="生产版本" value={health?.version ?? "—"} unit="" />
+      </div>
+      {error && <p className="sell">{error}</p>}
+      {s?.authFailed && (
+        <div className="notice danger">
+          上游认证失败，采集已暂停。请检查代理密钥和订阅期限。
+        </div>
+      )}
+      {data?.storage.fineHistoryPaused && (
+        <div className="notice danger">
+          磁盘预算保护：暂停补采和细历史写入，实时查询继续提供。
+        </div>
+      )}
+      <section className="data-section">
+        <h2>采集与存储</h2>
+        <p className="helper">
+          旧采集器：{data?.legacyCollectorsRunning ? "运行中" : "已下线"} ·
+          SQLite {data?.storage.sqlite ?? "—"} · 规则{" "}
+          {data?.rulesVersion ?? "—"} · 上游累计 {s?.calls ?? 0} 次 · 429{" "}
+          {s?.rateLimited ?? 0} 次
+        </p>
+        <div className="toolbar">
+          <label>
+            历史保留{" "}
+            <select
+              value={settings.data?.retentionDays ?? 90}
+              onChange={async (e) => {
+                try {
+                  await api("settings", {
+                    method: "PUT",
+                    body: JSON.stringify({
+                      ...settings.data,
+                      retentionDays: +e.target.value,
+                    }),
+                  });
+                  settings.refresh();
+                  setMessage("保留策略已保存，后台按精度清理。");
+                } catch (e) {
+                  setMessage((e as Error).message);
+                }
+              }}
+            >
+              <option value={30}>30天</option>
+              <option value={90}>90天（长期降采样）</option>
+            </select>
+          </label>
+          <span className="helper">总预算20GB · 巨鲸2GB · 至少8GB空闲</span>
+          <span role="status">{message}</span>
+        </div>
+      </section>
+      <section className="data-section">
+        <h2>现货实际覆盖</h2>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>交易所 / 市场</th>
+                <th>状态</th>
+                <th>盘口下界</th>
+                <th>盘口上界</th>
+                <th>来源时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              {frame?.coverage.map((c) => (
+                <tr key={`${c.venue}/${c.symbol}`}>
+                  <td>
+                    {venue(c.venue)} · {c.symbol}
+                  </td>
+                  <td className={c.valid ? "buy" : "amber"}>
+                    {c.valid ? "有效" : (c.reason ?? "未覆盖")}
+                  </td>
+                  <td>{c.bidLow ? "$" + price(c.bidLow) : "未知"}</td>
+                  <td>{c.askHigh ? "$" + price(c.askHigh) : "未知"}</td>
+                  <td>{c.observedAt ? clock(c.observedAt) : "未提供"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section className="data-section">
+        <div className="section-heading">
+          <h2>共享数据集新鲜度</h2>
+          <button className="text-button" onClick={() => setDetail(!detail)}>
+            {detail ? "收起调度详情" : "查看调度详情"}
+          </button>
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th>数据集</th>
+                <th>币种 / 来源</th>
+                <th>状态</th>
+                <th>目标刷新</th>
+                <th>来源时间</th>
+                <th>最近获取</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data?.datasets.map((x) => (
+                <tr key={x.dataset.id}>
+                  <td>{x.dataset.kind}</td>
+                  <td>
+                    {x.dataset.asset} · {x.dataset.venue || x.dataset.source}
+                  </td>
+                  <td
+                    className={
+                      x.status === "stale" || x.status === "missing"
+                        ? "amber"
+                        : ""
+                    }
+                  >
+                    {names[x.status] ?? x.status}
+                  </td>
+                  <td>{x.dataset.refreshSeconds}秒</td>
+                  <td>{x.observedAt ? clock(x.observedAt) : "未提供"}</td>
+                  <td>
+                    {new Date(x.fetchedAt).getFullYear() > 2000
+                      ? clock(x.fetchedAt)
+                      : "等待首次采集"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      {detail && (
+        <section className="data-section">
+          <h2>统一调度队列</h2>
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>任务</th>
+                  <th>类型</th>
+                  <th>状态</th>
+                  <th>下一次</th>
+                  <th>错误</th>
+                </tr>
+              </thead>
+              <tbody>
+                {s?.jobs.map((j) => (
+                  <tr key={j.id}>
+                    <td>{j.id}</td>
+                    <td>{j.mode}</td>
+                    <td>
+                      {j.disabled
+                        ? "暂停"
+                        : j.completed
+                          ? "完成"
+                          : j.inFlight
+                            ? "正在获取"
+                            : "排队"}
+                    </td>
+                    <td>{clock(j.next)}</td>
+                    <td>{j.error ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+    </>
+  );
+}
 export function OverviewSummary({
   asset,
   onNavigate,
@@ -835,17 +1239,17 @@ export function OverviewSummary({
   asset: Asset;
   onNavigate: (v: string) => void;
 }) {
-  const f = useAPI<Flow>(`flow?asset=${asset}&hours=1`, 30000);
-  const d = useAPI<DerivativesResponse>(`derivatives?asset=${asset}`, 30000);
-  const w = useAPI<WhalesResponse>(`whales?asset=${asset}`, 30000);
+  const f = useAPI<FlowData>(`flow?asset=${asset}&hours=1`),
+    d = useAPI<Derivatives>(`derivatives?asset=${asset}&hours=24`),
+    w = useAPI<Whales>(`whales?asset=${asset}&limit=50&side=all&sort=amount`);
   return (
     <>
       <div className="metric-strip">
-        <button onClick={() => onNavigate("flow")} className="summary-link">
+        <button className="summary-link" onClick={() => onNavigate("flow")}>
           <Metric
             title="1小时主动净买入 · 现货"
-            value={f.data ? amount(f.data.netCents, true) : "—"}
-            tone={f.data && f.data.netCents < 0 ? "sell" : "buy"}
+            value={f.data?.hasData ? amount(f.data.netCents, true) : "—"}
+            tone={(f.data?.netCents ?? 0) >= 0 ? "buy" : "sell"}
           />
           <small>{f.data?.partial ? "窗口未完整覆盖" : "查看成交证据"}</small>
         </button>
@@ -854,30 +1258,23 @@ export function OverviewSummary({
           onClick={() => onNavigate("derivatives")}
         >
           <Metric
-            title="三家有效合约 OI"
+            title="上游汇总合约 OI"
             value={
-              d.data
-                ? amount(
-                    d.data.items
-                      .filter((x) => x.valid)
-                      .reduce((s, x) => s + x.oiUsdCents, 0),
-                  )
-                : "—"
+              d.data?.totalOiCents != null ? amount(d.data.totalOiCents) : "—"
             }
           />
-          <small>美元价值也随价格变化</small>
+          <small>与分交易所数据分开展示</small>
         </button>
         <button className="summary-link" onClick={() => onNavigate("whales")}>
           <Metric
-            title="已监控仓位"
-            value={String(w.data?.count ?? "—")}
-            unit="个地址"
+            title="距清算参考价不足3%的仓位"
+            value={w.data?.hasData ? amount(w.data.nearLiquidationCents) : "—"}
           />
-          <small>Hyperliquid · 非全市场排名</small>
+          <small>Hyperliquid已覆盖大仓</small>
         </button>
         <div className="summary-link">
-          <Metric title="先看什么？" value="金额 → 持续 → 成交" unit="" />
-          <small>挂单只是意愿，成交提供证据</small>
+          <Metric title="判断顺序" value="金额 → 持续 → 成交" unit="" />
+          <small>历史金额等级不等于支撑胜率</small>
         </div>
       </div>
       <PriceHistory asset={asset} />
@@ -885,59 +1282,36 @@ export function OverviewSummary({
   );
 }
 export function PriceHistory({ asset }: { asset: Asset }) {
-  const [hours, setHours] = useState(24);
-  const [period, setPeriod] = useState(900);
-  const { data, error } = useAPI<{
-    candles: {
+  const { data } = useAPI<{
+    points: {
       time: number;
       open: number;
       close: number;
-      high: number;
       low: number;
+      high: number;
     }[];
-    period: number;
-    note: string;
-  }>(`candles?asset=${asset}&hours=${hours}&period=${period}`, 60000);
+  }>(`candles?asset=${asset}&hours=24`, 60000);
   const option = useMemo(
     () => ({
-      grid: { left: 80, right: 25, top: 15, bottom: 55 },
+      grid: { left: 80, right: 20, top: 15, bottom: 35 },
       tooltip: { trigger: "axis" },
       xAxis: {
         type: "category",
+        data: data?.points.map((c) => clock(c.time)) ?? [],
         ...baseAxis,
-        data:
-          data?.candles.map((c) =>
-            new Date(c.time * 1000).toLocaleString("zh-CN", {
-              month: "2-digit",
-              day: "2-digit",
-              hour: "2-digit",
-              minute: "2-digit",
-            }),
-          ) ?? [],
-        boundaryGap: true,
       },
-      yAxis: { type: "value", ...baseAxis, scale: true },
-      dataZoom: [
-        { type: "inside" },
-        {
-          type: "slider",
-          height: 18,
-          bottom: 0,
-          borderColor: "#35443b",
-          textStyle: { color: "#879e8e" },
-        },
-      ],
+      yAxis: { type: "value", scale: true, ...baseAxis },
+      dataZoom: [{ type: "inside" }],
       series: [
         {
           type: "candlestick",
+          data: data?.points.map((c) => [c.open, c.close, c.low, c.high]) ?? [],
           itemStyle: {
             color: "#7deba9",
             color0: "#f17369",
             borderColor: "#7deba9",
             borderColor0: "#f17369",
           },
-          data:
-            data?.candles.map((c) => [c.open, c.close, c.low, c.high]) ?? [],
         },
       ],
     }),
@@ -945,52 +1319,76 @@ export function PriceHistory({ asset }: { asset: Asset }) {
   );
   return (
     <section className="data-section">
-      <div className="section-heading">
-        <h2>综合现货价格</h2>
-        <label>
-          图表周期
-          <select value={period} onChange={(e) => setPeriod(+e.target.value)}>
-            {[
-              [60, "1分钟"],
-              [300, "5分钟"],
-              [900, "15分钟"],
-              [3600, "1小时"],
-              [14400, "4小时"],
-              [86400, "1天"],
-            ].map(([p, t]) => (
-              <option value={p} key={p}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          回看
-          <select value={hours} onChange={(e) => setHours(+e.target.value)}>
-            {[
-              [1, "1小时"],
-              [24, "1天"],
-              [168, "7天"],
-              [720, "30天"],
-              [2160, "90天"],
-            ].map(([h, t]) => (
-              <option value={h} key={h}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      {error && <p className="helper sell">{error}</p>}
-      {data?.candles.length ? (
-        <Chart label="综合现货价格 K 线" height={220} option={option} />
+      <h2>价格背景 · 币安5分钟K线</h2>
+      <p className="helper">BTC/ETH原始USDT报价 · 仅已完成周期</p>
+      {data?.points.length ? (
+        <Chart option={option} label="价格K线" />
       ) : (
-        <Empty text="价格历史正在积累。" />
+        <Empty text="等待K线数据" />
       )}
-      <p className="helper">
-        有效现货报价中位数的观察区间，非单一交易所成交 K 线。
-        {data && `实际周期 ${data.period / 60} 分钟；长窗口自动限制点数。`}
-      </p>
     </section>
+  );
+}
+
+type Wallet = {
+  margin_summary?: {
+    account_value?: number;
+    total_ntl_pos?: number;
+    total_margin_used?: number;
+  };
+  withdrawable?: number;
+  asset_positions?: {
+    position: {
+      coin: string;
+      szi: number;
+      entry_px: number;
+      position_value: number;
+      unrealized_pnl: number;
+      leverage?: { type: string; value: number };
+    };
+  }[];
+};
+function WalletSummary({ wallet }: { wallet?: Wallet }) {
+  if (!wallet)
+    return <p className="helper">数据准备中，失败的查询不会显示为零仓位。</p>;
+  return (
+    <div className="wallet-summary">
+      <p className="helper">账户级权益保持平台原值，包含其他币种的影响。</p>
+      <dl>
+        <dt>账户权益 · USD</dt>
+        <dd>
+          {wallet.margin_summary?.account_value != null
+            ? amount(wallet.margin_summary.account_value * 100)
+            : "未提供"}
+        </dd>
+        <dt>已用保证金 · USD</dt>
+        <dd>
+          {wallet.margin_summary?.total_margin_used != null
+            ? amount(wallet.margin_summary.total_margin_used * 100)
+            : "未提供"}
+        </dd>
+        <dt>可提取 · USD</dt>
+        <dd>
+          {wallet.withdrawable != null
+            ? amount(wallet.withdrawable * 100)
+            : "未提供"}
+        </dd>
+      </dl>
+      {wallet.asset_positions?.map(({ position: p }, i) => (
+        <div key={`${p.coin}/${i}`}>
+          <h3>
+            {p.coin} · {+p.szi >= 0 ? "多头" : "空头"}
+          </h3>
+          <p>
+            持仓均价 {price(+p.entry_px)} · {p.leverage?.value ?? "—"}×
+          </p>
+          <p>
+            仓位 {amount(+p.position_value * 100)} USD · 浮盈亏{" "}
+            {amount(+p.unrealized_pnl * 100, true)}
+          </p>
+        </div>
+      ))}
+      {!wallet.asset_positions?.length && <p>该响应未列出BTC/ETH仓位。</p>}
+    </div>
   );
 }

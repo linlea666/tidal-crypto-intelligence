@@ -13,9 +13,12 @@ services:
     environment:
       TIDAL_PASSWORD_HASH_FILE: /run/secrets/password_hash
       TIDAL_COOKIE_SECURE: 'true'
+      COINGLASS_API_KEY_FILE: /run/secrets/coinglass_key
+      TIDAL_OFFLINE: ${TIDAL_OFFLINE:-false}
     volumes:
       - /opt/tidal/data:/data
       - /opt/tidal/secrets/password_hash:/run/secrets/password_hash:ro
+      - /opt/tidal/secrets/coinglass_key:/run/secrets/coinglass_key:ro
     ports:
       - 127.0.0.1:8080:8080
     logging:

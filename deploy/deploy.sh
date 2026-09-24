@@ -48,6 +48,9 @@ fi
 if [[ -f "$root/data/state.sqlite" ]]; then
   sqlite3 "$root/data/state.sqlite" ".timeout 10000" ".backup '$root/backups/state-$version.sqlite'"
 fi
+if [[ -f "$root/data/v2/hub.sqlite" ]]; then
+  docker run --rm --user 0:0 -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/hub.sqlite "/backup/hub-$version-$(date -u +%s).sqlite"
+fi
 [[ ! -f "$root/state.env" ]] || cp "$root/state.env" "$root/backups/state-$version.env"
 ln -sfn "$release" "$root/current.next"
 mv -Tf "$root/current.next" "$root/current"

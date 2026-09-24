@@ -12,14 +12,15 @@ import {
 import { api, amount, price, age, clock, venue, useAPI } from "./data";
 import type { Asset, Frame, Zone, Health, History } from "./types";
 import { Chart } from "./Chart";
-import { MarketPages, OverviewSummary } from "./Pages";
+import { MarketPages, OverviewSummary, LargeOrders } from "./Pages";
 import { designFixture } from "./demo";
 const nav = [
   ["overview", "总览"],
-  ["liquidity", "流动性"],
+  ["liquidity", "现货挂单"],
   ["flow", "成交分析"],
   ["derivatives", "合约态势"],
-  ["whales", "巨鲸"],
+  ["liquidations", "清算分布"],
+  ["whales", "巨鲸持仓"],
   ["health", "数据健康"],
 ] as const;
 const fixture =
@@ -32,7 +33,7 @@ export function App() {
   const [asset, setAsset] = useState<Asset>("BTC");
   const [view, setView] = useState(location.hash.slice(1) || "liquidity");
   const [step, setStep] = useState(100);
-  const [span, setSpan] = useState(2);
+  const [span, setSpan] = useState(10);
   const [minAge, setMinAge] = useState(fixture ? 300 : 0);
   const [frame, setFrame] = useState<Frame | null>(
     fixture ? designFixture() : null,
@@ -87,7 +88,7 @@ export function App() {
         });
     const connect = () => {
       socket = new WebSocket(
-        `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/v1/stream?${query}`,
+        `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/api/v2/stream?${query}`,
       );
       socket.onopen = () => {
         if (active) setConnected(true);
@@ -193,7 +194,10 @@ export function App() {
   const valid = frame?.coverage.filter((c) => c.valid) ?? [];
   const validVenues = new Set(valid.map((c) => c.venue));
   const stale =
-    !fixture && !!frame && clockNow - new Date(frame.at).getTime() > 30000;
+    !fixture &&
+    !!frame &&
+    (clockNow - new Date(frame.at).getTime() > 15000 ||
+      frame.priceValid === false);
   if (authenticated === null)
     return (
       <div className="boot">
@@ -257,6 +261,7 @@ export function App() {
                     flow: "成交证据",
                     derivatives: "合约态势",
                     whales: "公开巨鲸持仓",
+                    liquidations: "清算集中在哪里？",
                     health: "数据与运行健康",
                   } as Record<string, string>
                 )[view] ?? "现货买卖墙"}
@@ -324,8 +329,8 @@ export function App() {
                       onChange={(e) => setStep(+e.target.value)}
                     >
                       {(asset === "BTC"
-                        ? [25, 50, 100, 250, 500]
-                        : [1, 2, 5, 10, 25]
+                        ? [25, 100, 250, 500, 1000, 2500]
+                        : [1, 5, 10, 25, 50, 100]
                       ).map((s) => (
                         <option key={s} value={s}>
                           ${s}
@@ -339,9 +344,13 @@ export function App() {
                       value={span}
                       onChange={(e) => setSpan(+e.target.value)}
                     >
-                      {[0.5, 1, 2, 5, 10].map((n) => (
+                      {[0.5, 1, 2, 5, 10, 1000].map((n) => (
                         <option key={n} value={n}>
-                          ±{n}%
+                          {n === 1000
+                            ? asset === "BTC"
+                              ? "$1万–$20万全景"
+                              : "全部已覆盖范围"
+                            : `±${n}%`}
                         </option>
                       ))}
                     </select>
@@ -387,11 +396,12 @@ export function App() {
                       ))}
                     </div>
                     <span>当前挂单金额</span>
-                    <span>持续时间</span>
+                    <span>大额持续</span>
                     <span>成交证据</span>
                   </div>
                   <h2 className="side-label sell">上方卖单 · 阻力候选</h2>
                   <ZoneRows
+                    currentPrice={frame?.price ?? 0}
                     rows={visible.filter((z) => z.side === "ask")}
                     selected={selected}
                     scale={scale}
@@ -402,10 +412,13 @@ export function App() {
                       当前价格　{frame?.price ? "$" + price(frame.price) : "—"}
                     </strong>
                     <span />
-                    <small>{connected ? "实时" : "采样"}</small>
+                    <small>
+                      {connected ? "价格实时 · 盘口定时快照" : "本地缓存"}
+                    </small>
                   </div>
                   <h2 className="side-label buy">下方买单 · 支撑候选</h2>
                   <ZoneRows
+                    currentPrice={frame?.price ?? 0}
                     rows={visible.filter((z) => z.side === "bid")}
                     selected={selected}
                     scale={scale}
@@ -425,7 +438,20 @@ export function App() {
                   <span>买卖双方共用金额比例尺</span>
                   <span>
                     {expanded ? zones.length : visible.length} / {zones.length}{" "}
-                    档 · {frame ? clock(frame.at) : "—"} 更新
+                    档 · 盘口来源{" "}
+                    {frame?.coverage
+                      .filter((c) => c.valid && c.observedAt)
+                      .map((c) => c.observedAt)
+                      .sort()
+                      .at(-1)
+                      ? clock(
+                          frame.coverage
+                            .filter((c) => c.valid && c.observedAt)
+                            .map((c) => c.observedAt)
+                            .sort()
+                            .at(-1)!,
+                        )
+                      : "—"}
                   </span>
                 </div>
               </section>
@@ -448,16 +474,23 @@ export function App() {
                       <div>
                         <dt>金额</dt>
                         <dd>
-                          {selected.grade} <small>同侧相近范围</small>
+                          {selected.grade}{" "}
+                          <small>
+                            {selected.percentile != null
+                              ? `约P${selected.percentile.toFixed(0)} · ${selected.samples}个同类价位样本`
+                              : "需7天、500个同类有效样本"}
+                          </small>
                         </dd>
                       </div>
                       <div>
                         <dt>持续</dt>
                         <dd>
-                          {age(selected.seconds)}
+                          {selected.seconds > 0
+                            ? age(selected.seconds)
+                            : "待积累"}
                           {!fixture && (
                             <small>
-                              有效观察中出现{" "}
+                              近30分钟大额出现{" "}
                               {(selected.occupancy * 100).toFixed(0)}%
                             </small>
                           )}
@@ -492,7 +525,8 @@ export function App() {
                     </button>
                     <p className="helper">
                       挂单金额、持续时间、成交证据分别判断。疑似撤走不等于已确认撤单。
-                      {selected.sampled && " 包含约10秒一次的深度采样。"}
+                      {selected.sampled &&
+                        " 盘口约2分钟更新，持续指价位采样稳定程度。"}
                     </p>
                   </>
                 ) : (
@@ -500,6 +534,7 @@ export function App() {
                 )}
               </aside>
             </div>
+            {!fixture && <LargeOrders asset={asset} panorama={span === 1000} />}
             <section className="wall-history">
               <div className="section-heading">
                 <h2>
@@ -547,7 +582,7 @@ export function App() {
               <p className="helper">
                 {fixture
                   ? "演示数据；上线后从实际采集时刻开始形成历史。"
-                  : `历史从 ${new Date(frame?.startedAt ?? Date.now()).toLocaleString("zh-CN")} 开始；空白表示未采集或未覆盖。${history.data?.resolution === "15m" ? " 当前使用15分钟汇总。" : ""}`}
+                  : `${history.data?.note ?? "空白表示未采集或未覆盖。"} 实际精度：${history.data?.resolution ?? "等待数据"}`}
               </p>
             </section>
           </>
@@ -569,7 +604,7 @@ export function App() {
             target="_blank"
             rel="noreferrer"
           >
-            TIDAL {health.data?.version ?? "V1"} <ArrowSquareOut size={13} />
+            TIDAL {health.data?.version ?? "V2"} <ArrowSquareOut size={13} />
           </a>
         </footer>
       </main>
@@ -584,11 +619,13 @@ export function App() {
   );
 }
 function ZoneRows({
+  currentPrice,
   rows,
   scale,
   selected,
   onSelect,
 }: {
+  currentPrice: number;
   rows: Zone[];
   scale: number;
   selected?: Zone;
@@ -601,11 +638,16 @@ function ZoneRows({
           className={`book-grid zone-row ${z.side} ${selected?.price === z.price && selected.side === z.side ? "is-selected" : ""}`}
           key={`${z.side}/${z.price}`}
           onClick={() => onSelect(z)}
-          title={`价格 ≥ ${z.price} 且 < ${z.price + z.step}；${z.evidence}`}
+          title={`价格 ≥ ${z.price} 且 < ${z.price + z.step}；${z.evidence}；${z.updatedAt ? clock(z.updatedAt) : "未知时间"}来源快照`}
           aria-pressed={selected?.price === z.price && selected.side === z.side}
         >
           <span className="row-price">
             ${price(z.price, 0)} <span>– {price(z.price + z.step - 1, 0)}</span>
+            <small className="row-distance">
+              {currentPrice > 0
+                ? ((z.price / currentPrice - 1) * 100).toFixed(2) + "%"
+                : "—"}
+            </small>
           </span>
           <span className="bar-track">
             <meter
@@ -615,8 +657,13 @@ function ZoneRows({
               value={z.usdCents}
             />
           </span>
-          <strong>{amount(z.usdCents)}</strong>
-          <span>{age(z.seconds)}</span>
+          <strong>
+            {amount(z.usdCents)}
+            <small className={`grade-badge ${z.strong ? "strong" : ""}`}>
+              {z.grade}
+            </small>
+          </strong>
+          <span>{z.seconds > 0 ? age(z.seconds) : "待积累"}</span>
           <span className="row-evidence">{z.evidence}</span>
         </button>
       ))}
