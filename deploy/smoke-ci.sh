@@ -17,9 +17,12 @@ cleanup() {
   exit "$status"
 }
 trap cleanup EXIT
+export TIDAL_OFFLINE=true
 password=$(openssl rand -hex 24)
 docker run --rm -e TIDAL_PASSWORD="$password" "$TIDAL_IMAGE" hash-password > "$tmp/hash"
 sudo install -o 10001 -g 10001 -m 400 "$tmp/hash" "$root/secrets/password_hash"
+touch "$tmp/key"
+sudo install -o 10001 -g 10001 -m 400 "$tmp/key" "$root/secrets/coinglass_key"
 sudo openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 -keyout "$root/letsencrypt/live/tidal-ip/privkey.pem" -out "$root/letsencrypt/live/tidal-ip/fullchain.pem" 2>/dev/null
 "${compose[@]}" up -d
 ok=false
@@ -34,4 +37,11 @@ code=$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$ro
 printf '{"password":"%s"}' "$password" > "$tmp/login"
 curl --fail --silent --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" -H 'Content-Type: application/json' --data-binary "@$tmp/login" -c "$tmp/cookie" https://127.0.0.1/api/v1/login >/dev/null
 curl --fail --silent --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" -b "$tmp/cookie" https://127.0.0.1/api/v1/health >/dev/null
+curl --fail --silent --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" -b "$tmp/cookie" https://127.0.0.1/api/v2/data-status > "$tmp/status"
+python3 - "$tmp/status" <<'PYCODE'
+import json,sys
+s=json.load(open(sys.argv[1]));assert not s['legacyCollectorsRunning'];assert s['scheduler']['calls']==0;assert tuple(map(int,s['storage']['sqlite'].split('.'))) >= (3,51,3)
+PYCODE
+code=$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" https://127.0.0.1/readyz)
+[[ "$code" == 503 ]] || exit 1
 echo 'Production Compose startup, verified TLS, authentication and API smoke checks passed.'

@@ -40,3 +40,13 @@ systemctl list-timers tidal-renew.timer tidal-metrics.timer
 ## 验收
 
 72 小时内查看容器无重启 / OOM、CPU 和内存趋势、日增长、有效盘口数、FX 连续性、巨鲸刷新延迟、API 查询时间与错误。压测、清理回放、部署回滚和证书续期验证单独记录；短测成功不能代替完整 72 小时。
+
+## V2
+
+数据契约与接入说明见 [V2-DATA-LAYER](V2-DATA-LAYER.md)。在正式Release前预置 `/opt/tidal/secrets/coinglass_key`，属主10001:10001、权限400；Compose只读挂载为 `/run/secrets/coinglass_key`。不要把密钥放在镜像构建参数、GitHub公开变量或浏览器。
+
+V2只启动共享CoinGlass调度、币安价格/K线、Kraken FX；旧历史保留独立目录，不混入评级。V2的hub.sqlite和各日期精度分区保存在持久化 `/data/v2`。升级前使用SQLite在线备份，新增 `tidal backup-db SOURCE NEW_DESTINATION` 命令（引擎3.51.3）；目的文件必须不存在。上线脚本后续升级会备份hub.sqlite，历史分区结构保持向前/向后兼容，回退不清理V2数据。
+
+调度器状态持久化；不要同时在本地和生产使用同一代理密钥持续采集。生产发布前停止本地采集，避免共享额度被双倍消耗。CI启用 `TIDAL_OFFLINE=true` 和空的测试secret文件，只验证启动、TLS、认证、API、SQLite版本及没有行情时readyz=503，不伪造生产行情。
+
+`python3 scripts/monitor.py` 优先读取V2独立起点；仅通过受限monitor SSH报告和HTTPS查询。旧起点文件不得覆盖。文档变更走普通提交，无需发布生产版本。

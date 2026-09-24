@@ -85,3 +85,5 @@ Go 采集 / API + React / TypeScript + 日期 / 精度分区 SQLite + Nginx / Do
 [OKX](https://app.okx.com/docs-v5/en/) · [Binance](https://github.com/binance/binance-spot-api-docs) · [Coinbase](https://docs.cdp.coinbase.com/exchange/websocket-feed/channels) · [Kraken](https://docs.kraken.com/exchange/guides/websockets/book-checksum-v2) · [Bybit](https://bybit-exchange.github.io/docs/v5/websocket/public/full-ob) · [Hyperliquid](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals)
 
 验收状态见 [STATUS](docs/STATUS.md)。持续运行 72 小时的资源验收与短测分开记录。
+
+V2改为CoinGlass共享数据层，仅BTC/ETH。架构、接口、刷新/过期、复用和保留规则见 [数据层说明](docs/V2-DATA-LAYER.md)，实际生产与72小时进度见 [状态](docs/STATUS.md)。本地运行需要 `COINGLASS_API_KEY_FILE` 指向被忽略的密钥文件；无真实数据时不提供模拟行情。

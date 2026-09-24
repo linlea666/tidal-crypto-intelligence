@@ -46,11 +46,12 @@ def main():
         "tidal-monitor@" + parsed.hostname, "report"
     ], capture_output=True, text=True, timeout=60, check=True)
     report = json.loads(result.stdout)
-    path = PRIVATE / "soak-latest.json"
+    generation = "v2" if (PRIVATE / "soak-v2-start.json").exists() else "v1"
+    path = PRIVATE / ("soak-v2-latest.json" if generation == "v2" else "soak-latest.json")
     fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w") as out:
         json.dump(report, out)
-    start_path = PRIVATE / "soak-start.json"
+    start_path = PRIVATE / ("soak-v2-start.json" if generation == "v2" else "soak-start.json")
     baseline = json.loads(start_path.read_text()) if start_path.exists() else {}
     start = stamp(baseline["start"]) if baseline.get("start") else 0
     samples = [s for s in report.get("samples", []) if stamp(s["utc"]) >= start]
@@ -64,6 +65,16 @@ def main():
                "certificate": report.get("certificate"), "latest": {k: latest.get(k) for k in ["utc", "projectBytes", "containers", "healthQueryMs"]},
                "containers": {n: report.get(n) for n in ["tidal-app-1", "tidal-gateway-1"]}}
     markets = latest.get("collector", {}).get("markets", {})
+    summary["generation"] = generation
+    summary["sampleGapMinutes"] = max([(stamp(b["utc"])-stamp(a["utc"]))/60 for a,b in zip(samples,samples[1:])],default=None)
+    summary["versionMatches"] = not baseline.get("version") or report.get("deployed-version", "").split()[0] == baseline["version"]
+    if generation == "v2":
+        collector=latest.get("collector", {})
+        summary["quota"]=collector.get("scheduler")
+        summary["storage"]=collector.get("storage")
+        summary["fx"]=collector.get("fx",{}).get("status")
+        summary["staleDatasets"]=[x["dataset"] for x in collector.get("datasets",[]) if x.get("status") in ("missing","stale")]
+        summary["legacyCollectorsRunning"]=collector.get("legacyCollectorsRunning")
     summary["markets"] = {a: {k: m.get(k) for k in ["validBooks", "totalBooks", "freshWhales", "observedWhales"]} for a, m in markets.items()}
     jar = http.cookiejar.CookieJar()
     client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))

@@ -1,6 +1,11 @@
 export type Asset = "BTC" | "ETH";
 export type Zone = {
+  updatedAt?: string;
   sampled?: boolean;
+  percentile?: number | null;
+  strong?: boolean;
+  reason?: string;
+  covered?: string[];
   price: number;
   step: number;
   side: "bid" | "ask";
@@ -30,6 +35,9 @@ export type Coverage = {
   resyncs: number;
 };
 export type Frame = {
+  priceAt?: string | null;
+  priceValid?: boolean;
+  note?: string;
   asset: Asset;
   at: string;
   price: number;
@@ -40,6 +48,7 @@ export type Frame = {
   startedAt: string;
 };
 export type Health = {
+  data?: unknown;
   feeds: {
     component: string;
     at: string;

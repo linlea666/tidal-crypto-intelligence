@@ -20,10 +20,12 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/linlea666/tidal-crypto-intelligence/internal/datahub"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type Server struct {
+	Hub          *datahub.Hub
 	E            *Engine
 	Store        *Store
 	Whales       *Whales
@@ -45,6 +47,8 @@ func jsonOut(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 func problem(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	jsonOut(w, map[string]string{"error": msg})
 }
@@ -68,6 +72,14 @@ func (s *Server) Handler() http.Handler {
 		jsonOut(w, map[string]any{"ok": true, "version": s.Version})
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		if s.Hub != nil {
+			if !s.Hub.Ready() {
+				problem(w, 503, "waiting for fresh V2 prices, FX and spot books")
+				return
+			}
+			jsonOut(w, map[string]bool{"ok": true})
+			return
+		}
 		for _, a := range []string{"BTC", "ETH"} {
 			f := s.E.Frame(a)
 			if f.Price == 0 || time.Since(f.At) > 10*time.Second {
@@ -178,6 +190,9 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	}
 	if a != "BTC" && a != "ETH" {
 		problem(w, 400, "仅支持BTC或ETH")
+		return
+	}
+	if s.Hub != nil && s.apiV2(w, r, a) {
 		return
 	}
 	if r.Method != "GET" && r.URL.Path != "/api/v1/settings" && r.URL.Path != "/api/v1/annotations" && r.URL.Path != "/api/v1/watchlist" && r.URL.Path != "/api/v1/logout" {
