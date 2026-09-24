@@ -6,6 +6,8 @@
 
 验证重点列表展开前后总额相同、价位侧栏五家金额/原始报价/FX/来源及获取时间、大单分页和历史空结果。新页默认1小时，4/24小时边界与低覆盖率降级、当前大单与成交分开、CVD、合约背景和高级K线/挂单存续可用；未出现虚构成交圆圈。手机主导航可滚动，页面无横向溢出。原成交、合约、清算、巨鲸前100/临近清算排序和健康页面回归，控制台错误为空。临时视口已恢复。运行验收仍以STATUS/ACCEPTANCE为准。
 
+v2.1.0上线后再次检查真实HTTPS页面：BTC/ETH五家覆盖、范围总额和大资金1小时窗口实际数据已显示；390px视口内容宽375px、错误日志为空。生产截图留在本地忽略目录 `tmp/v21-production-desktop.png`、`tmp/v21-production-mobile.png`，未包含凭据或钱包明细。完成后恢复浏览器视口。
+
 final result: passed
 
 日期：2026-09-24。源图：`docs/design/selected.png`。实现：本地浏览器 `http://localhost:5173/?demo=1#liquidity`；桌面证据 `docs/qa/desktop.png`，手机证据 `docs/qa/mobile.png`。演示夹具仅用于匹配源图，生产构建只使用真实 API。
