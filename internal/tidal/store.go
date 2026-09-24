@@ -624,6 +624,7 @@ func (s *Store) Initialize(e *Engine, w *Whales) error {
 func (s *Store) Run(ctx context.Context, e *Engine, w *Whales) {
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
+	var observationMinute int64
 	for {
 		select {
 		case <-ctx.Done():
@@ -711,6 +712,13 @@ func (s *Store) Run(ctx context.Context, e *Engine, w *Whales) {
 				detail = writeErr.Error()
 			}
 			e.SetHealth("storage", !rep.Paused && writeErr == nil, detail)
+			if minute := now.Unix() / 60; minute != observationMinute {
+				if err := s.writeObservation(e, w, now); err != nil {
+					e.SetHealth("storage:observation", false, err.Error())
+				} else {
+					observationMinute = minute
+				}
+			}
 		}
 	}
 }

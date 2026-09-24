@@ -39,9 +39,14 @@ try: stats=[json.loads(s) for s in run(['docker','stats','--no-stream','--format
 except Exception: stats=[]
 record={'utc':datetime.datetime.utcnow().isoformat()+'Z','disk':run(['df','-Pk',root]),'projectBytes':size(root+'/data')+external,'containers':stats}
 try:
+ with open(root+'/data/collector-health.json') as f: record['collector']=json.load(f)
+except Exception as e: record['collectorError']=str(e)
+try:
  import urllib.request
+ start=time.monotonic()
  record['health']=json.load(urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=5))
  record['ready']=json.load(urllib.request.urlopen('http://127.0.0.1:8080/readyz',timeout=5))
+ record['healthQueryMs']=round((time.monotonic()-start)*1000,2)
 except Exception as e: record['error']=str(e)
 with open(root+'/metrics/'+datetime.datetime.utcnow().strftime('%Y-%m-%d')+'.jsonl','a') as f: f.write(json.dumps(record)+'\n')
 for name in os.listdir(root+'/metrics'):

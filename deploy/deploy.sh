@@ -38,9 +38,12 @@ trap 'rm -f "$archive"' EXIT
 curl --fail --location --retry 3 --max-time 120 "https://codeload.github.com/$repo/tar.gz/$revision" -o "$archive"
 tar -xzf "$archive" --strip-components=2 -C "$release" --wildcards '*/deploy/compose.yaml' '*/deploy/nginx.conf' '*/deploy/renew.sh' '*/deploy/metrics.sh' '*/deploy/deploy.sh' '*/deploy/report.sh'
 chmod 644 "$release/compose.yaml" "$release/nginx.conf"
-old_release=$(readlink "$root/current" || true)
+old_release=''
 old_image=''
-if [[ -f "$root/state.env" ]]; then old_image=$(sed -n 's/^TIDAL_IMAGE=//p' "$root/state.env"); fi
+if [[ -s "$root/deployed-version" && -f "$root/state.env" ]]; then
+  old_release=$(readlink "$root/current" || true)
+  old_image=$(sed -n 's/^TIDAL_IMAGE=//p' "$root/state.env")
+fi
 # Online SQLite backup includes WAL transactions and avoids copying live WAL files.
 if [[ -f "$root/data/state.sqlite" ]]; then
   sqlite3 "$root/data/state.sqlite" ".timeout 10000" ".backup '$root/backups/state-$version.sqlite'"

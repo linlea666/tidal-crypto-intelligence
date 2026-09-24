@@ -49,6 +49,10 @@ jobs:
             org.opencontainers.image.revision=${{ steps.revision.outputs.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Start the published image with production Compose configuration
+        run: bash deploy/smoke-ci.sh
+        env:
+          TIDAL_IMAGE: ghcr.io/linlea666/tidal-crypto-intelligence@${{ steps.build.outputs.digest }}
   deploy:
     needs: publish
     runs-on: ubuntu-latest
