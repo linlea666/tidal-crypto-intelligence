@@ -27,18 +27,21 @@ const HotLimit = 128 << 20
 const ResultLimit = 8 << 20
 
 type StorageStatus struct {
-	OrderBytes  int64     `json:"orderHistoryBytes"`
-	OrderPaused bool      `json:"orderHistoryPaused"`
-	Bytes       int64     `json:"usedBytes"`
-	Free        int64     `json:"freeBytes"`
-	WhaleBytes  int64     `json:"whaleBytes"`
-	Paused      bool      `json:"fineHistoryPaused"`
-	Error       string    `json:"error,omitempty"`
-	LastCleanup time.Time `json:"lastCleanup"`
-	SQLite      string    `json:"sqlite"`
-	HotBytes    int       `json:"hotBytes"`
+	ResearchBytes  int64     `json:"researchBytes"`
+	ResearchPaused bool      `json:"researchPaused"`
+	OrderBytes     int64     `json:"orderHistoryBytes"`
+	OrderPaused    bool      `json:"orderHistoryPaused"`
+	Bytes          int64     `json:"usedBytes"`
+	Free           int64     `json:"freeBytes"`
+	WhaleBytes     int64     `json:"whaleBytes"`
+	Paused         bool      `json:"fineHistoryPaused"`
+	Error          string    `json:"error,omitempty"`
+	LastCleanup    time.Time `json:"lastCleanup"`
+	SQLite         string    `json:"sqlite"`
+	HotBytes       int       `json:"hotBytes"`
 }
 type Warehouse struct {
+	research                   *sql.DB
 	root                       string
 	db                         *sql.DB
 	write                      sync.Mutex
@@ -85,6 +88,10 @@ CREATE TABLE IF NOT EXISTS rollups(dataset TEXT,res INTEGER,through_ts INTEGER,P
 		db.Close()
 		return nil, e
 	}
+	if e = w.initResearch(); e != nil {
+		db.Close()
+		return nil, e
+	}
 	if e = db.QueryRow("SELECT sqlite_version()").Scan(&w.status.SQLite); e != nil {
 		db.Close()
 		return nil, e
@@ -114,6 +121,10 @@ CREATE TABLE IF NOT EXISTS rollups(dataset TEXT,res INTEGER,through_ts INTEGER,P
 func (w *Warehouse) Close() error {
 	w.write.Lock()
 	defer w.write.Unlock()
+	if w.research != nil {
+		_, _ = w.research.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+		_ = w.research.Close()
+	}
 	_, _ = w.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	return w.db.Close()
 }
@@ -194,6 +205,7 @@ func unpack(b []byte) (Observation, error) {
 }
 func digest(o Observation) string {
 	o.FetchedAt = time.Time{}
+	o.FirstFetchedAt = nil
 	o.Revision = ""
 	b, _ := json.Marshal(o)
 	s := sha256.Sum256(b)
@@ -274,6 +286,9 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 	o.Revision = digest(o)
 	w.write.Lock()
 	defer w.write.Unlock()
+	if err := w.recordFact(d, &o); err != nil {
+		return false, err
+	}
 	if d.Kind == "large" || d.Kind == "large-history" {
 		if err := w.ingestOrders(d, o); err != nil {
 			return false, err
@@ -298,9 +313,13 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 	}
 	w.mu.RLock()
 	paused := w.status.Paused
+	days := w.retention
 	whaleFull := w.status.WhaleBytes >= 2<<30
 	w.mu.RUnlock()
 	if paused || (d.Kind == "whales" && whaleFull) {
+		return changed, nil
+	}
+	if d.Contract && o.Time().Before(o.FetchedAt.Add(-time.Duration(days)*24*time.Hour)) {
 		return changed, nil
 	}
 	res := nativeRes(d)
@@ -354,6 +373,9 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 	return true, nil
 }
 func targets(d Dataset) []int {
+	if d.Resolution >= 86400 || d.Kind == "balance-list" {
+		return nil
+	}
 	if d.Kind == "book" {
 		return []int{300, 3600}
 	}
@@ -609,6 +631,9 @@ func (w *Warehouse) Maintain(ctx context.Context, registry map[string]Dataset, n
 	days, budget, free := w.retention, w.budget, w.minFree
 	w.mu.RUnlock()
 	if err := w.maintainOrders(ctx, now, days); err != nil {
+		return err
+	}
+	if err := w.maintainResearch(ctx, now, days); err != nil {
 		return err
 	}
 	var used, whales int64

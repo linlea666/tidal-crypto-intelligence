@@ -51,6 +51,9 @@ fi
 if [[ -f "$root/data/v2/hub.sqlite" ]]; then
   docker run --rm --user 0:0 -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/hub.sqlite "/backup/hub-$version-$(date -u +%s).sqlite"
 fi
+if [[ -f "$root/data/v2/research.sqlite" ]]; then
+  docker run --rm --user 0:0 -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/research.sqlite "/backup/research-$version-$(date -u +%s).sqlite"
+fi
 [[ ! -f "$root/state.env" ]] || cp "$root/state.env" "$root/backups/state-$version.env"
 ln -sfn "$release" "$root/current.next"
 mv -Tf "$root/current.next" "$root/current"

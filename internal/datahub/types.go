@@ -19,6 +19,7 @@ func freshWhale(w Whale, now time.Time) bool {
 }
 
 type Dataset struct {
+	Contract     bool              `json:"requiresContractCheck,omitempty"`
 	ID           string            `json:"id"`
 	Kind         string            `json:"kind"`
 	Asset        string            `json:"asset"`
@@ -153,6 +154,9 @@ type Distribution struct {
 }
 
 type Payload struct {
+	Balances      []Balance      `json:"balances,omitempty"`
+	ETF           *ETFRecord     `json:"etf,omitempty"`
+	Premium       *Premium       `json:"premium,omitempty"`
 	Distributions []Distribution `json:"distributions,omitempty"`
 
 	Book        *Book           `json:"book,omitempty"`
@@ -170,7 +174,10 @@ type Payload struct {
 	Wallet      json.RawMessage `json:"wallet,omitempty"`
 }
 type Observation struct {
-	Dependencies map[string]string `json:"dependencies,omitempty"`
+	FirstFetchedAt   *time.Time        `json:"firstFetchedAt,omitempty"`
+	PublishedAt      *time.Time        `json:"publishedAt,omitempty"`
+	PublicationKnown bool              `json:"publicationKnown"`
+	Dependencies     map[string]string `json:"dependencies,omitempty"`
 
 	Dataset         string     `json:"dataset"`
 	Source          string     `json:"source"`
@@ -240,13 +247,25 @@ func Registry() []Dataset {
 			add("book", a, "spot", v, q, "spot/orderbook/history", "base", 60, 120, 300, 0, map[string]string{"exchange": v, "symbol": sym, "interval": "1m", "limit": "3"})
 			add("large", a, "spot", v, q, "spot/orderbook/large-limit-order", "base", 0, 300, 720, 1, map[string]string{"exchange": v, "symbol": sym})
 			for _, state := range []string{"2", "3"} {
-				add("large-history", a, "spot", v, q, "spot/orderbook/v2/large-limit-order-history", "base", 0, 1800, 4200, 4, map[string]string{"exchange": v, "symbol": sym, "limit": "100", "state": state})
+				add("large-history", a, "spot", v, q, "spot/orderbook/v2/large-limit-order-history", "base", 0, 3600, 7800, 4, map[string]string{"exchange": v, "symbol": sym, "limit": "100", "state": state})
 				if state == "3" {
 					out[len(out)-1].ID += ".revoked"
 				}
 			}
 		}
 		add("oi", a, "futures", "", "USD", "futures/open-interest/exchange-list", "USD", 0, 300, 720, 1, map[string]string{"symbol": a})
+		add("oi-history", a, "futures", "", "USD", "futures/open-interest/aggregated-history", "USD", 300, 300, 720, 2, map[string]string{"symbol": a, "unit": "usd", "interval": "5m", "limit": "12"})
+		out[len(out)-1].Contract = true
+		add("balance-list", a, "chain", "", a, "exchange/balance/list", a, 0, 3600, 9000, 3, map[string]string{"symbol": a})
+		out[len(out)-1].Contract = true
+		add("balance-history", a, "chain", "", a, "exchange/balance/chart", a, 86400, 21600, 172800, 3, map[string]string{"symbol": a})
+		out[len(out)-1].Contract = true
+		coin := "bitcoin"
+		if a == "ETH" {
+			coin = "ethereum"
+		}
+		add("etf", a, "fund", "", "USD", "etf/"+coin+"/flow-history", "USD", 86400, 86400, 345600, 3, map[string]string{})
+		out[len(out)-1].Contract = true
 		for _, m := range []string{"spot", "futures"} {
 			venues := "Binance,OKX,Bybit"
 			if m == "spot" {
@@ -268,6 +287,8 @@ func Registry() []Dataset {
 		add("map", a, "futures", "", "", "futures/liquidation/aggregated-map", "relative", 0, 900, 2100, 2, map[string]string{"symbol": a, "range": "1d"})
 		add("heatmap", a, "futures", "", "", "futures/liquidation/aggregated-heatmap/model1", "relative", 300, 900, 2100, 3, map[string]string{"symbol": a, "range": "24h"})
 	}
+	add("premium", "BTC", "spot", "Coinbase", "USD", "coinbase-premium-index", "USD/raw rate", 300, 300, 720, 2, map[string]string{"interval": "5m", "limit": "12"})
+	out[len(out)-1].Contract = true
 	add("whales", "ALL", "futures", "Hyperliquid", "USD", "hyperliquid/whale-position", "USD", 0, WhaleRefreshSeconds, WhaleTTLSeconds, 2, map[string]string{})
 	add("funding", "ALL", "futures", "", "", "futures/funding-rate/exchange-list", "percent", 0, 600, 1500, 2, map[string]string{})
 	for _, a := range Assets() {

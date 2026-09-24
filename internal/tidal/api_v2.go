@@ -60,6 +60,23 @@ func (s *Server) apiV2(w http.ResponseWriter, r *http.Request, a string) bool {
 		jsonOut(w, j)
 		return true
 	}
+	if path == "studies" && r.Method == "POST" {
+		var req datahub.StudyRequest
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&req) != nil {
+			problem(w, 400, "无效研究请求")
+			return true
+		}
+		study, e := s.Hub.CreateStudy(req)
+		if e != nil {
+			problem(w, 400, e.Error())
+			return true
+		}
+		w.WriteHeader(http.StatusAccepted)
+		jsonOut(w, study)
+		return true
+	}
 	if r.Method != "GET" {
 		problem(w, 405, "GET required")
 		return true

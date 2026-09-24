@@ -46,7 +46,7 @@ def main():
         "tidal-monitor@" + parsed.hostname, "report"
     ], capture_output=True, text=True, timeout=60, check=True)
     report = json.loads(result.stdout)
-    generation = next((g for g in ["v2.1", "v2"] if (PRIVATE / f"soak-{g}-start.json").exists()), "v1")
+    generation = next((g for g in ["v2.2", "v2.1", "v2"] if (PRIVATE / f"soak-{g}-start.json").exists()), "v1")
     stem = f"soak-{generation}" if generation != "v1" else "soak"
     path = PRIVATE / f"{stem}-latest.json"
     fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
@@ -78,6 +78,10 @@ def main():
         summary["fx"]=collector.get("fx",{}).get("status")
         summary["staleDatasets"]=[x["dataset"] for x in collector.get("datasets",[]) if x.get("status") in ("missing","stale")]
         summary["legacyCollectorsRunning"]=collector.get("legacyCollectorsRunning")
+        summary["contracts"]=collector.get("contracts")
+        summary["signals"]=collector.get("signals")
+        summary["researchGap"]=collector.get("researchGap")
+        summary["mail"]=collector.get("mail")
     summary["markets"] = {a: {k: m.get(k) for k in ["validBooks", "totalBooks", "freshWhales", "observedWhales"]} for a, m in markets.items()}
     jar = http.cookiejar.CookieJar()
     client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
@@ -87,7 +91,8 @@ def main():
         with client.open(req, timeout=15) as response:
             json.load(response)
         summary["apiMs"] = {}
-        for endpoint in (["activity?asset=BTC&hours=1"] if generation == "v2.1" else []) + ["levels?asset=BTC", "levels?asset=ETH", "flow?asset=BTC&hours=1", "candles?asset=BTC&hours=24", "whales?asset=BTC&limit=50", "derivatives?asset=ETH"]:
+        extra = ["signals?asset=BTC", "wallet-trends?asset=BTC", "etf?asset=BTC", "etf?asset=ETH", "studies?asset=BTC"] if generation == "v2.2" else []
+        for endpoint in extra + (["activity?asset=BTC&hours=1"] if generation in ("v2.1","v2.2") else []) + ["levels?asset=BTC", "levels?asset=ETH", "flow?asset=BTC&hours=1", "candles?asset=BTC&hours=24", "whales?asset=BTC&limit=50", "derivatives?asset=ETH"]:
             before = time.monotonic()
             with client.open(base + "/api/v1/" + endpoint, timeout=20) as response:
                 json.load(response)

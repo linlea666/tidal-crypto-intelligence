@@ -24,24 +24,25 @@ type OrderRange struct {
 }
 
 type Job struct {
-	OrderRanges  []OrderRange `json:"orderRanges,omitempty"`
-	OrderThrough *time.Time   `json:"orderThrough,omitempty"`
-	OrderFirst   *time.Time   `json:"orderFirst,omitempty"`
-	OrderGaps    int          `json:"orderGaps,omitempty"`
-	ID           string       `json:"id"`
-	Dataset      Dataset      `json:"dataset"`
-	Next         time.Time    `json:"next"`
-	LastAttempt  *time.Time   `json:"lastAttempt"`
-	LastSuccess  *time.Time   `json:"lastSuccess"`
-	Error        string       `json:"error,omitempty"`
-	Failures     int          `json:"failures"`
-	InFlight     bool         `json:"inFlight"`
-	Mode         string       `json:"mode"`
-	From         *time.Time   `json:"from,omitempty"`
-	To           *time.Time   `json:"to,omitempty"`
-	Disabled     bool         `json:"disabled"`
-	Completed    bool         `json:"completed"`
-	Calls        int64        `json:"calls"`
+	ContractStatus string       `json:"contractStatus,omitempty"`
+	OrderRanges    []OrderRange `json:"orderRanges,omitempty"`
+	OrderThrough   *time.Time   `json:"orderThrough,omitempty"`
+	OrderFirst     *time.Time   `json:"orderFirst,omitempty"`
+	OrderGaps      int          `json:"orderGaps,omitempty"`
+	ID             string       `json:"id"`
+	Dataset        Dataset      `json:"dataset"`
+	Next           time.Time    `json:"next"`
+	LastAttempt    *time.Time   `json:"lastAttempt"`
+	LastSuccess    *time.Time   `json:"lastSuccess"`
+	Error          string       `json:"error,omitempty"`
+	Failures       int          `json:"failures"`
+	InFlight       bool         `json:"inFlight"`
+	Mode           string       `json:"mode"`
+	From           *time.Time   `json:"from,omitempty"`
+	To             *time.Time   `json:"to,omitempty"`
+	Disabled       bool         `json:"disabled"`
+	Completed      bool         `json:"completed"`
+	Calls          int64        `json:"calls"`
 }
 type Quota struct {
 	Starts      []time.Time `json:"starts"`
@@ -175,6 +176,9 @@ func NewScheduler(store *Warehouse, registry []Dataset, fetch Fetcher, enabled b
 			phase = time.Duration(h.Sum32()%30) * time.Second
 		}
 		j := Job{ID: d.ID, Dataset: d, Next: now.Add(phase), Mode: "live"}
+		if d.Contract {
+			j.ContractStatus = "pending"
+		}
 		if prev, ok := old[d.ID]; ok {
 			j = prev
 			j.Dataset = d
@@ -303,24 +307,30 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 		params[k] = v
 	}
 	d.Params = params
+	pageSize := 100
+	if j.Mode == "history" && (d.Kind == "flow" || d.Kind == "oi-history" || d.Kind == "premium") {
+		pageSize = 1000
+	}
 	if j.From != nil {
 		d.Params["start_time"] = strconv.FormatInt(j.From.UnixMilli(), 10)
 	}
 	if j.To != nil {
 		end := *j.To
 		if j.From != nil {
-			end = minTime(end, j.From.Add(time.Duration(max(60, d.Resolution)*100)*time.Second))
+			end = minTime(end, j.From.Add(time.Duration(max(60, d.Resolution)*pageSize)*time.Second))
 		}
 		d.Params["end_time"] = strconv.FormatInt(end.UnixMilli()-1, 10)
 	}
 	if j.Mode == "baseline" || j.Mode == "history" {
-		d.Params["limit"] = "100"
+		d.Params["limit"] = strconv.Itoa(pageSize)
 	}
 	raw, err := s.fetch(ctx, d)
 	fetched := time.Now().UTC()
 	var observations []Observation
+	contractError := false
 	if err == nil {
 		observations, err = Normalize(d, raw, fetched)
+		contractError = err != nil
 	}
 	var last time.Time
 	valid := 0
@@ -356,6 +366,10 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 	if err != nil {
 		current.Failures++
 		current.Error = err.Error()
+		if d.Contract && current.LastSuccess == nil && contractError {
+			current.ContractStatus = "failed"
+			current.Disabled = true
+		}
 		backoff := time.Duration(15*(1<<min(current.Failures, 7))) * time.Second
 		current.Next = now.Add(backoff)
 		var fe *FetchError
@@ -380,12 +394,18 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 		current.Error = ""
 		current.Failures = 0
 		current.LastSuccess = &fetched
+		if d.Contract {
+			current.ContractStatus = "verified"
+		}
 		if j.Mode == "live" {
 			next := current.Next
 			for !next.After(now) {
 				next = next.Add(time.Duration(d.Refresh) * time.Second)
 			}
 			current.Next = next
+			if d.Kind == "etf" {
+				current.Next = nextETF(now)
+			}
 		} else if j.From != nil && j.To != nil {
 			next := last.Add(time.Duration(max(60, d.Resolution)) * time.Second)
 			if !next.After(*j.From) {
@@ -473,7 +493,7 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 		if req.From == nil || req.To == nil || !req.From.Before(*req.To) || req.To.After(now) || req.From.Before(now.Add(-90*24*time.Hour)) {
 			return Job{}, errors.New("历史范围必须在过去90天内")
 		}
-		if d.Kind != "book" && d.Kind != "footprint" && d.Kind != "flow" && d.Kind != "liquidations" {
+		if d.Kind != "book" && d.Kind != "footprint" && d.Kind != "flow" && d.Kind != "liquidations" && d.Kind != "oi-history" && d.Kind != "premium" {
 			return Job{}, errors.New("该数据无已验证的历史补采接口")
 		}
 		interval := map[int]string{60: "1m", 300: "5m", 900: "15m", 3600: "1h"}[req.Resolution]

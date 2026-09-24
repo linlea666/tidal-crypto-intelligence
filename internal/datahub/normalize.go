@@ -100,6 +100,9 @@ func Normalize(d Dataset, raw []byte, fetched time.Time) ([]Observation, error) 
 	if data == nil {
 		return nil, ErrNoData
 	}
+	if d.Contract {
+		return normalizeObservers(d, data, fetched)
+	}
 	obs := func(at *time.Time, p Payload) Observation {
 		basis := "source"
 		if at == nil {

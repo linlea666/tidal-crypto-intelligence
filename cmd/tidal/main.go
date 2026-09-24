@@ -81,7 +81,12 @@ func main() {
 		}
 		key = strings.TrimSpace(string(b))
 	}
-	hub, err := datahub.Open(datahub.Config{Root: env("TIDAL_DATA", "data") + "/v2", BaseURL: env("COINGLASS_BASE_URL", "https://proxy.keystore.com.cn/api/v1/proxy/coinglass"), Key: key, Offline: os.Getenv("TIDAL_OFFLINE") == "true"})
+	mailConfig, mailErr := datahub.LoadMailConfig(os.Getenv("TIDAL_SMTP_FILE"))
+	if mailErr != nil {
+		slog.Error(mailErr.Error())
+		os.Exit(1)
+	}
+	hub, err := datahub.Open(datahub.Config{Root: env("TIDAL_DATA", "data") + "/v2", BaseURL: env("COINGLASS_BASE_URL", "https://proxy.keystore.com.cn/api/v1/proxy/coinglass"), Key: key, Offline: os.Getenv("TIDAL_OFFLINE") == "true", Mail: mailConfig})
 	if err != nil {
 		panic(err)
 	}
