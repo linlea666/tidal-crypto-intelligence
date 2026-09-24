@@ -9,7 +9,14 @@ import (
 	"time"
 )
 
-const RulesVersion = "evidence-2.0"
+const RulesVersion = "evidence-2.1"
+
+const WhaleRefreshSeconds = 300
+const WhaleTTLSeconds = 480
+
+func freshWhale(w Whale, now time.Time) bool {
+	return !w.At.IsZero() && now.Sub(w.At) <= WhaleTTLSeconds*time.Second && !w.At.After(now.Add(30*time.Second))
+}
 
 type Dataset struct {
 	ID           string            `json:"id"`
@@ -90,16 +97,21 @@ type Whale struct {
 	Created       *time.Time `json:"createdAt"`
 }
 type LargeOrder struct {
-	ID          string     `json:"id"`
-	Side        string     `json:"side"`
-	Price       string     `json:"price"`
-	Quantity    string     `json:"quantity"`
-	ReportedUSD string     `json:"reportedUsd"`
-	ExecutedUSD string     `json:"executedUsd"`
-	State       string     `json:"state"`
-	Start       *time.Time `json:"startAt"`
-	Changed     *time.Time `json:"changedAt"`
-	Trades      int64      `json:"trades"`
+	ID               string     `json:"id"`
+	Side             string     `json:"side"`
+	Price            string     `json:"price"`
+	Quantity         string     `json:"quantity"`
+	ReportedUSD      string     `json:"reportedUsd"`
+	ExecutedUSD      string     `json:"executedUsd"`
+	State            string     `json:"state"`
+	Start            *time.Time `json:"startAt"`
+	Changed          *time.Time `json:"changedAt"`
+	Trades           int64      `json:"trades"`
+	InitialQuantity  *string    `json:"initialQuantity"`
+	InitialUSD       *string    `json:"initialUsd"`
+	ExecutedQuantity *string    `json:"executedQuantity"`
+	RawState         int        `json:"rawState"`
+	End              *time.Time `json:"endAt"`
 }
 type ModelBin struct {
 	Price    float64 `json:"price"`
@@ -226,8 +238,13 @@ func Registry() []Dataset {
 				sym = b + "/" + q
 			}
 			add("book", a, "spot", v, q, "spot/orderbook/history", "base", 60, 120, 300, 0, map[string]string{"exchange": v, "symbol": sym, "interval": "1m", "limit": "3"})
-			add("large", a, "spot", v, q, "spot/orderbook/large-limit-order", "base", 0, 600, 1500, 2, map[string]string{"exchange": v, "symbol": sym})
-			add("large-history", a, "spot", v, q, "spot/orderbook/v2/large-limit-order-history", "base", 0, 3600, 7200, 4, map[string]string{"exchange": v, "symbol": sym, "limit": "100"})
+			add("large", a, "spot", v, q, "spot/orderbook/large-limit-order", "base", 0, 300, 720, 1, map[string]string{"exchange": v, "symbol": sym})
+			for _, state := range []string{"2", "3"} {
+				add("large-history", a, "spot", v, q, "spot/orderbook/v2/large-limit-order-history", "base", 0, 1800, 4200, 4, map[string]string{"exchange": v, "symbol": sym, "limit": "100", "state": state})
+				if state == "3" {
+					out[len(out)-1].ID += ".revoked"
+				}
+			}
 		}
 		add("oi", a, "futures", "", "USD", "futures/open-interest/exchange-list", "USD", 0, 300, 720, 1, map[string]string{"symbol": a})
 		for _, m := range []string{"spot", "futures"} {
@@ -251,10 +268,10 @@ func Registry() []Dataset {
 		add("map", a, "futures", "", "", "futures/liquidation/aggregated-map", "relative", 0, 900, 2100, 2, map[string]string{"symbol": a, "range": "1d"})
 		add("heatmap", a, "futures", "", "", "futures/liquidation/aggregated-heatmap/model1", "relative", 300, 900, 2100, 3, map[string]string{"symbol": a, "range": "24h"})
 	}
-	add("whales", "ALL", "futures", "Hyperliquid", "USD", "hyperliquid/whale-position", "USD", 0, 60, 180, 0, map[string]string{})
+	add("whales", "ALL", "futures", "Hyperliquid", "USD", "hyperliquid/whale-position", "USD", 0, WhaleRefreshSeconds, WhaleTTLSeconds, 2, map[string]string{})
 	add("funding", "ALL", "futures", "", "", "futures/funding-rate/exchange-list", "percent", 0, 600, 1500, 2, map[string]string{})
 	for _, a := range Assets() {
-		out = append(out, Dataset{ID: ID("whale-distribution", a, "Hyperliquid", "futures"), Kind: "whale-distribution", Asset: a, Market: "futures", Venue: "Hyperliquid", Source: "derived/coinglass", Quote: "USD", Unit: "USD", Resolution: 60, Refresh: 60, TTL: 180, Retention: "分钟30天 / 1小时90天"})
+		out = append(out, Dataset{ID: ID("whale-distribution", a, "Hyperliquid", "futures"), Kind: "whale-distribution", Asset: a, Market: "futures", Venue: "Hyperliquid", Source: "derived/coinglass", Quote: "USD", Unit: "USD", Resolution: 60, Refresh: 60, TTL: WhaleTTLSeconds, Retention: "分钟30天 / 1小时90天"})
 		out = append(out, Dataset{ID: ID("price", a, "Binance", "spot"), Kind: "price", Asset: a, Market: "spot", Venue: "Binance", Symbol: a + "USDT", Quote: "USDT", Source: "binance", Unit: "USDT", Refresh: 1, TTL: 15, Retention: "仅最新"})
 		out = append(out, Dataset{ID: ID("candles", a, "Binance", "spot"), Kind: "candles", Asset: a, Market: "spot", Venue: "Binance", Symbol: a + "USDT", Quote: "USDT", Source: "binance", Unit: "USDT", Resolution: 300, Refresh: 300, TTL: 900, Retention: "5分钟30天 / 1小时90天"})
 	}

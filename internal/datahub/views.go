@@ -39,8 +39,10 @@ func (h *Hub) historyWindow(ctx context.Context, d Dataset, hours int, fn func(O
 	return res, h.Store.Visit(ctx, d, res, from, now, fn)
 }
 func (h *Hub) FlowView(ctx context.Context, a, market string, hours int, anchorText string) (any, error) {
+	return h.flowViewAt(ctx, a, market, hours, anchorText, time.Now().UTC().Truncate(time.Minute))
+}
+func (h *Hub) flowViewAt(ctx context.Context, a, market string, hours int, anchorText string, now time.Time) (any, error) {
 	d, _ := h.Dataset(ID("flow", a, "", market))
-	now := time.Now().UTC().Truncate(time.Minute)
 	from := now.Add(-time.Duration(hours) * time.Hour)
 	anchor := from
 	if anchorText != "" {
@@ -50,12 +52,6 @@ func (h *Hub) FlowView(ctx context.Context, a, market string, hours int, anchorT
 			return nil, errors.New("无效CVD起算点")
 		}
 	}
-	readFrom := minTime(anchor, from)
-	buy, sell, cvd := int64(0), int64(0), int64(0)
-	series := []map[string]any{}
-	n := 0
-	partial := false
-	var previous time.Time
 	res := nativeRes(d)
 	if hours > 24 {
 		res = 900
@@ -63,51 +59,38 @@ func (h *Hub) FlowView(ctx context.Context, a, market string, hours int, anchorT
 	if hours > 720 {
 		res = 3600
 	}
-	e := h.Store.Visit(ctx, d, res, readFrom, now, func(o Observation) error {
-		if o.Payload.Flow == nil {
-			return nil
-		}
-		at := recordTime(o)
-		if !previous.IsZero() && at.Sub(previous) > time.Duration(max(60, o.Resolution))*time.Second {
-			series = append(series, map[string]any{"time": previous.Unix() + 60, "cvdCents": nil, "gap": true})
-			partial = true
-		}
-		b, s := money(o.Payload.Flow.Buy), money(o.Payload.Flow.Sell)
-		if !at.Before(from) {
-			buy += b
-			sell += s
-			n++
-		}
-		if at.Before(anchor) {
-			return nil
-		}
-		cvd += b - s
-		series = append(series, map[string]any{"time": at.Unix(), "buyCents": b, "sellCents": s, "cvdCents": cvd, "quality": o.Quality})
-		if o.Quality == "partial" {
-			partial = true
-		}
-		previous = at
-		return nil
-	})
+	stats, e := h.flowWindow(ctx, d, from, now, anchor, res)
 	if e != nil {
 		return nil, e
 	}
-	if n < hours*3600/res {
-		partial = true
-	}
+	buy, sell, n, partial, series := stats.Buy, stats.Sell, stats.Rows, stats.Partial, stats.Series
 	foot := map[string][2]int64{}
 	venues := []string{}
 	baseTotal, quoteTotal := dec("0"), dec("0")
 	footPartial := false
+	footMeta := []map[string]any{}
 	for _, v := range []string{"Binance", "OKX", "Bybit"} {
 		fd, _ := h.Dataset(ID("footprint", a, v, market))
 		rows := 0
-		_, e = h.historyWindow(ctx, fd, hours, func(o Observation) error {
+		validSeconds := 0
+		fo, fok := h.Store.Latest(fd.ID)
+		footMeta = append(footMeta, metadata(fd, fo, fok))
+		if !fok || !fo.Fresh(fd, time.Now()) {
+			footPartial = true
+		}
+		footRes := max(300, res)
+		e = h.Store.Visit(ctx, fd, footRes, from, now, func(o Observation) error {
+			if recordTime(o).Add(time.Duration(max(300, o.Resolution)) * time.Second).After(now) {
+				return nil
+			}
 			if o.Quality == "missing" {
 				footPartial = true
 				return nil
 			}
 			rows++
+			if o.Quality != "partial" {
+				validSeconds += max(300, o.Resolution)
+			}
 			for _, f := range o.Payload.Foot {
 				key := f.Low + ":" + f.High
 				b := foot[key]
@@ -122,6 +105,9 @@ func (h *Hub) FlowView(ctx context.Context, a, market string, hours int, anchorT
 		if e != nil {
 			return nil, e
 		}
+		if validSeconds < int(now.Sub(from).Seconds()) {
+			footPartial = true
+		}
 		if rows > 0 {
 			venues = append(venues, v)
 		} else {
@@ -133,9 +119,13 @@ func (h *Hub) FlowView(ctx context.Context, a, market string, hours int, anchorT
 		vwap = num(quoteTotal.Div(baseTotal).String())
 	}
 	latest, ok := h.Store.Latest(d.ID)
-	return map[string]any{"buyCents": optionalAmount(buy, n > 0), "sellCents": optionalAmount(sell, n > 0), "netCents": optionalAmount(buy-sell, n > 0), "hasData": n > 0, "series": series, "footprint": foot, "footprintQuote": "USDT", "footprintVenues": venues, "footprintPartial": footPartial, "vwap": vwap, "vwapQuote": "USDT", "partial": partial, "market": market, "resolution": fmt.Sprintf("%ds", res), "step": baseStep(a), "from": from, "to": now, "startedAt": h.boot, "anchor": anchor, "definition": "主动买入额减主动卖出额；不是充值提现。足迹金额保留原始USDT，VWAP按原始报价计算。", "meta": metadata(d, latest, ok)}, nil
+	return map[string]any{"buyCents": optionalAmount(buy, n > 0), "sellCents": optionalAmount(sell, n > 0), "netCents": optionalAmount(buy-sell, n > 0), "hasData": n > 0, "series": series, "footprint": foot, "footprintQuote": "USDT", "footprintVenues": venues, "footprintPartial": footPartial, "footprintSources": footMeta, "vwap": vwap, "vwapQuote": "USDT", "partial": partial, "market": market, "resolution": fmt.Sprintf("%ds", res), "step": baseStep(a), "from": from, "to": now, "startedAt": h.boot, "anchor": anchor, "definition": "主动买入额减主动卖出额；不是充值提现。足迹金额保留原始USDT，VWAP按原始报价计算。", "meta": metadata(d, latest, ok)}, nil
 }
 func (h *Hub) DerivativesView(ctx context.Context, a string, hours int) (any, error) {
+	return h.derivativesAt(ctx, a, hours, time.Now().UTC().Truncate(time.Minute))
+}
+func (h *Hub) derivativesAt(ctx context.Context, a string, hours int, to time.Time) (any, error) {
+	from := to.Add(-time.Duration(hours) * time.Hour)
 	d, _ := h.Dataset(ID("oi", a, "", "futures"))
 	o, ok := h.Store.Latest(d.ID)
 	fd, _ := h.Dataset(ID("funding", "ALL", "", "futures"))
@@ -157,7 +147,14 @@ func (h *Hub) DerivativesView(ctx context.Context, a string, hours int) (any, er
 		}
 	}
 	series := []map[string]any{}
-	_, e := h.historyWindow(ctx, d, hours, func(o Observation) error {
+	res := nativeRes(d)
+	if hours > 24 {
+		res = 900
+	}
+	if hours > 720 {
+		res = 3600
+	}
+	e := h.Store.Visit(ctx, d, res, from, to, func(o Observation) error {
 		for _, r := range o.Payload.OI {
 			if strings.EqualFold(r.Venue, "all") {
 				series = append(series, map[string]any{"time": recordTime(o).Unix(), "oiUsdCents": money(r.USD)})
@@ -169,9 +166,19 @@ func (h *Hub) DerivativesView(ctx context.Context, a string, hours int) (any, er
 		return nil, e
 	}
 	ld, _ := h.Dataset(ID("liquidations", a, "", "futures"))
+	res = nativeRes(ld)
+	if hours > 24 {
+		res = 900
+	}
+	if hours > 720 {
+		res = 3600
+	}
 	long, short := int64(0), int64(0)
 	liqSeries := []map[string]any{}
-	_, e = h.historyWindow(ctx, ld, hours, func(o Observation) error {
+	e = h.Store.Visit(ctx, ld, res, from, to, func(o Observation) error {
+		if recordTime(o).Add(time.Duration(max(60, o.Resolution)) * time.Second).After(to) {
+			return nil
+		}
 		if r := o.Payload.Liquidation; r != nil {
 			l, s := money(r.Long), money(r.Short)
 			long += l
@@ -183,7 +190,16 @@ func (h *Hub) DerivativesView(ctx context.Context, a string, hours int) (any, er
 	if e != nil {
 		return nil, e
 	}
-	return map[string]any{"totalOiCents": total, "items": items, "series": series, "funding": funding, "meta": metadata(d, o, ok), "fundingMeta": metadata(fd, f, fok), "longLiquidationCents": optionalAmount(long, len(liqSeries) > 0), "shortLiquidationCents": optionalAmount(short, len(liqSeries) > 0), "liquidationSeries": liqSeries, "coverage": "OI为上游覆盖交易所；All汇总单独展示，不与分所相加。资金费率按原始结算周期显示。"}, nil
+	lo, lok := h.Store.Latest(ld.ID)
+	var oiChange *int64
+	if len(series) > 1 {
+		first, last := series[0], series[len(series)-1]
+		if first["time"].(int64) <= from.Add(5*time.Minute).Unix() && last["time"].(int64) >= to.Add(-10*time.Minute).Unix() {
+			n := last["oiUsdCents"].(int64) - first["oiUsdCents"].(int64)
+			oiChange = &n
+		}
+	}
+	return map[string]any{"from": from, "to": to, "oiChangeCents": oiChange, "liquidationMeta": metadata(ld, lo, lok), "totalOiCents": total, "items": items, "series": series, "funding": funding, "meta": metadata(d, o, ok), "fundingMeta": metadata(fd, f, fok), "longLiquidationCents": optionalAmount(long, len(liqSeries) > 0), "shortLiquidationCents": optionalAmount(short, len(liqSeries) > 0), "liquidationSeries": liqSeries, "coverage": "OI为上游覆盖交易所；All汇总单独展示，不与分所相加。资金费率按原始结算周期显示。"}, nil
 }
 func (h *Hub) WhalesView(ctx context.Context, a, side, order string, limit int, step float64) (any, error) {
 	d, _ := h.Dataset(ID("whales", "ALL", "Hyperliquid", "futures"))
@@ -212,7 +228,7 @@ func (h *Hub) WhalesView(ctx context.Context, a, side, order string, limit int, 
 		if dec(w.Size).IsNegative() {
 			direction = "short"
 		}
-		valid := ok && o.Fresh(d, now) && now.Sub(w.At) <= 180*time.Second && !w.At.After(now.Add(30*time.Second))
+		valid := ok && o.Fresh(d, now) && freshWhale(w, now)
 		if valid {
 			fresh++
 		}
@@ -287,7 +303,7 @@ func (h *Hub) WhalesView(ctx context.Context, a, side, order string, limit int, 
 		}
 		buckets = append(buckets, map[string]any{"kind": parts[0], "side": parts[1], "price": num(parts[2]), "usdCents": sum, "addresses": len(addresses), "largestShare": float64(largest) / float64(max(1, sum))})
 	}
-	monitor := map[string]any{"candidates": observed, "fresh": fresh, "scope": "CoinGlass覆盖的Hyperliquid百万美元级持仓，不代表全市场", "refreshSeconds": 60, "pinned": []string{}, "websocketUsers": 0, "coreLimit": 100, "limit": 100}
+	monitor := map[string]any{"candidates": observed, "fresh": fresh, "scope": "CoinGlass覆盖的Hyperliquid百万美元级持仓，不代表全市场", "refreshSeconds": WhaleRefreshSeconds, "ttlSeconds": WhaleTTLSeconds, "pinned": []string{}, "websocketUsers": 0, "coreLimit": 100, "limit": 100}
 	return map[string]any{"items": items[:min(limit, len(items))], "count": len(items), "buckets": buckets, "monitor": monitor, "at": now, "longCents": optionalAmount(long, fresh > 0), "shortCents": optionalAmount(short, fresh > 0), "nearLiquidationCents": optionalAmount(near, fresh > 0), "hasData": fresh > 0, "meta": metadata(d, o, ok), "distributionScope": "全部有效已覆盖大仓，不受榜单前50/100及方向筛选影响"}, nil
 }
 func (h *Hub) LargeView(a string, history bool) any {
@@ -311,11 +327,11 @@ func (h *Hub) LargeView(a string, history bool) any {
 				usd = money(multiply(multiply(r.Price, r.Quantity), rate))
 				priceUSD = num(multiply(r.Price, rate))
 			}
-			items = append(items, map[string]any{"id": d.ID + ":" + r.ID, "venue": d.Venue, "side": r.Side, "price": r.Price, "quote": d.Quote, "priceUsd": priceUSD, "quantity": r.Quantity, "usdCents": usd, "reportedUsd": r.ReportedUSD, "executedUsd": r.ExecutedUSD, "state": r.State, "startAt": r.Start, "changedAt": r.Changed, "fetchedAt": o.FetchedAt, "valid": fx && o.Fresh(d, now), "fxAt": fxAt, "trades": r.Trades})
+			items = append(items, map[string]any{"id": d.ID + ":" + r.ID, "venue": d.Venue, "side": r.Side, "price": r.Price, "quote": d.Quote, "priceUsd": priceUSD, "quantity": r.Quantity, "usdCents": usd, "reportedUsd": r.ReportedUSD, "executedUsd": r.ExecutedUSD, "state": r.State, "startAt": r.Start, "changedAt": r.Changed, "fetchedAt": o.FetchedAt, "valid": fx && o.Fresh(d, now) && (r.RawState == 1 || r.RawState == 0), "fxAt": fxAt, "trades": r.Trades, "rawState": r.RawState, "endAt": r.End, "initialQuantity": r.InitialQuantity, "initialUsd": r.InitialUSD, "executedQuantity": r.ExecutedQuantity})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return num(items[i]["price"]) > num(items[j]["price"]) })
-	return map[string]any{"items": items, "sources": sources, "note": "大额挂单是筛选出的跟踪记录，已包含在覆盖盘口中，金额不能相加；远处发现大单不代表完整盘口覆盖。"}
+	return map[string]any{"items": items, "sources": sources, "note": "大额挂单是筛选出的跟踪记录，与盘口金额可能重叠，不重复相加；远处发现大单不代表完整盘口覆盖。"}
 }
 func (h *Hub) LiquidationView(a, r string) any {
 	result := map[string]any{}
@@ -512,8 +528,15 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 				side = "all"
 			}
 			return h.WhalesView(ctx, a, side, q.Get("sort"), parseInt(q, "limit", 50, 1, 100), step)
+		case "activity":
+			hours = parseInt(q, "hours", 1, 1, 24)
+			if hours != 1 && hours != 4 && hours != 24 {
+				return nil, errors.New("动向窗口仅支持1、4、24小时")
+			}
+			activitySpan := parseFloat(q, "range", 5, .1, 1000)
+			return h.ActivityView(ctx, a, hours, activitySpan)
 		case "large-orders":
-			return h.LargeView(a, q.Get("history") == "1"), nil
+			return h.LargeOrdersPage(ctx, a, q.Get("history") == "1", parseInt(q, "limit", 100, 1, 300), parseInt(q, "offset", 0, 0, 10000))
 		case "liquidations":
 			r := q.Get("period")
 			if r == "" {

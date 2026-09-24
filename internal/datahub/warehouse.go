@@ -27,6 +27,8 @@ const HotLimit = 128 << 20
 const ResultLimit = 8 << 20
 
 type StorageStatus struct {
+	OrderBytes  int64     `json:"orderHistoryBytes"`
+	OrderPaused bool      `json:"orderHistoryPaused"`
 	Bytes       int64     `json:"usedBytes"`
 	Free        int64     `json:"freeBytes"`
 	WhaleBytes  int64     `json:"whaleBytes"`
@@ -79,6 +81,10 @@ CREATE TABLE IF NOT EXISTS rollups(dataset TEXT,res INTEGER,through_ts INTEGER,P
 		return nil, e
 	}
 	w := &Warehouse{root: root, db: db, latest: map[string]Observation{}, sizes: map[string]int{}, retention: 90, budget: 20, minFree: 8}
+	if e = w.initOrders(); e != nil {
+		db.Close()
+		return nil, e
+	}
 	if e = db.QueryRow("SELECT sqlite_version()").Scan(&w.status.SQLite); e != nil {
 		db.Close()
 		return nil, e
@@ -268,6 +274,11 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 	o.Revision = digest(o)
 	w.write.Lock()
 	defer w.write.Unlock()
+	if d.Kind == "large" || d.Kind == "large-history" {
+		if err := w.ingestOrders(d, o); err != nil {
+			return false, err
+		}
+	}
 	previous, exists := w.Latest(d.ID)
 	changed := !exists || previous.Revision != o.Revision
 	if !exists || !o.Time().Before(previous.Time()) {
@@ -282,7 +293,7 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 		}
 		w.putHot(d.ID, o)
 	}
-	if d.Kind == "price" || d.Kind == "wallet" {
+	if d.Kind == "price" || d.Kind == "wallet" || d.Kind == "large-history" || d.Kind == "large" {
 		return changed, nil
 	}
 	w.mu.RLock()
@@ -597,6 +608,9 @@ func (w *Warehouse) Maintain(ctx context.Context, registry map[string]Dataset, n
 	w.mu.RLock()
 	days, budget, free := w.retention, w.budget, w.minFree
 	w.mu.RUnlock()
+	if err := w.maintainOrders(ctx, now, days); err != nil {
+		return err
+	}
 	var used, whales int64
 	root := filepath.Dir(w.root)
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, e error) error {

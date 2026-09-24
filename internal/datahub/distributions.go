@@ -11,7 +11,7 @@ import (
 func distributions(rows []Whale, asset string, step float64, now time.Time) []Distribution {
 	byPrice := map[string]map[string]int64{}
 	for _, w := range rows {
-		if w.Asset != asset || now.Sub(w.At) > 180*time.Second || w.At.After(now.Add(30*time.Second)) {
+		if w.Asset != asset || !freshWhale(w, now) {
 			continue
 		}
 		side := "long"
@@ -66,7 +66,7 @@ func (h *Hub) SampleDistributions(now time.Time) {
 		at := now
 		valid := 0
 		for _, w := range o.Payload.Whales {
-			if w.Asset == a && now.Sub(w.At) <= 180*time.Second && !w.At.After(now) {
+			if w.Asset == a && freshWhale(w, now) {
 				at = minTime(at, w.At)
 				valid++
 			}

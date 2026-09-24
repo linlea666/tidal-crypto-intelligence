@@ -18,21 +18,30 @@ import (
 	"time"
 )
 
+type OrderRange struct {
+	From time.Time `json:"from"`
+	To   time.Time `json:"to"`
+}
+
 type Job struct {
-	ID          string     `json:"id"`
-	Dataset     Dataset    `json:"dataset"`
-	Next        time.Time  `json:"next"`
-	LastAttempt *time.Time `json:"lastAttempt"`
-	LastSuccess *time.Time `json:"lastSuccess"`
-	Error       string     `json:"error,omitempty"`
-	Failures    int        `json:"failures"`
-	InFlight    bool       `json:"inFlight"`
-	Mode        string     `json:"mode"`
-	From        *time.Time `json:"from,omitempty"`
-	To          *time.Time `json:"to,omitempty"`
-	Disabled    bool       `json:"disabled"`
-	Completed   bool       `json:"completed"`
-	Calls       int64      `json:"calls"`
+	OrderRanges  []OrderRange `json:"orderRanges,omitempty"`
+	OrderThrough *time.Time   `json:"orderThrough,omitempty"`
+	OrderFirst   *time.Time   `json:"orderFirst,omitempty"`
+	OrderGaps    int          `json:"orderGaps,omitempty"`
+	ID           string       `json:"id"`
+	Dataset      Dataset      `json:"dataset"`
+	Next         time.Time    `json:"next"`
+	LastAttempt  *time.Time   `json:"lastAttempt"`
+	LastSuccess  *time.Time   `json:"lastSuccess"`
+	Error        string       `json:"error,omitempty"`
+	Failures     int          `json:"failures"`
+	InFlight     bool         `json:"inFlight"`
+	Mode         string       `json:"mode"`
+	From         *time.Time   `json:"from,omitempty"`
+	To           *time.Time   `json:"to,omitempty"`
+	Disabled     bool         `json:"disabled"`
+	Completed    bool         `json:"completed"`
+	Calls        int64        `json:"calls"`
 }
 type Quota struct {
 	Starts      []time.Time `json:"starts"`
@@ -178,6 +187,9 @@ func NewScheduler(store *Warehouse, registry []Dataset, fetch Fetcher, enabled b
 	}
 	for _, j := range saved {
 		if j.Mode != "live" {
+			if j.Dataset.Kind == "wallet" {
+				j.Dataset.TTL = WhaleTTLSeconds
+			}
 			j.InFlight = false
 			s.jobs[j.ID] = &j
 		}
@@ -219,7 +231,7 @@ func (s *Scheduler) priority(j *Job, now time.Time) float64 {
 			p = 5500 - wait/2
 		}
 	}
-	if j.Mode == "live" {
+	if j.Mode == "live" && j.Dataset.Kind != "large-history" {
 		if j.LastSuccess == nil {
 			p -= 500
 		} else {
@@ -248,10 +260,12 @@ func (s *Scheduler) Step(ctx context.Context, now time.Time) bool {
 		if j.Disabled || j.Completed || j.InFlight || now.Before(j.Next) {
 			continue
 		}
-		if j.Mode != "live" && s.store.Status().Paused {
+		storage := s.store.Status()
+		if (j.Mode != "live" && storage.Paused) || (j.Dataset.Kind == "large-history" && (storage.Paused || storage.OrderPaused)) {
 			continue
 		}
-		if selected == nil || s.priority(j, now) < s.priority(selected, now) {
+		current := func(job *Job) bool { return job.Mode == "live" && job.Dataset.Kind != "large-history" }
+		if selected == nil || (current(j) && !current(selected)) || (current(j) == current(selected) && s.priority(j, now) < s.priority(selected, now)) {
 			selected = j
 		}
 	}
@@ -279,6 +293,10 @@ func (s *Scheduler) Step(ctx context.Context, now time.Time) bool {
 	return true
 }
 func (s *Scheduler) run(ctx context.Context, j Job) {
+	if j.Dataset.Kind == "large-history" {
+		s.runOrderHistory(ctx, j)
+		return
+	}
 	d := j.Dataset
 	params := map[string]string{}
 	for k, v := range d.Params {
@@ -432,7 +450,7 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 		d.Path = "/v4/api/hyperliquid/user-position"
 		d.Params = map[string]string{"user_address": strings.ToLower(req.Address)}
 		d.Refresh = 0
-		d.TTL = 180
+		d.TTL = WhaleTTLSeconds
 		id = d.ID
 	} else if req.Range != "" {
 		if d.Kind != "map" && d.Kind != "heatmap" {

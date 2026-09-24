@@ -9,3 +9,5 @@ Before making substantial visual changes, use the Product Design plugin's `get-c
 When implementing from a selected generated mock, treat that image as the source of truth for layout, component anatomy, density, spacing, color, typography, visible content, and hierarchy.
 
 Build app UI in `src/`. Keep `.openai/hosting.json`, `worker/index.js`, `scripts/prepare-sites-build.mjs`, and `tests/sites-worker.test.mjs` intact so the same local prototype can be handed to Sites. Before a Sites handoff, run `npm run build` and `npm run test:sites`; the build must leave `dist/client/index.html`, `dist/server/index.js`, and `dist/.openai/hosting.json`.
+
+V2.1: spot bars show current per-bucket stock; range totals include all returned buckets independently of collapse and persistence filters. The separate 大资金动向 page uses spot orders plus derivatives context, text evidence cards and a timeline. No trade circles without verified per-trade data. Keep snapshot cadence, source coverage and flow windows explicit.
