@@ -4,7 +4,7 @@
 
 `/opt/tidal/data` 是持久数据；`secrets/password_hash` 保存 bcrypt，不使用 SSH 登录密码；`current` 指向版本配置；`state.env` 是不可变镜像摘要。`previous-image`、`backups` 和 `deployed-version` 用于恢复与审计。
 
-应用用户 UID 10001，容器只读根目录、无额外 Linux capabilities，内存上限 768MB；Nginx 上限 96MB。应用端口仅绑定环回，HTTPS 网关对外提供 8443，80 用于 ACME 验证和跳转。
+应用用户 UID 10001，容器只读根目录、无额外 Linux capabilities，内存上限 768MB；Nginx 上限 96MB。应用端口仅绑定环回，HTTPS 网关对外提供标准 443（容器内 8443），80 用于 ACME 验证和跳转。
 
 正式版本发布前，在 GitHub 仓库的 production 环境 / Secrets 配置：`DEPLOY_HOST`、`DEPLOY_SSH_KEY`、`DEPLOY_KNOWN_HOSTS`。不把这些值放入本仓库。受限部署用户不属于 Docker 组；SSH 禁止端口转发和交互 shell，只可 sudo 执行经参数检查的发布入口。
 
@@ -28,6 +28,8 @@ systemctl list-timers tidal-renew.timer tidal-metrics.timer
 证书使用 Let’s Encrypt IP shortlived profile（6 天）；`tidal-renew.timer` 每日检查两次，续期后重载 Nginx。端口 80 必须持续允许外部 ACME 验证。可通过 `journalctl -u tidal-renew.service` 检查续期失败。不要停止续期定时器。
 
 `tidal-metrics.timer` 每 5 分钟保存资源、磁盘和健康信息到 `metrics/YYYY-MM-DD.jsonl`，7 天自动删除，同时把镜像、日志和备份占用计入应用预算。Docker 日志总量有上限；宿主机维护任务清理超过 7 天的日志。
+
+本地可运行 `python3 scripts/monitor.py`，使用已忽略的 `secrets/monitor_key` 读取受限服务器报告，并用 `secrets/access.json` 中的看板密码采样 API 延迟。输出不包含密码、Cookie 或地址明细；详细报告覆盖写入 `secrets/soak-latest.json`。采样包括有效盘口数、FX 时间、OI 新鲜度、巨鲸有效数、内存和磁盘增长。正式验收起点单独保存在 `secrets/soak-start.json`，将受控故障演练与正常运行区间分开。
 
 ## 数据保护与降级
 

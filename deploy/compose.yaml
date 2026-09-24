@@ -27,7 +27,7 @@ services:
     mem_limit: 96m
     cpus: 0.25
     pids_limit: 64
-    ports: ['80:80', '8443:8443']
+    ports: ['80:80', '443:8443']
     volumes:
       - /opt/tidal/current/nginx.conf:/etc/nginx/nginx.conf:ro
       - /opt/tidal/acme:/var/www/acme:ro

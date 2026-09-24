@@ -71,7 +71,7 @@ if docker inspect tidal-acme-bootstrap >/dev/null 2>&1; then docker rm -f tidal-
 if ! "${compose[@]}" up -d --force-recreate app gateway; then rollback || true; exit 1; fi
 healthy=false
 for attempt in $(seq 1 60); do
-  if curl --fail --silent --max-time 5 http://127.0.0.1:8080/readyz >/dev/null && curl --fail --silent --max-time 5 "https://$(cat "$root/public-ip"):8443/healthz" >/dev/null; then healthy=true; break; fi
+  if curl --fail --silent --max-time 5 http://127.0.0.1:8080/readyz >/dev/null && curl --fail --silent --max-time 5 "https://$(cat "$root/public-ip")/healthz" >/dev/null; then healthy=true; break; fi
   sleep 3
 done
 if [[ "$healthy" != true ]]; then rollback || true; exit 1; fi

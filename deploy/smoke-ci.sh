@@ -24,14 +24,14 @@ sudo openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=127.0.0.1 -adde
 "${compose[@]}" up -d
 ok=false
 for attempt in $(seq 1 30); do
-  if curl --fail --silent --max-time 3 --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" https://127.0.0.1:8443/healthz > "$tmp/health"; then ok=true; break; fi
+  if curl --fail --silent --max-time 3 --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" https://127.0.0.1/healthz > "$tmp/health"; then ok=true; break; fi
   sleep 2
 done
 [[ "$ok" == true ]] || exit 1
-curl --fail --silent --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" https://127.0.0.1:8443/ | grep -q 'root'
-code=$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" https://127.0.0.1:8443/api/v1/levels)
+curl --fail --silent --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" https://127.0.0.1/ | grep -q 'root'
+code=$(curl --silent --output /dev/null --write-out '%{http_code}' --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" https://127.0.0.1/api/v1/levels)
 [[ "$code" == 401 ]] || exit 1
 printf '{"password":"%s"}' "$password" > "$tmp/login"
-curl --fail --silent --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" -H 'Content-Type: application/json' --data-binary "@$tmp/login" -c "$tmp/cookie" https://127.0.0.1:8443/api/v1/login >/dev/null
-curl --fail --silent --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" -b "$tmp/cookie" https://127.0.0.1:8443/api/v1/health >/dev/null
+curl --fail --silent --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" -H 'Content-Type: application/json' --data-binary "@$tmp/login" -c "$tmp/cookie" https://127.0.0.1/api/v1/login >/dev/null
+curl --fail --silent --cacert "$root/letsencrypt/live/tidal-ip/fullchain.pem" -b "$tmp/cookie" https://127.0.0.1/api/v1/health >/dev/null
 echo 'Production Compose startup, verified TLS, authentication and API smoke checks passed.'
