@@ -560,6 +560,24 @@ func (s *Store) measureLocked() {
 func (s *Store) Initialize(e *Engine, w *Whales) error {
 	e.store = s
 	for _, a := range []string{"BTC", "ETH"} {
+		// Restore recent observed liquidations before the writer revisits the last
+		// two minute buckets, so restart cannot replace committed events with [].
+		recent := []Liquidation{}
+		err := s.Visit(context.Background(), "1m", "liquidations", a, time.Now().Add(-24*time.Hour), time.Now(), 0, func(r Record) error {
+			var events []Liquidation
+			if err := json.Unmarshal(r.Data, &events); err != nil {
+				return err
+			}
+			recent = append(recent, events...)
+			if len(recent) > 5000 {
+				recent = recent[len(recent)-5000:]
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		e.liquidations = append(e.liquidations, recent...)
 		for _, market := range []string{"spot", "perp"} {
 			rs, err := s.Query("1m", "flow:"+market, a, time.Now().Add(-2*time.Minute), time.Now(), 3)
 			if err != nil {
@@ -577,6 +595,10 @@ func (s *Store) Initialize(e *Engine, w *Whales) error {
 				}
 			}
 		}
+	}
+	sort.Slice(e.liquidations, func(i, j int) bool { return e.liquidations[i].At.Before(e.liquidations[j].At) })
+	if len(e.liquidations) > 5000 {
+		e.liquidations = e.liquidations[len(e.liquidations)-5000:]
 	}
 	if raw, ok := s.Get("startedAt"); ok {
 		if err := json.Unmarshal([]byte(raw), &e.Started); err != nil {

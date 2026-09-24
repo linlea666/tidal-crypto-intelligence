@@ -13,6 +13,7 @@ exec 9>"$root/deploy.lock"
 flock -w 600 9
 available=$(df -Pk "$root" | awk 'NR==2 {print $4}')
 (( available >= 8388608 )) || { echo 'Less than 8 GiB free; deployment refused.'; exit 1; }
+[[ -s "$root/letsencrypt/live/tidal-ip/fullchain.pem" ]] || { echo "TLS certificate missing"; exit 1; }
 # Validate the release and immutable revision before accepting any deployment input.
 python3 - "$repo" "$version" "$revision" <<'PY'
 import json,sys,urllib.request
@@ -63,6 +64,7 @@ rollback() {
   fi
   return 1
 }
+if docker inspect tidal-acme-bootstrap >/dev/null 2>&1; then docker rm -f tidal-acme-bootstrap >/dev/null; fi
 if ! "${compose[@]}" up -d --force-recreate app gateway; then rollback || true; exit 1; fi
 healthy=false
 for attempt in $(seq 1 60); do
@@ -86,5 +88,6 @@ while read -r id; do
   [[ -n "$id" && "$id" != "$current_id" && "$id" != "$previous_id" ]] || continue
   docker image rm "$id" >/dev/null 2>&1 || true
 done < <(docker image ls "ghcr.io/$repo" --format '{{.ID}}' --no-trunc | sort -u)
+systemctl enable --now tidal-metrics.timer >/dev/null
 "$root/bootstrap/metrics.sh" || true
 echo "Deployed $version at $revision with $digest"

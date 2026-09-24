@@ -66,7 +66,7 @@ func (e *Engine) SetHealth(k string, ok bool, detail string) {
 }
 func (e *Engine) SetRate(q, s string, at time.Time) {
 	f := number(s)
-	if f < 0.5 || f > 1.5 {
+	if !finite(f) || f < 0.5 || f > 1.5 {
 		return
 	}
 	e.mu.Lock()

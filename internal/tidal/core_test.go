@@ -322,6 +322,27 @@ func TestConcurrentUpdatesQueriesAndBoundedCandidates(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestRestartPreservesObservedLiquidations(t *testing.T) {
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	at := time.Now().UTC().Truncate(time.Minute).Add(-time.Minute)
+	want := Liquidation{Venue: "bybit", Asset: "BTC", Side: "long", Price: 84000, USDCents: 4200000, At: at.Add(3 * time.Second), PriceType: "bankruptcy"}
+	if err := s.Write("1m", "liquidations", "BTC", at, []Liquidation{want}); err != nil {
+		t.Fatal(err)
+	}
+	e, _ := testEngine()
+	if err := s.Initialize(e, NewWhales(NewCollector(e))); err != nil {
+		t.Fatal(err)
+	}
+	got := e.Liquidations("BTC")
+	if len(got) != 1 || got[0].USDCents != want.USDCents || !got[0].At.Equal(want.At) {
+		t.Fatalf("restart lost event: %+v", got)
+	}
+}
 func TestHistoryGapIsNotZeroAndReadIsStreaming(t *testing.T) {
 	s, err := OpenStore(t.TempDir())
 	if err != nil {

@@ -63,6 +63,10 @@ func (c *Collector) derivativePoll(ctx context.Context) {
 						break
 					}
 					m = obj(data[0])
+					if str(m["fundingRate"]) == "" || !finite(number(m["fundingRate"])) {
+						err = fmt.Errorf("funding rate unavailable")
+						break
+					}
 					d.Funding = number(m["fundingRate"])
 					d.NextFunding = num(m["fundingTime"])
 					interval := num(m["nextFundingTime"]) - num(m["fundingTime"])
@@ -98,6 +102,10 @@ func (c *Collector) derivativePoll(ctx context.Context) {
 					m := obj(raw)
 					d.Mark = number(m["markPrice"]) * fx.Value
 					d.Index = number(m["indexPrice"]) * fx.Value
+					if str(m["lastFundingRate"]) == "" || !finite(number(m["lastFundingRate"])) {
+						err = fmt.Errorf("funding rate unavailable")
+						break
+					}
 					d.Funding = number(m["lastFundingRate"])
 					d.NextFunding = num(m["nextFundingTime"])
 					if h := binanceHours[symbol]; h > 0 {
@@ -125,6 +133,10 @@ func (c *Collector) derivativePoll(ctx context.Context) {
 					d.Mark = number(m["markPrice"]) * fx.Value
 					d.Index = number(m["indexPrice"]) * fx.Value
 					d.OIUSDCents = cents(d.Mark * d.OIBase)
+					if str(m["fundingRate"]) == "" || !finite(number(m["fundingRate"])) {
+						err = fmt.Errorf("funding rate unavailable")
+						break
+					}
 					d.Funding = number(m["fundingRate"])
 					d.NextFunding = num(m["nextFundingTime"])
 					if h := bybitHours[symbol]; h > 0 {
@@ -280,7 +292,7 @@ func (c *Collector) recordLiquidation(v, a, side string, p, q float64, t time.Ti
 	c.E.mu.RLock()
 	fx, ok := c.E.historicalRateLocked("USDT", t)
 	c.E.mu.RUnlock()
-	if !ok || a == "" || p <= 0 || q <= 0 {
+	if !ok || a == "" || !finite(p*q) || p <= 0 || q <= 0 {
 		return
 	}
 	c.E.Liquidation(Liquidation{v, a, side, p * fx, cents(p * q * fx), t, kind, coverage})

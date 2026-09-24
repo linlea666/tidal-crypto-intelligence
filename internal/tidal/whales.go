@@ -17,6 +17,7 @@ import (
 var addressRE = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
 
 type Candidate struct {
+	Core    bool      `json:"-"`
 	Address string    `json:"address"`
 	Score   float64   `json:"score"`
 	Last    time.Time `json:"last"`
@@ -70,10 +71,7 @@ func (w *Whales) Add(address string, score float64, pinned bool) {
 	if len(w.Candidates) >= 1000 {
 		var lowest *Candidate
 		for _, c := range w.Candidates {
-			w.C.E.mu.RLock()
-			core := w.C.E.whaleCore[c.Address]
-			w.C.E.mu.RUnlock()
-			if c.Pinned || core {
+			if c.Pinned || c.Core {
 				continue
 			}
 			if lowest == nil || c.Score < lowest.Score {
@@ -93,7 +91,7 @@ func (w *Whales) Add(address string, score float64, pinned bool) {
 	w.Candidates[address] = &Candidate{Address: address, Score: score, Last: time.Now(), Pinned: pinned}
 }
 func (w *Whales) Pin(address string, pin bool) error {
-	if !addressRE.MatchString(address) {
+	if !addressRE.MatchString(address) || address == "0x0000000000000000000000000000000000000000" {
 		return fmt.Errorf("无效地址")
 	}
 	if pin {
@@ -237,7 +235,7 @@ func (w *Whales) parse(address string, m map[string]any) {
 		}
 		lev := obj(p["leverage"])
 		entry := str(p["entryPx"])
-		if number(entry) <= 0 {
+		if !finite(number(entry)) || number(entry) <= 0 {
 			continue
 		}
 		mark := number(p["positionValue"]) / math.Abs(size)
@@ -325,6 +323,16 @@ func (w *Whales) core() []string {
 		w.C.E.whaleCore[a] = true
 	}
 	w.C.E.mu.Unlock()
+	w.mu.Lock()
+	for _, c := range w.Candidates {
+		c.Core = false
+	}
+	for _, a := range out {
+		if c := w.Candidates[a]; c != nil {
+			c.Core = true
+		}
+	}
+	w.mu.Unlock()
 	return out
 }
 func (w *Whales) poll(ctx context.Context) {
