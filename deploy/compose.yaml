@@ -15,10 +15,12 @@ services:
       TIDAL_COOKIE_SECURE: 'true'
       COINGLASS_API_KEY_FILE: /run/secrets/coinglass_key
       TIDAL_OFFLINE: ${TIDAL_OFFLINE:-false}
+      TIDAL_SMTP_FILE: /run/tidal-mail/smtp.json
     volumes:
       - /opt/tidal/data:/data
       - /opt/tidal/secrets/password_hash:/run/secrets/password_hash:ro
       - /opt/tidal/secrets/coinglass_key:/run/secrets/coinglass_key:ro
+      - /opt/tidal/mail:/run/tidal-mail:ro
     ports:
       - 127.0.0.1:8080:8080
     logging:

@@ -535,6 +535,14 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 			}
 			activitySpan := parseFloat(q, "range", 5, .1, 1000)
 			return h.ActivityView(ctx, a, hours, activitySpan)
+		case "signals":
+			return h.SignalsView(ctx, a, "")
+		case "studies":
+			return h.StudiesView(ctx, a, "")
+		case "wallet-trends":
+			return h.WalletTrends(ctx, a)
+		case "etf":
+			return h.ETFView(ctx, a)
 		case "large-orders":
 			return h.LargeOrdersPage(ctx, a, q.Get("history") == "1", parseInt(q, "limit", 100, 1, 300), parseInt(q, "offset", 0, 0, 10000))
 		case "liquidations":
@@ -555,6 +563,12 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 		case "data-status":
 			return h.Status(), nil
 		default:
+			if strings.HasPrefix(path, "signals/") {
+				return h.SignalsView(ctx, a, strings.TrimPrefix(path, "signals/"))
+			}
+			if strings.HasPrefix(path, "studies/") {
+				return h.StudiesView(ctx, a, strings.TrimPrefix(path, "studies/"))
+			}
 			if strings.HasPrefix(path, "data/") {
 				id := strings.TrimPrefix(path, "data/")
 				d, ok := h.Dataset(id)

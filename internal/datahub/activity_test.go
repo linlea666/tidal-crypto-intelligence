@@ -222,7 +222,7 @@ func TestWhalePolicyAndRegistryBudget(t *testing.T) {
 			t.Fatal("policy mismatch")
 		}
 	}
-	if budget > 10.65 || budget < 10.6 {
+	if budget > 10.95 || budget < 10.93 {
 		t.Fatalf("budget %.3f", budget)
 	}
 }

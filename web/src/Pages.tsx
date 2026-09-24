@@ -1,4 +1,5 @@
 import { ActivityPage } from "./Activity";
+import { ETFPage } from "./Research";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Copy, WarningCircle } from "@phosphor-icons/react";
 import { api, amount, price, clock, venue, useAPI } from "./data";
@@ -281,6 +282,7 @@ function Backfill({
   );
 }
 export function MarketPages(p: Props) {
+  if (p.view === "etf") return <ETFPage key={p.asset} asset={p.asset}/>;
   if (p.view === "activity")
     return <ActivityPage key={p.asset} asset={p.asset} />;
   if (p.view === "flow") return <FlowPage {...p} />;

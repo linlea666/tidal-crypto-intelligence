@@ -19,6 +19,7 @@ import (
 )
 
 type Config struct {
+	Mail               *MailConfig
 	Root, BaseURL, Key string
 	Offline            bool
 }
@@ -33,11 +34,13 @@ type viewFlight struct {
 	err  error
 }
 type Hub struct {
+	mail       *MailConfig
 	Store      *Warehouse
 	Scheduler  *Scheduler
 	registry   map[string]Dataset
 	mu         sync.RWMutex
 	viewMu     sync.Mutex
+	studyMu    sync.Mutex
 	views      map[string]cachedView
 	flights    map[string]*viewFlight
 	viewBytes  int
@@ -63,7 +66,7 @@ func Open(cfg Config) (*Hub, error) {
 		w.Close()
 		return nil, errors.New("CoinGlass base URL must use HTTPS")
 	}
-	h := &Hub{Store: w, registry: map[string]Dataset{}, views: map[string]cachedView{}, flights: map[string]*viewFlight{}, baselines: map[string]Baseline{}, boot: time.Now().UTC(), offline: cfg.Offline}
+	h := &Hub{Store: w, registry: map[string]Dataset{}, views: map[string]cachedView{}, flights: map[string]*viewFlight{}, baselines: map[string]Baseline{}, boot: time.Now().UTC(), offline: cfg.Offline, mail: cfg.Mail}
 	w.LoadState("baselines", &h.baselines)
 	w.LoadState("wallHistory", &h.walls)
 	w.LoadState("wallContinuity", &h.continuity)
@@ -150,6 +153,7 @@ func (h *Hub) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	start := func(f func(context.Context)) { wg.Add(1); go func() { defer wg.Done(); f(ctx) }() }
 	start(h.Scheduler.Run)
+	start(h.researchWorker)
 	if !h.offline {
 		start(h.prices)
 		start(h.fx)

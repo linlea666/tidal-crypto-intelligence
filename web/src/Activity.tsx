@@ -9,6 +9,7 @@ import {
   type Derivatives,
 } from "./Pages";
 import type { Asset } from "./types";
+import {SignalsPage,StudiesPage,WalletPage} from "./Research";
 
 type FlowWindow = {
   buyCents: number;
@@ -111,6 +112,10 @@ const stamp = (s: string) =>
     hour12: false,
   });
 export function ActivityPage({ asset }: { asset: Asset }) {
+ const [tab,setTab]=useState("snapshot");
+ return <><nav className="research-tabs" aria-label="大资金动向视图">{[["snapshot","当前动向"],["signals","异动预警"],["studies","历史复盘"],["wallet","钱包趋势"]].map(([id,name])=><button key={id} aria-pressed={tab===id} className={tab===id?"active":""} onClick={()=>setTab(id)}>{name}</button>)}</nav>{tab==="signals"?<SignalsPage asset={asset}/>:tab==="studies"?<StudiesPage asset={asset}/>:tab==="wallet"?<WalletPage asset={asset}/>:<ActivitySnapshot asset={asset}/>}</>
+}
+function ActivitySnapshot({ asset }: { asset: Asset }) {
   const [hours, setHours] = useState(1),
     [span, setSpan] = useState(5),
     [advanced, setAdvanced] = useState(false);

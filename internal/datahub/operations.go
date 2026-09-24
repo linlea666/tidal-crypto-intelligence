@@ -94,7 +94,26 @@ func (h *Hub) writeReport() {
 		}
 		statuses = append(statuses, map[string]any{"dataset": ds.ID, "status": c["status"], "observedAt": c["observedAt"], "fetchedAt": c["fetchedAt"]})
 	}
-	b, e := json.Marshal(map[string]any{"at": now, "generation": "v2", "markets": markets, "fx": metadata(d, fx, ok), "scheduler": quota, "storage": h.Store.Status(), "datasets": statuses, "legacyCollectorsRunning": false})
+	contracts := []map[string]any{}
+	state := h.Scheduler.State()
+	if jobs, ok := state["jobs"].([]Job); ok {
+		for _, j := range jobs {
+			if j.Dataset.Contract && j.Mode == "live" {
+				contracts = append(contracts, map[string]any{"dataset": j.Dataset.ID, "status": j.ContractStatus, "disabled": j.Disabled, "failures": j.Failures, "error": j.Error})
+			}
+		}
+	}
+	quality := map[string]any{}
+	for _, a := range Assets() {
+		var q map[string]any
+		h.Store.LoadState("signals/quality/"+a, &q)
+		quality[a] = q
+	}
+	var signalError, studyError, gap map[string]any
+	h.Store.LoadState("signals/error", &signalError)
+	h.Store.LoadState("studies/error", &studyError)
+	h.Store.LoadState("research/gap", &gap)
+	b, e := json.Marshal(map[string]any{"at": now, "generation": "v2", "markets": markets, "fx": metadata(d, fx, ok), "scheduler": quota, "storage": h.Store.Status(), "datasets": statuses, "legacyCollectorsRunning": false, "contracts": contracts, "signals": quality, "signalError": signalError, "studyError": studyError, "researchGap": gap, "mail": h.mailStatus()})
 	if e != nil {
 		return
 	}

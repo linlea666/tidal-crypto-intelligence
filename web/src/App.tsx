@@ -22,6 +22,7 @@ const nav = [
   ["derivatives", "合约态势"],
   ["liquidations", "清算分布"],
   ["whales", "巨鲸持仓"],
+  ["etf", "ETF资金"],
   ["health", "数据健康"],
 ] as const;
 const fixture =
@@ -261,6 +262,7 @@ export function App() {
                     overview: "市场总览",
                     flow: "成交证据",
                     activity: "大资金动向",
+                    etf: "ETF资金观察",
                     derivatives: "合约态势",
                     whales: "公开巨鲸持仓",
                     liquidations: "清算集中在哪里？",
