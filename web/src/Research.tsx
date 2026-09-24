@@ -110,7 +110,7 @@ type Wallet = {
   asset: Asset;
   meta: Meta;
   historyMeta: Meta;
-  balanceTotal: string;
+  balanceTotal: string | null;
   covered: number;
   balances:
     | {
@@ -153,7 +153,7 @@ export function WalletPage({ asset }: { asset: Asset }) {
       <div className="metric-strip">
         <Metric
           title="当前列表已覆盖余额"
-          value={d?.covered ? price(+d.balanceTotal, 2) : "—"}
+          value={d?.balanceTotal != null ? price(+d.balanceTotal, 2) : "—"}
           unit={asset}
         />
         <Metric

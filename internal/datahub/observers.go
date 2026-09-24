@@ -323,7 +323,12 @@ func (h *Hub) WalletTrends(ctx context.Context, a string) (any, error) {
 			total = total.Add(dec(*b.Value))
 		}
 	}
-	return map[string]any{"asset": a, "name": "交易所钱包余额净变化", "weight": 0, "unit": a, "meta": metadata(list, o, ok), "historyMeta": metadata(d, hist, histOK), "balances": o.Payload.Balances, "balanceTotal": total.String(), "covered": count, "changes": changes, "trends": trends, "note": "净变化仅比较两端共同交易所；不等于充值/提现总流水，不作分钟预警。获取时间不是来源发布时间。"}, nil
+	var balanceTotal *string
+	if count > 0 {
+		value := total.String()
+		balanceTotal = &value
+	}
+	return map[string]any{"asset": a, "name": "交易所钱包余额净变化", "weight": 0, "unit": a, "meta": metadata(list, o, ok), "historyMeta": metadata(d, hist, histOK), "balances": o.Payload.Balances, "balanceTotal": balanceTotal, "covered": count, "changes": changes, "trends": trends, "note": "净变化仅比较两端共同交易所；不等于充值/提现总流水，不作分钟预警。获取时间不是来源发布时间。"}, nil
 }
 
 func observedHoliday(t time.Time) time.Time {

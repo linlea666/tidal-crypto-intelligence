@@ -51,6 +51,44 @@ func TestWalletCoverageAliasesAndIrregularIntervals(t *testing.T) {
 		t.Fatal("null was zero-filled")
 	}
 }
+func TestWalletAggregateDistinguishesMissingFromZero(t *testing.T) {
+	h, e := Open(Config{Root: t.TempDir(), Offline: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer h.Store.Close()
+	d, _ := FindDataset(ID("balance-list", "BTC", "", "chain"))
+	check := func(want any, count float64) {
+		t.Helper()
+		v, e := h.WalletTrends(context.Background(), "BTC")
+		if e != nil {
+			t.Fatal(e)
+		}
+		b, e := json.Marshal(v)
+		if e != nil {
+			t.Fatal(e)
+		}
+		var wire map[string]any
+		if e := json.Unmarshal(b, &wire); e != nil {
+			t.Fatal(e)
+		}
+		if wire["balanceTotal"] != want || wire["covered"] != count {
+			t.Fatalf("incorrect missing/zero aggregate: %s", b)
+		}
+	}
+	check(nil, 0)
+	for i, value := range []*string{nil, pointer("0"), pointer("2.5")} {
+		o := Observation{Dataset: d.ID, Source: d.Source, FetchedAt: time.Now().UTC().Add(time.Duration(i) * time.Second), Resolution: d.Resolution, TimeBasis: "retrieval", Quality: "valid", Payload: Payload{Balances: []Balance{{Venue: "Binance", Value: value}}}}
+		if _, e := h.Store.Ingest(d, o); e != nil {
+			t.Fatal(e)
+		}
+		if value == nil {
+			check(nil, 0)
+		} else {
+			check(*value, 1)
+		}
+	}
+}
 func TestETFReportingAndReconciliation(t *testing.T) {
 	now := testTime("2026-09-24T12:00:00Z")
 	r := ETFRecord{Date: "2026-09-24", USD: pointer("0"), Funds: map[string]*string{"A": pointer("0")}, Reconciled: true}
