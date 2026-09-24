@@ -161,7 +161,7 @@ func NewScheduler(store *Warehouse, registry []Dataset, fetch Fetcher, enabled b
 		}
 		h := fnv.New32a()
 		h.Write([]byte(d.ID))
-		phase := time.Duration(h.Sum32()%uint32(d.Refresh)) * time.Second
+		phase := time.Duration(h.Sum32()%uint32(min(d.Refresh, 60))) * time.Second
 		if d.Priority == 0 {
 			phase = time.Duration(h.Sum32()%30) * time.Second
 		}
