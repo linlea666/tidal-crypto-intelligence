@@ -1,0 +1,37 @@
+name: tidal
+services:
+  app:
+    image: ${TIDAL_IMAGE:?Immutable application image required}
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 1.7
+    pids_limit: 128
+    read_only: true
+    tmpfs: [/tmp:size=32m,mode=1777]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      TIDAL_PASSWORD_HASH_FILE: /run/secrets/password_hash
+      TIDAL_COOKIE_SECURE: 'true'
+    volumes:
+      - /opt/tidal/data:/data
+      - /opt/tidal/secrets/password_hash:/run/secrets/password_hash:ro
+    ports:
+      - 127.0.0.1:8080:8080
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: '3'}
+  gateway:
+    image: nginx:1.28-alpine
+    restart: unless-stopped
+    mem_limit: 96m
+    cpus: 0.25
+    pids_limit: 64
+    ports: ['80:80', '8443:8443']
+    volumes:
+      - /opt/tidal/current/nginx.conf:/etc/nginx/nginx.conf:ro
+      - /opt/tidal/acme:/var/www/acme:ro
+      - /opt/tidal/letsencrypt:/etc/letsencrypt:ro
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: '2'}

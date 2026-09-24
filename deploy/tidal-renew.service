@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew Tidal IP TLS certificate
+After=docker.service network-online.target
+[Service]
+Type=oneshot
+ExecStart=/opt/tidal/bootstrap/renew.sh
+TimeoutStartSec=180

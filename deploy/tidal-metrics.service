@@ -1,0 +1,7 @@
+[Unit]
+Description=Capture bounded Tidal operational metrics
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/opt/tidal/bootstrap/metrics.sh
+TimeoutStartSec=90

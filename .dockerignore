@@ -1,0 +1,9 @@
+.git
+secrets
+data
+bin
+tmp
+web/node_modules
+web/dist
+*.log
+docs/design

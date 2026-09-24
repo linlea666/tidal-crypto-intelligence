@@ -1,0 +1,11 @@
+web/node_modules/
+web/dist/
+data/
+.env
+.env.*
+!.env.example
+secrets/
+bin/
+tmp/
+*.log
+.DS_Store

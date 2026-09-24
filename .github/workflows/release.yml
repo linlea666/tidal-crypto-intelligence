@@ -1,0 +1,73 @@
+name: Release and deploy
+on:
+  release:
+    types: [published]
+permissions:
+  contents: read
+concurrency:
+  group: tidal-production
+  cancel-in-progress: false
+jobs:
+  publish:
+    if: github.event.release.prerelease == false && github.event.release.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      revision: ${{ steps.revision.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: revision
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/linlea666/tidal-crypto-intelligence:${{ github.event.release.tag_name }}
+          build-args: VERSION=${{ github.event.release.tag_name }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/linlea666/tidal-crypto-intelligence
+            org.opencontainers.image.revision=${{ steps.revision.outputs.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  deploy:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    environment: production
+    steps:
+      - name: Deploy immutable image through restricted SSH entry
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          REVISION: ${{ needs.publish.outputs.revision }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/tidal"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/tidal" "$HOME/.ssh/known_hosts"
+          trap 'rm -f "$HOME/.ssh/tidal"' EXIT
+          ssh -i "$HOME/.ssh/tidal" -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15 "tidal-deploy@$DEPLOY_HOST" "deploy $DIGEST $REVISION $RELEASE_TAG"

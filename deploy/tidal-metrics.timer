@@ -1,0 +1,8 @@
+[Unit]
+Description=Sample Tidal resource use every five minutes
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+Persistent=true
+[Install]
+WantedBy=timers.target
