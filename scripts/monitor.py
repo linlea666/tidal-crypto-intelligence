@@ -71,6 +71,9 @@ def main():
     deployed = report.get("deployed-version", "").split()
     summary["versionMatches"] = not baseline.get("version") or deployed[:3] == [baseline.get("version"), baseline.get("revision"), baseline.get("digest")]
     summary["mixedVersionSamples"] = [s["utc"] for s in samples if baseline.get("version") and s.get("health",{}).get("version") != baseline["version"]]
+    expected_identity = " ".join(baseline.get(k, "") for k in ["version", "revision", "digest"])
+    summary["identityMismatchSamples"] = [s["utc"] for s in samples if generation == "v2.2" and s.get("deployedVersion") != expected_identity]
+    summary["containerIssueSamples"] = [s["utc"] for s in samples if any(c.get("oomKilled") or c.get("restartCount", 0) > 0 or c.get("running") is False or c.get("health") == "unhealthy" for c in s.get("containerStates", {}).values())]
     if generation != "v1":
         collector=latest.get("collector", {})
         summary["quota"]=collector.get("scheduler")
@@ -103,7 +106,7 @@ def main():
     except Exception as error:
         summary["apiError"] = type(error).__name__ + ": " + str(error)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    return 1 if summary.get("apiError") or errors or not summary["versionMatches"] or summary["mixedVersionSamples"] else 0
+    return 1 if summary.get("apiError") or errors or not summary["versionMatches"] or summary["mixedVersionSamples"] or summary["identityMismatchSamples"] or summary["containerIssueSamples"] else 0
 
 
 if __name__ == "__main__":

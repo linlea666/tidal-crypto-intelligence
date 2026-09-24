@@ -12,9 +12,12 @@ def size(path):
  except Exception: return 0
 external=size(root+'/backups')+size(root+'/metrics')+size(root+'/certbot-logs')+size(root+'/releases')+size(root+'/letsencrypt')
 images=set()
+container_states={}
 for name in ['tidal-app-1','tidal-gateway-1']:
  try:
   d=json.loads(run(['docker','inspect',name]))[0];images.add(d['Image']);log=d.get('LogPath','')
+  state=d.get('State',{})
+  container_states[name]={'image':d['Image'],'restartCount':d['RestartCount'],'running':state.get('Running'),'oomKilled':state.get('OOMKilled'),'startedAt':state.get('StartedAt'),'finishedAt':state.get('FinishedAt'),'health':state.get('Health',{}).get('Status')}
   if log:
    import glob
    for p in glob.glob(log+'*'): external+=os.path.getsize(p)
@@ -37,7 +40,9 @@ with open(p+'.tmp','w') as f: json.dump({'bytes':external,'at':time.time()},f)
 os.chmod(p+'.tmp',0o644);os.replace(p+'.tmp',p)
 try: stats=[json.loads(s) for s in run(['docker','stats','--no-stream','--format','{{json .}}','tidal-app-1','tidal-gateway-1']).splitlines()]
 except Exception: stats=[]
-record={'utc':datetime.datetime.utcnow().isoformat()+'Z','disk':run(['df','-Pk',root]),'projectBytes':size(root+'/data')+external,'containers':stats}
+record={'utc':datetime.datetime.utcnow().isoformat()+'Z','disk':run(['df','-Pk',root]),'projectBytes':size(root+'/data')+external,'containers':stats,'containerStates':container_states}
+try: record['deployedVersion']=open(root+'/deployed-version').read().strip()
+except OSError: pass
 try:
  with open(root+'/data/collector-health.json') as f: record['collector']=json.load(f)
 except Exception as e: record['collectorError']=str(e)

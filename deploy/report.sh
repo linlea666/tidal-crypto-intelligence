@@ -14,10 +14,10 @@ for name in files[-4:]:
  for line in open(name):
   try:
    full=json.loads(line);latest=full
-   item={k:full[k] for k in ['utc','projectBytes','health','ready','healthQueryMs','error','collectorError'] if k in full}
+   item={k:full[k] for k in ['utc','disk','projectBytes','health','ready','healthQueryMs','error','collectorError','containerStates','deployedVersion'] if k in full}
    item['containers']=[{k:c.get(k) for k in ['Name','CPUPerc','MemUsage','MemPerc','PIDs']} for c in full.get('containers',[])]
    c=full.get('collector',{})
-   item['collector']={k:c[k] for k in ['at','generation','uptimeSeconds','heapBytes','goroutines','scheduler','fx','storage','datasets','legacyCollectorsRunning'] if k in c}
+   item['collector']={k:c[k] for k in ['at','generation','uptimeSeconds','heapBytes','goroutines','scheduler','fx','storage','datasets','legacyCollectorsRunning','contracts','signals','signalError','studyError','researchGap','mail'] if k in c}
    item['collector']['markets']={a:{'validBooks':m.get('validBooks'),'totalBooks':m.get('totalBooks'),'freshWhales':m.get('freshWhales'),'observedWhales':m.get('observedWhales'),'priceValid':m.get('priceValid'),'priceAt':m.get('priceAt'),'validDerivatives':sum(1 for d in m.get('derivatives',[]) if d.get('valid')),'rates':m.get('rates',[])} for a,m in c.get('markets',{}).items()}
    records.append(item)
   except ValueError: pass
