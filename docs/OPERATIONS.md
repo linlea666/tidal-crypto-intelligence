@@ -25,7 +25,7 @@ cat /opt/tidal/deployed-version
 systemctl list-timers tidal-renew.timer tidal-metrics.timer
 ```
 
-证书使用 Let’s Encrypt IP shortlived profile（6 天）；`tidal-renew.timer` 每日检查两次，续期后重载 Nginx。端口 80 必须持续允许外部 ACME 验证。可通过 `journalctl -u tidal-renew.service` 检查续期失败。不要停止续期定时器。
+证书使用 Let’s Encrypt IP shortlived profile（6 天）；`tidal-renew.timer` 每日检查两次，续期后重载 Nginx。定时器已提供随机错峰，Certbot 使用 `--no-random-sleep-on-renew` 避免再次等待超过服务超时。端口 80 必须持续允许外部 ACME 验证。可通过 `journalctl -u tidal-renew.service` 检查续期失败。不要停止续期定时器。
 
 `tidal-metrics.timer` 每 5 分钟保存资源、磁盘和健康信息到 `metrics/YYYY-MM-DD.jsonl`，7 天自动删除，同时把镜像、日志和备份占用计入应用预算。Docker 日志总量有上限；宿主机维护任务清理超过 7 天的日志。
 

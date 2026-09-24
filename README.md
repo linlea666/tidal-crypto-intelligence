@@ -44,7 +44,7 @@ bash -n deploy/*.sh
 
 ## 发布
 
-本地提交 → GitHub 检查 → `main` → 发布正式 `vX.Y.Z` Release → GitHub Actions 构建 Linux amd64 镜像 → GHCR → 服务器按摘要部署。草稿、预发布和普通提交不更新生产。首次发布后需在 GHCR 将包设为 Public，部署验证匿名拉取。
+本地提交 → GitHub 检查 → `main` → 发布正式 `vX.Y.Z` Release → GitHub Actions 构建 Linux amd64 镜像 → GHCR → 服务器按摘要部署。草稿、预发布和普通提交不更新生产。项目镜像包已公开；后续保持 GHCR 的 Public 可见性，部署会验证匿名拉取。
 
 服务器部署入口只接受 `deploy sha256:<digest> <commit> vX.Y.Z`，核对公开正式 Release、提交与镜像来源。生产 SSH 私钥仅存在 GitHub Secrets 和受保护的本地配置中；不使用仓库内凭据。更新保留数据卷和上一镜像，健康失败回退。详见 [运维说明](docs/OPERATIONS.md)。
 
