@@ -1,23 +1,24 @@
-# TIDAL 潮汐 · 加密市场情报
+# TIDAL V2 潮汐 · 加密市场情报
 
-面向中文用户的 BTC / ETH 现货买卖墙、实际成交、合约背景与公开巨鲸看板。默认用横向柱子表示价格区间内的美元挂单金额；买卖双方共用线性比例尺，热力图作为进阶历史视图。
+面向中文用户的 BTC / ETH 现货买卖墙、实际成交、合约背景、清算分布与公开巨鲸看板。CoinGlass统一采集并存入共享数据层，各页面和统计复用本地API。默认用横向柱子表示美元挂单金额；买卖共用线性比例尺，热力图作为进阶历史视图。
 
 首次使用请阅读 [看板使用说明](docs/USAGE.md)。
 
-![2026-09-24 真实行情运行界面](docs/qa/production-desktop.png)
+![V2沿用的柱状布局，图为早期真实运行界面](docs/qa/production-desktop.png)
 
 ## 数据说明
 
-- 五家现货：OKX、Binance、Coinbase、Kraken、Bybit，24 个 BTC / ETH 交易对。USD / USDT / USDC 按采样时 Kraken 美元汇率换算；过期汇率退出有效汇总。
-- 支撑 / 阻力均为候选区域。金额、持续时间、出现比例和成交证据分别展示；同一价位长期有挂单不表示同一笔订单。断线、序列缺口、深度边界和汇率变化不据此判断撤单。
-- 主动净买入 = 主动买入额 − 主动卖出额，是已观察成交的方向统计，不是交易所充值 / 提现。缺口会标记为部分统计；CVD 随所选窗口重新累计。
-- OKX、Binance、Bybit USDT 永续提供单边 OI、实际结算周期的资金费率、基差、成交和已观察清算。Binance / OKX 清算发布存在抽样，不能视作完整市场清算总额。
-- Hyperliquid 公开 BTC / ETH 原生永续地址榜只覆盖监控池。持仓均价不是第一笔开仓价，也不含完整费用；显示设置杠杆。清算价为空时保持为空，清算分布是当前条件下涉及的仓位金额，不是触价必然爆仓金额。
+- 五家现货：Binance、OKX的USDT市场，加Coinbase、Kraken、Bitfinex的USD市场，共10个BTC/ETH市场；约2分钟快照。按有效Kraken汇率换算美元，失效FX不按1美元处理。币安仅提供即时价格和已完成5分钟K线。
+- 支撑/阻力均为候选区域。历史金额分位、采样稳定程度和成交证据分别展示；不足7天/500个同类价位样本不评级。金额大不是必然反弹，采样间变化不能还原同一笔订单或确定撤单。
+- 主动净买入=主动买入额−主动卖出额，不是充值/提现。CVD显示固定起算点和缺口；三家足迹不冒充五家盘口全部成交。
+- CoinGlass覆盖交易所的OI、资金费率和已发生清算，保留实际单位、计费周期及来源时间。聚合OI不与分所重复相加；没有来源时间时明确标为仅有获取时间。
+- 清算地图与热力图显示模型相对强度，不与已发生清算或账户清算参考价相加，不称为必然爆仓金额。
+- Hyperliquid已覆盖大仓默认前50，可切前100及临近清算排序；分布使用全部有效已覆盖持仓。逐条检查180秒有效期，均价不是第一笔开仓价，设置杠杆不等于实际杠杆，空清算价保留为空。榜单消失不等于确认平仓。
 - 仅手工价格标注，不提交交易订单。
 
 ## 本地运行
 
-需要 Go 1.25、Node.js 22。无需交易所 API 密钥。
+需要Go 1.25、Node.js 22，以及授权的CoinGlass代理密钥。没有交易执行权限。不要同时用同一代理账号在本地和生产持续采集。
 
 ```bash
 npm --prefix web ci
@@ -26,10 +27,12 @@ go build -o bin/tidal ./cmd/tidal
 # 将至少 12 位的独立访问密码放在 TIDAL_PASSWORD 环境变量中：
 ./bin/tidal hash-password > /absolute/path/password_hash
 # password_hash 必须放在仓库外或已忽略的 secrets/ 内，权限设为 600。
-TIDAL_PASSWORD_HASH_FILE=/absolute/path/password_hash TIDAL_COOKIE_SECURE=false ./bin/tidal
+COINGLASS_API_KEY_FILE=/absolute/path/coinglass_key \
+TIDAL_PASSWORD_HASH_FILE=/absolute/path/password_hash \
+TIDAL_COOKIE_SECURE=false ./bin/tidal
 ```
 
-本地访问 `http://127.0.0.1:8080`。开发时运行 `npm --prefix web run dev`，Vite 代理到本地 Go API。仅开发模式支持 `?demo=1` 布局对照数据；生产构建移除演示分支。
+两个secret文件都应在已忽略目录或仓库外，权限600，不进入命令参数或镜像。本地访问 `http://127.0.0.1:8080`。开发时运行 `npm --prefix web run dev`，Vite代理到Go API。离线测试可设 `TIDAL_OFFLINE=true`；无行情时明确显示缺失，readyz返回503。仅开发模式的 `?demo=1` 用于布局对照，生产构建移除该分支。
 
 ## 验证
 
@@ -42,7 +45,7 @@ npm --prefix web test
 bash -n deploy/*.sh
 ```
 
-测试覆盖：报价与合约单位、主动方向、去重、序列缺口与恢复、官方 Kraken CRC 示例、OKX 深度去重、陈旧汇率、空清算价、核心地址上限、汇总语义、分区清理、认证、跨站请求与并发访问。
+测试覆盖：100次本地查询零上游请求、并发请求合并、滚动额度/429/重启恢复、重复/乱序/修正、单位/FX/时效、空值、成交/VWAP/存量/模型汇总、分区删除保护、在线备份、认证与并发。旧采集器回归测试保留，但生产不再启动旧采集器。
 
 ## 发布
 
@@ -56,34 +59,32 @@ Go 采集 / API + React / TypeScript + 日期 / 精度分区 SQLite + Nginx / Do
 
 | 数据 | 保留 |
 | --- | --- |
-| 原始增量、逐笔成交 | 有界内存，不长期落盘 |
-| 5 秒聚合盘口 | 24 小时；按整日分区删除，最多多保留 1 天 |
-| 1 分钟分来源盘口、成交、合约、巨鲸分布 | 30 天 |
-| 5 分钟地址仓位快照 | 30 天 |
-| 15 分钟汇总 | 30 / 90 天可选 |
+| 盘口分钟观察 / 5分钟 / 小时 | 7天 / 30天 / 至90天，不伪造连续分钟样本 |
+| 足迹5分钟 / 15分钟 / 小时 | 7天 / 30天 / 至90天 |
+| 主动买卖、OI、资金费率实际粒度 | 30天，长期小时降采样 |
+| 巨鲸分布分钟 / 地址仓位5分钟快照 | 30天；分布可长期降采样 |
+| 清算模型 | 完整最新缓存，历史仅保存分布摘要 |
 | 日志、运维采样、元数据备份 | 最长 7 天，同时限制日志大小 |
 
-项目预算 20GB，巨鲸历史子预算 2GB，磁盘至少留 8GB。五分钟检查容量；优先删旧细数据，无法释放时暂停细历史并维持实时和粗采样。清理按日分区；关闭页面不停止采集。
+项目预算20GB，巨鲸明细2GB，磁盘至少留8GB。先暂停历史补齐，仅清理已完成汇总的旧细数据；必要时暂停细写入并保留实时服务。内存目标600MiB，容器768MiB。旧历史独立保留、不参与新评级，按原策略清理。关闭页面不停止采集。
 
 ## API
 
 除 `/healthz`、`/readyz`、登录与会话状态外均需会话 Cookie：
 
-- `GET /api/v1/overview` / `levels` / `stream`：`asset`、`step`、`range`、`minAge`。
-- `GET /api/v1/history`：`hours`、`price`、`step`，可选 `heatmap=1`。
-- `GET /api/v1/candles`：`hours`、`period`（秒），综合现货报价 OHLC。
-- `GET /api/v1/flow`：`market=spot|perp`、`hours`，成交足迹、VWAP、CVD、来源与缺口。
-- `GET /api/v1/derivatives`：`hours`，OI / Funding / 基差与历史。
-- `GET /api/v1/whales`：`limit=10|50`、`side=all|long|short`，地址明细及分布。
-- `GET/POST /api/v1/watchlist`；`GET/PUT /api/v1/settings`；`GET /api/v1/health`。
-- `GET/POST/DELETE /api/v1/annotations`；`POST /api/v1/logout`。
+- `GET /api/v2/data/catalog`、`data/{dataset}`、`data-status`：共享目录、最新/历史事实、采集状态。
+- `GET /api/v2/overview`、`levels`、`history`、`candles`、`flow`、`derivatives`：页面组合查询。
+- `GET /api/v2/whales`：`limit=50|100`、方向及清算距离排序；`large-orders`：当前/结束记录。
+- `GET /api/v2/liquidations`：24小时默认模型、7天/30天缓存；`/api/v2/stream`：共享实时推送。
+- `POST /api/v2/data-requests`：未缓存的历史窗口或钱包详情申请，统一去重、排队和限流。
+- 会话、设置和手工标注沿用 `/api/v1` 接口。旧行情接口保留兼容别名。
 
-金额使用整数美分；价格、时间、汇率、覆盖和有效性随数据提供。原始盘口价格 / 数量在内存保留原字符串用于校验；前端展示为换算后的美元区间。
+GET只读取本地，不触发上游。上游任意滚动60秒最多12次、最少错开5.1秒，失败也计数；本地查询有并发/时长/8MiB响应限制。金额采用十进制字符串和整数美分，随响应保留来源、源时间/获取时间、原报价、覆盖、有效状态及实际粒度。完整字典、复用关系与新增功能规范见 [数据层说明](docs/V2-DATA-LAYER.md)。
 
 ## 接口来源
 
-[OKX](https://app.okx.com/docs-v5/en/) · [Binance](https://github.com/binance/binance-spot-api-docs) · [Coinbase](https://docs.cdp.coinbase.com/exchange/websocket-feed/channels) · [Kraken](https://docs.kraken.com/exchange/guides/websockets/book-checksum-v2) · [Bybit](https://bybit-exchange.github.io/docs/v5/websocket/public/full-ob) · [Hyperliquid](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint/perpetuals)
+[CoinGlass](https://docs.coinglass.com) · [Binance](https://github.com/binance/binance-spot-api-docs) · [Kraken](https://docs.kraken.com/api/)
 
 验收状态见 [STATUS](docs/STATUS.md)。持续运行 72 小时的资源验收与短测分开记录。
 
-V2改为CoinGlass共享数据层，仅BTC/ETH。架构、接口、刷新/过期、复用和保留规则见 [数据层说明](docs/V2-DATA-LAYER.md)，实际生产与72小时进度见 [状态](docs/STATUS.md)。本地运行需要 `COINGLASS_API_KEY_FILE` 指向被忽略的密钥文件；无真实数据时不提供模拟行情。
+当前已发布v2.0.0，V1连续验收按迁移计划中止；V2从2026-09-24 12:14:41 UTC单独开始72小时验收，尚未得出完整结论。

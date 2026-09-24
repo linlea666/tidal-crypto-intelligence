@@ -11,11 +11,11 @@
 ## 更新
 
 1. 本地修改并跑检查，提交 / PR 到 GitHub。
-2. 合并 `main`，创建并发布正式 Release，如 `v1.0.1`。
+2. 合并 `main`，创建并发布正式 Release，如 `v2.0.1`。
 3. 查看 `Release and deploy` 工作流。成功后可在数据健康页核对版本。
 4. 首次 GHCR 包默认为私有时，先将该包设为 Public，再重跑部署作业。服务器不保存 GHCR 登录凭据。
 
-发布脚本检查剩余磁盘、备份 `state.sqlite`（SQLite 在线 backup，包括 WAL 中已提交事务）、核对镜像提交、拉取摘要和检查真实市场数据就绪。失败时恢复原镜像与 Nginx / Compose 配置。历史数据库采用追加式兼容 schema；将来的破坏性 schema 变更必须单独设计迁移，不能只回退镜像。
+发布脚本检查剩余磁盘、在线备份 `state.sqlite` 和已有的V2 `hub.sqlite`（包括WAL中已提交事务）、核对镜像提交、拉取摘要和检查真实市场数据就绪。失败时恢复原镜像与Nginx/Compose配置。历史数据库采用追加式兼容schema；将来的破坏性schema变更必须单独设计迁移，不能只回退镜像。
 
 ## 日常维护
 
@@ -29,11 +29,11 @@ systemctl list-timers tidal-renew.timer tidal-metrics.timer
 
 `tidal-metrics.timer` 每 5 分钟保存资源、磁盘和健康信息到 `metrics/YYYY-MM-DD.jsonl`，7 天自动删除，同时把镜像、日志和备份占用计入应用预算。Docker 日志总量有上限；宿主机维护任务清理超过 7 天的日志。
 
-本地可运行 `python3 scripts/monitor.py`，使用已忽略的 `secrets/monitor_key` 读取受限服务器报告，并用 `secrets/access.json` 中的看板密码采样 API 延迟。输出不包含密码、Cookie 或地址明细；详细报告覆盖写入 `secrets/soak-latest.json`。采样包括有效盘口数、FX 时间、OI 新鲜度、巨鲸有效数、内存和磁盘增长。正式验收起点单独保存在 `secrets/soak-start.json`，将受控故障演练与正常运行区间分开。
+本地可运行 `python3 scripts/monitor.py`，使用已忽略的 `secrets/monitor_key` 读取受限服务器报告，并用 `secrets/access.json` 中的看板密码采样API延迟。输出不含密码、Cookie或地址明细。有 `secrets/soak-v2-start.json` 时，详细报告写入 `secrets/soak-v2-latest.json`，按固定V2起点筛选样本；旧 `soak-start.json` 不覆盖。采样包含有效盘口、FX/价格、各数据集时效、额度、巨鲸逐条有效数、内存及磁盘增长。受控故障和启动预热与正常运行区间分开记录。
 
 ## 数据保护与降级
 
-设置页只能选择 30 / 90 天。数据清理先完成 15 分钟汇总，再删除旧 1 分钟分区；重启从持久化汇总进度续算。独立巨鲸分区受 2GB 子预算约束。磁盘不足时实时看板继续，细历史暂停并标记缺口。已发生的数据缺口不自动伪造补齐。
+设置页只能选择30/90天。清理按数据集确认下一档汇总完成，再删除对应旧细数据；盘口、足迹、成交和持仓的粒度/汇总语义不同，见数据字典。重启从各自持久进度续算。巨鲸明细受2GB子预算约束。磁盘不足先暂停补齐，再清理已完成汇总的细数据，必要时暂停细写入；实时服务继续，历史缺口不补零。
 
 更改访问密码：在可信本地终端使用 `tidal hash-password` 生成新的 bcrypt 文件，替换服务器 `secrets/password_hash`，保持仅应用 UID 和 root 可读，重建 app 容器；同时清除 `state.sqlite` 的 sessions 表以撤销现有会话。不要在公开工单、日志或命令行参数里粘贴明文密码。
 
