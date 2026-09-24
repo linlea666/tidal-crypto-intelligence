@@ -69,19 +69,23 @@ def main():
     client = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
     body = json.dumps({"password": access["password"]}).encode()
     req = urllib.request.Request(base + "/api/v1/login", data=body, headers={"Content-Type": "application/json", "Origin": base})
-    with client.open(req, timeout=15) as response:
-        json.load(response)
-    summary["apiMs"] = {}
-    for endpoint in ["levels?asset=BTC", "levels?asset=ETH", "flow?asset=BTC&hours=1", "candles?asset=BTC&hours=24", "whales?asset=BTC&limit=50", "derivatives?asset=ETH"]:
-        before = time.monotonic()
-        with client.open(base + "/api/v1/" + endpoint, timeout=20) as response:
+    try:
+        with client.open(req, timeout=15) as response:
             json.load(response)
-        summary["apiMs"][endpoint] = round((time.monotonic() - before) * 1000, 1)
-    logout = urllib.request.Request(base + "/api/v1/logout", data=b"{}", headers={"Origin": base})
-    with client.open(logout, timeout=10) as response:
-        response.read()
+        summary["apiMs"] = {}
+        for endpoint in ["levels?asset=BTC", "levels?asset=ETH", "flow?asset=BTC&hours=1", "candles?asset=BTC&hours=24", "whales?asset=BTC&limit=50", "derivatives?asset=ETH"]:
+            before = time.monotonic()
+            with client.open(base + "/api/v1/" + endpoint, timeout=20) as response:
+                json.load(response)
+            summary["apiMs"][endpoint] = round((time.monotonic() - before) * 1000, 1)
+        logout = urllib.request.Request(base + "/api/v1/logout", data=b"{}", headers={"Origin": base})
+        with client.open(logout, timeout=10) as response:
+            response.read()
+    except Exception as error:
+        summary["apiError"] = type(error).__name__ + ": " + str(error)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 1 if summary.get("apiError") or errors else 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -39,7 +39,7 @@ export function App() {
   );
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState("");
-  const [selectedKey, setSelectedKey] = useState("bid/83800");
+  const [selectedKey, setSelectedKey] = useState(fixture ? "bid/83800" : "");
   const [expanded, setExpanded] = useState(false);
   const [hours, setHours] = useState(24);
   const [historyMode, setHistoryMode] = useState(false);
@@ -130,6 +130,14 @@ export function App() {
       .filter((z) => z.side === "bid")
       .sort((a, b) => b.usdCents - a.usdCents)[0] ??
     zones[0];
+  useEffect(() => {
+    if (
+      selected &&
+      !zones.some((z) => `${z.side}/${z.price}` === selectedKey)
+    ) {
+      setSelectedKey(`${selected.side}/${selected.price}`);
+    }
+  }, [zones, selected, selectedKey]);
   const history = useAPI<History>(
     authenticated &&
       !fixture &&
@@ -158,21 +166,27 @@ export function App() {
   const scale = fixture ? 12800000000 : axisRef.current.max;
   const visible = useMemo(() => {
     if (expanded) return zones;
-    return ["ask", "bid"]
-      .flatMap((side) =>
-        zones
-          .filter((z) => z.side === side)
-          .sort((a, b) => b.usdCents - a.usdCents)
-          .slice(0, 4),
-      )
-      .sort((a, b) => b.price - a.price);
-  }, [zones, expanded]);
+    const important = ["ask", "bid"].flatMap((side) =>
+      zones
+        .filter((z) => z.side === side)
+        .sort((a, b) => b.usdCents - a.usdCents)
+        .slice(0, 4),
+    );
+    if (selected && !important.includes(selected)) {
+      const replace = important.map((z) => z.side).lastIndexOf(selected.side);
+      if (replace >= 0) important[replace] = selected;
+      else important.push(selected);
+    }
+    return important.sort((a, b) => b.price - a.price);
+  }, [zones, expanded, selected]);
   const go = (name: string) => {
     location.hash = name;
     setView(name);
   };
   const changeAsset = (a: Asset) => {
     setAsset(a);
+    setFrame(null);
+    setSelectedKey("");
     setStep(a === "BTC" ? 100 : 5);
     setHistoryMode(false);
   };
