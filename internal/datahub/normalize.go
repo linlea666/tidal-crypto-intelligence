@@ -52,6 +52,20 @@ func timestamp(v any) *time.Time {
 		return nil
 	}
 	s := str(v)
+	// Preserve exact millisecond history boundaries (float seconds lose precision).
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil && n >= 1_000_000_000 {
+		var t time.Time
+		switch {
+		case n > 1e14:
+			t = time.UnixMicro(n)
+		case n > 1e11:
+			t = time.UnixMilli(n)
+		default:
+			t = time.Unix(n, 0)
+		}
+		t = t.UTC()
+		return &t
+	}
 	f, e := strconv.ParseFloat(s, 64)
 	if e != nil {
 		t, e := time.Parse(time.RFC3339Nano, s)
@@ -325,10 +339,23 @@ func Normalize(d Dataset, raw []byte, fetched time.Time) ([]Observation, error) 
 			state := "未知"
 			if num(r["order_state"]) == 1 {
 				state = "上游当前列表"
-			} else if num(r["order_state"]) > 1 {
-				state = "已结束"
+			} else if num(r["order_state"]) == 2 {
+				state = "上游记录已结束"
+			} else if num(r["order_state"]) == 3 {
+				state = "上游标记撤销"
 			}
-			p.Large = append(p.Large, LargeOrder{str(r["id"]), side, pv, q, usd, executed, state, timestamp(r["start_time"]), timestamp(r["current_time"]), int64(num(r["trade_count"]))})
+			id := str(r["id"])
+			if id == "" || side == "unknown" {
+				return nil, errors.New("invalid large order identity/side")
+			}
+			optional := func(key string) *string {
+				n, err := validNumber(r[key], false)
+				if err != nil {
+					return nil
+				}
+				return &n
+			}
+			p.Large = append(p.Large, LargeOrder{ID: id, Side: side, Price: pv, Quantity: q, ReportedUSD: usd, ExecutedUSD: executed, State: state, Start: timestamp(r["start_time"]), Changed: timestamp(r["current_time"]), Trades: int64(num(r["trade_count"])), InitialQuantity: optional("start_quantity"), InitialUSD: optional("start_usd_value"), ExecutedQuantity: optional("executed_volume"), RawState: int(num(r["order_state"])), End: timestamp(r["order_end_time"])})
 		}
 		out = append(out, obs(nil, p))
 	case "map":

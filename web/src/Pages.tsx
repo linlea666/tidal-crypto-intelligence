@@ -1,3 +1,4 @@
+import { ActivityPage } from "./Activity";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Copy, WarningCircle } from "@phosphor-icons/react";
 import { api, amount, price, clock, venue, useAPI } from "./data";
@@ -19,7 +20,8 @@ type Props = {
   health: Health | null;
   onNavigate: (v: string) => void;
 };
-type Meta = {
+export type Meta = {
+  venue?: string;
   status: string;
   observedAt: string | null;
   fetchedAt: string;
@@ -33,7 +35,9 @@ type FlowData = Flow & {
   footprintPartial: boolean;
   anchor: string;
 };
-type Derivatives = {
+export type Derivatives = {
+  oiChangeCents: number | null;
+  liquidationMeta: Meta;
   totalOiCents: number | null;
   items: {
     venue: string;
@@ -105,6 +109,8 @@ type DataStatus = {
     freeBytes: number;
     fineHistoryPaused: boolean;
     sqlite: string;
+    orderHistoryBytes: number;
+    orderHistoryPaused: boolean;
   };
   rulesVersion: string;
   legacyCollectorsRunning: boolean;
@@ -122,6 +128,9 @@ type Liquidations = {
   note: string;
 };
 type Large = {
+  initialQuantity?: string | null;
+  quantity: string;
+  executedQuantity?: string | null;
   id: string;
   venue: string;
   side: string;
@@ -129,6 +138,8 @@ type Large = {
   quote: string;
   usdCents: number | null;
   executedUsd: string;
+  endAt?: string | null;
+  historical?: boolean;
   startAt: string | null;
   changedAt: string | null;
   valid: boolean;
@@ -145,7 +156,7 @@ const names: Record<string, string> = {
   stale: "已过期",
   missing: "等待数据",
 };
-function Status({ meta }: { meta?: Meta }) {
+export function Status({ meta }: { meta?: Meta }) {
   if (!meta) return null;
   const expired =
     meta.status === "stale" ||
@@ -154,6 +165,7 @@ function Status({ meta }: { meta?: Meta }) {
   return (
     <p className={`source-status ${expired ? "amber" : ""}`}>
       <span className={`status-dot ${expired ? "warn" : ""}`} />
+      {meta.venue ? `${meta.venue} · ` : ""}
       {expired ? "缺失或过期，暂停实时判断" : names[meta.status]} ·{" "}
       {meta.observedAt ? `来源 ${clock(meta.observedAt)}` : "来源时间未知"} ·
       获取{" "}
@@ -166,7 +178,7 @@ function Status({ meta }: { meta?: Meta }) {
     </p>
   );
 }
-function Metric({
+export function Metric({
   title,
   value,
   unit = "USD",
@@ -207,7 +219,7 @@ function WindowSelect({
     </label>
   );
 }
-function lineOption(points: unknown[], name: string) {
+export function lineOption(points: unknown[], name: string) {
   return {
     grid: { left: 80, right: 25, top: 20, bottom: 35 },
     tooltip: { trigger: "axis" },
@@ -269,6 +281,8 @@ function Backfill({
   );
 }
 export function MarketPages(p: Props) {
+  if (p.view === "activity")
+    return <ActivityPage key={p.asset} asset={p.asset} />;
   if (p.view === "flow") return <FlowPage {...p} />;
   if (p.view === "derivatives") return <DerivativesPage {...p} />;
   if (p.view === "whales") return <WhalesPage {...p} />;
@@ -631,7 +645,7 @@ function WhalesPage({ asset }: Props) {
             </div>
           ))}
           {!buckets.length && (
-            <Empty text="只有180秒内更新、字段有效的已覆盖持仓参与分布。" />
+            <Empty text="每5分钟采集；只有来源时间8分钟内、字段有效的持仓参与分布。" />
           )}
         </section>
         <aside className="watchlist">
@@ -778,7 +792,7 @@ function WhalesPage({ asset }: Props) {
           </table>
         </div>
         <p className="helper">
-          CoinGlass覆盖的Hyperliquid百万美元级持仓，不是全市场巨鲸榜。清算距离使用平台标记价格；名单消失不等于平仓。
+          每5分钟采集，逐条来源时间8分钟内有效。CoinGlass覆盖的Hyperliquid百万美元级持仓，不是全市场巨鲸榜。清算距离使用平台标记价格；名单消失不等于平仓。
         </p>
       </section>
     </>
@@ -941,11 +955,17 @@ export function LargeOrders({
 }) {
   const [open, setOpen] = useState(panorama);
   const [history, setHistory] = useState(false);
+  const [offset, setOffset] = useState(0);
+  useEffect(() => setOffset(0), [asset, history]);
   useEffect(() => {
     if (panorama) setOpen(true);
   }, [panorama]);
-  const { data, error } = useAPI<{ items: Large[]; note: string }>(
-    `large-orders?asset=${asset}&history=${history ? 1 : 0}`,
+  const { data, error } = useAPI<{
+    items: Large[];
+    note: string;
+    hasMore: boolean;
+  }>(
+    `large-orders?asset=${asset}&history=${history ? 1 : 0}&limit=100&offset=${offset}`,
     30000,
   );
   const rows = (data?.items ?? [])
@@ -981,7 +1001,7 @@ export function LargeOrders({
             checked={history}
             onChange={(e) => setHistory(e.target.checked)}
           />{" "}
-          查看已结束历史（状态不等于确认撤单）
+          查看历史（含上游结束／撤销标记）
         </label>
       )}
       {error && <p className="sell">{error}</p>}
@@ -996,6 +1016,8 @@ export function LargeOrders({
                 <th>金额 · USD</th>
                 <th>首次记录</th>
                 <th>最后变更</th>
+                <th>初始／当前余量 · 币</th>
+                <th>累计成交数量 · 币</th>
                 <th>记录成交 · 上游USD</th>
                 <th>状态</th>
               </tr>
@@ -1015,7 +1037,11 @@ export function LargeOrders({
                     {price(+r.price)} {r.quote}
                   </td>
                   <td>
-                    {r.usdCents == null ? "汇率不可用" : amount(r.usdCents)}
+                    {r.historical
+                      ? "已结束 · 不计当前挂单"
+                      : r.usdCents == null
+                        ? "汇率不可用"
+                        : amount(r.usdCents)}
                   </td>
                   <td>
                     {r.startAt
@@ -1027,13 +1053,42 @@ export function LargeOrders({
                       ? new Date(r.changedAt).toLocaleString("zh-CN")
                       : "—"}
                   </td>
+                  <td>{r.initialQuantity??"未知"} / {r.quantity}</td>
+                  <td>{r.executedQuantity??"未知"}</td>
                   <td>{amount(+r.executedUsd * 100)}</td>
-                  <td>{r.valid ? r.state : "过期"}</td>
+                  <td>
+                    {r.valid ? r.state : "过期"}
+                    {r.endAt && (
+                      <small>
+                        {" "}
+                        · {new Date(r.endAt).toLocaleString("zh-CN")}
+                      </small>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          {!rows.length && <Empty text="尚无已获取的大额挂单。" />}
+          {!rows.length && (
+            <Empty text="此页尚无已获取记录，历史可能仍在补采。" />
+          )}
+          <div className="pagination">
+            <button
+              className="secondary"
+              disabled={offset === 0}
+              onClick={() => setOffset(Math.max(0, offset - 100))}
+            >
+              上一页
+            </button>
+            <span>第{offset / 100 + 1}页 · 每页最多100条</span>
+            <button
+              className="secondary"
+              disabled={!data?.hasMore}
+              onClick={() => setOffset(offset + 100)}
+            >
+              下一页
+            </button>
+          </div>
         </div>
       )}
     </section>
@@ -1071,6 +1126,14 @@ function HealthPage({ health, frame }: Props) {
           上游认证失败，采集已暂停。请检查代理密钥和订阅期限。
         </div>
       )}
+      <p className="helper">
+        大单历史约{" "}
+        {((data?.storage.orderHistoryBytes ?? 0) / 1048576).toFixed(1)} / 512
+        MiB ·{" "}
+        {data?.storage.orderHistoryPaused
+          ? "细历史暂停，当前快照继续"
+          : "容量正常"}
+      </p>
       {data?.storage.fineHistoryPaused && (
         <div className="notice danger">
           磁盘预算保护：暂停补采和细历史写入，实时查询继续提供。

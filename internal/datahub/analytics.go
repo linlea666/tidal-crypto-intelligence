@@ -46,21 +46,31 @@ type Zone struct {
 	Strong     bool             `json:"strong"`
 	Reason     string           `json:"reason"`
 }
+type RangeSummary struct {
+	BidCents  int64      `json:"bidCents"`
+	AskCents  int64      `json:"askCents"`
+	ZoneCount int        `json:"zoneCount"`
+	Oldest    *time.Time `json:"oldestSourceAt"`
+	Newest    *time.Time `json:"newestSourceAt"`
+	HasData   bool       `json:"hasData"`
+}
 type Frame struct {
-	Asset      string           `json:"asset"`
-	At         time.Time        `json:"at"`
-	Price      float64          `json:"price"`
-	PriceAt    *time.Time       `json:"priceAt"`
-	PriceValid bool             `json:"priceValid"`
-	Step       float64          `json:"step"`
-	Zones      []Zone           `json:"zones"`
-	Coverage   []Coverage       `json:"coverage"`
-	Rates      []map[string]any `json:"rates"`
-	StartedAt  time.Time        `json:"startedAt"`
-	Source     string           `json:"source"`
-	Rules      string           `json:"rulesVersion"`
-	Partial    bool             `json:"partial"`
-	Note       string           `json:"note"`
+	Summary      RangeSummary     `json:"summary"`
+	CoverageKind string           `json:"coverageKind"`
+	Asset        string           `json:"asset"`
+	At           time.Time        `json:"at"`
+	Price        float64          `json:"price"`
+	PriceAt      *time.Time       `json:"priceAt"`
+	PriceValid   bool             `json:"priceValid"`
+	Step         float64          `json:"step"`
+	Zones        []Zone           `json:"zones"`
+	Coverage     []Coverage       `json:"coverage"`
+	Rates        []map[string]any `json:"rates"`
+	StartedAt    time.Time        `json:"startedAt"`
+	Source       string           `json:"source"`
+	Rules        string           `json:"rulesVersion"`
+	Partial      bool             `json:"partial"`
+	Note         string           `json:"note"`
 }
 type Baseline struct {
 	Values []int64         `json:"values"`
@@ -259,6 +269,11 @@ func (h *Hub) grade(a string, z *Zone, p float64) {
 func (h *Hub) Overview(ctx context.Context, asset string, step, span float64, minAge int64) Frame {
 	now := time.Now().UTC()
 	f := h.rawFrame(asset, step, now)
+	if span < 1000 && !f.PriceValid {
+		f.Zones = []Zone{}
+		f.Note = "当前美元价格不可用，无法计算相对价格范围"
+		return f
+	}
 	h.wallMu.RLock()
 	histories := h.walls
 	continuity := h.continuity
@@ -297,6 +312,12 @@ func (h *Hub) Overview(ctx context.Context, asset string, step, span float64, mi
 		}
 		if span >= 1000 && asset == "BTC" && (z.Price < 10000 || z.Price > 200000) {
 			continue
+		}
+		f.Summary.ZoneCount++
+		if z.Side == "bid" {
+			f.Summary.BidCents += z.USD
+		} else {
+			f.Summary.AskCents += z.USD
 		}
 		h.grade(asset, &z, f.Price)
 		key := wallKey(asset, z)
@@ -340,6 +361,18 @@ func (h *Hub) Overview(ctx context.Context, asset string, step, span float64, mi
 		}
 	}
 	f.Zones = result
+	f.CoverageKind = "上游返回的盘口价格切片，非全量实时L2"
+	for _, c := range f.Coverage {
+		if c.Valid && c.ObservedAt != nil {
+			f.Summary.HasData = true
+			if f.Summary.Oldest == nil || c.ObservedAt.Before(*f.Summary.Oldest) {
+				f.Summary.Oldest = c.ObservedAt
+			}
+			if f.Summary.Newest == nil || c.ObservedAt.After(*f.Summary.Newest) {
+				f.Summary.Newest = c.ObservedAt
+			}
+		}
+	}
 	return f
 }
 func (h *Hub) evidence(asset string, z Zone, candles []Observation, feet map[string][]Observation, historicalFX map[int64]string, now time.Time) (string, int64, bool) {

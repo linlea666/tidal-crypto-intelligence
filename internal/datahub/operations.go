@@ -74,7 +74,7 @@ func (h *Hub) writeReport() {
 		for _, w := range o.Payload.Whales {
 			if w.Asset == a {
 				observed++
-				if ok && o.Fresh(d, now) && now.Sub(w.At) < 180*time.Second {
+				if ok && o.Fresh(d, now) && freshWhale(w, now) {
 					fresh++
 				}
 			}

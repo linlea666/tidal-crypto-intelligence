@@ -18,6 +18,7 @@ const nav = [
   ["overview", "总览"],
   ["liquidity", "现货挂单"],
   ["flow", "成交分析"],
+  ["activity", "大资金动向"],
   ["derivatives", "合约态势"],
   ["liquidations", "清算分布"],
   ["whales", "巨鲸持仓"],
@@ -259,6 +260,7 @@ export function App() {
                     liquidity: "现货买卖墙",
                     overview: "市场总览",
                     flow: "成交证据",
+                    activity: "大资金动向",
                     derivatives: "合约态势",
                     whales: "公开巨鲸持仓",
                     liquidations: "清算集中在哪里？",
@@ -339,7 +341,7 @@ export function App() {
                     </select>
                   </label>
                   <label>
-                    范围{" "}
+                    价格范围{" "}
                     <select
                       value={span}
                       onChange={(e) => setSpan(+e.target.value)}
@@ -356,7 +358,7 @@ export function App() {
                     </select>
                   </label>
                   <label>
-                    持续{" "}
+                    大额状态最低持续时间{" "}
                     <select
                       value={minAge}
                       onChange={(e) => setMinAge(+e.target.value)}
@@ -385,17 +387,46 @@ export function App() {
                     {expanded ? "收起" : "展开全部"}
                   </button>
                 </div>
+                <div className="range-summary" aria-label="所选价格范围汇总">
+                  <div>
+                    <span>所选范围已覆盖买单</span>
+                    <strong className="buy">
+                      {frame?.summary?.hasData
+                        ? amount(frame.summary.bidCents)
+                        : "—"}
+                      <small> USD</small>
+                    </strong>
+                  </div>
+                  <div>
+                    <span>所选范围已覆盖卖单</span>
+                    <strong className="sell">
+                      {frame?.summary?.hasData
+                        ? amount(frame.summary.askCents)
+                        : "—"}
+                      <small> USD</small>
+                    </strong>
+                  </div>
+                </div>
+                <p className="book-definition">
+                  当前挂单存量 · 每档{step}美元 · 1分钟粒度 · 约2分钟采集
+                  <br />
+                  {frame?.summary?.oldestSourceAt
+                    ? `来源快照 ${clock(frame.summary.oldestSourceAt)}–${clock(frame.summary.newestSourceAt!)}（北京时间）`
+                    : "等待有效来源快照"}{" "}
+                  · 上游返回的盘口切片，非全量实时L2
+                  <br />
+                  总额覆盖所选价格范围内全部已返回价位，不随重点列表或持续筛选变化。
+                  {expanded
+                    ? "已展开当前筛选价位。"
+                    : "下方仅展示部分重点价位。"}
+                </p>
                 <div className="book-table" aria-label="按价格排列的现货挂单">
                   <div className="book-grid table-heading">
                     <span>
                       价格区间 <small>(USD)</small>
                     </span>
-                    <div className="axis-labels">
-                      {[0, 0.25, 0.5, 0.75, 1].map((r) => (
-                        <span key={r}>{r === 0 ? "0" : amount(scale * r)}</span>
-                      ))}
-                    </div>
-                    <span>当前挂单金额</span>
+                    <DollarAxis scale={scale} />
+                    <span>本档挂单金额</span>
                     <span>大额持续</span>
                     <span>成交证据</span>
                   </div>
@@ -520,6 +551,40 @@ export function App() {
                           </div>
                         ))}
                     </div>
+                    <details className="source-details">
+                      <summary>核对各所金额、报价与时间</summary>
+                      {(frame?.coverage ?? []).map((c) => {
+                        const n = selected.sources[c.venue.toLowerCase()];
+                        const inRange = selected.covered?.includes(
+                          c.venue.toLowerCase(),
+                        );
+                        return (
+                          <div key={c.venue}>
+                            <strong>
+                              {c.venue} · {n != null ? amount(n) + " USD" : "—"}
+                            </strong>
+                            <span>
+                              {!c.valid
+                                ? c.reason || "数据不可用"
+                                : n != null
+                                  ? "本档有返回金额"
+                                  : inRange
+                                    ? "处于返回范围内，本档未返回记录"
+                                    : "本档未覆盖"}
+                            </span>
+                            <span>
+                              {c.symbol} · {c.quote}兑USD {c.rate || "不可用"}
+                            </span>
+                            <span>
+                              来源{" "}
+                              {c.observedAt ? clock(c.observedAt) : "时间未知"}{" "}
+                              · 获取 {c.fetchedAt ? clock(c.fetchedAt) : "未知"}
+                              {c.fxAt ? ` · 汇率 ${clock(c.fxAt)}` : ""}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </details>
                     <button className="primary full" onClick={() => go("flow")}>
                       查看成交明细 <ArrowRight size={19} />
                     </button>
@@ -553,7 +618,7 @@ export function App() {
                   标注开仓 / 止盈 / 止损
                 </button>
                 <label>
-                  回看{" "}
+                  回看时间{" "}
                   <select
                     value={hours}
                     onChange={(e) => setHours(+e.target.value)}
@@ -660,7 +725,7 @@ function ZoneRows({
           <strong>
             {amount(z.usdCents)}
             <small className={`grade-badge ${z.strong ? "strong" : ""}`}>
-              {z.grade}
+              {z.grade} · {Object.keys(z.sources).length}家贡献
             </small>
           </strong>
           <span>{z.seconds > 0 ? age(z.seconds) : "待积累"}</span>
@@ -992,6 +1057,41 @@ function AnnotationModal({
           {msg && <p role="status">{msg}</p>}
         </form>
       </section>
+    </div>
+  );
+}
+
+function DollarAxis({ scale }: { scale: number }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState(0);
+  useEffect(() => {
+    if (!ref.current) return;
+    const ro = new ResizeObserver(([e]) => setWidth(e.contentRect.width));
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  const count = width >= 350 ? 5 : width >= 200 ? 3 : 2;
+  return (
+    <div ref={ref} className="axis-labels dollar-axis">
+      {Array.from({ length: count }, (_, i) => {
+        const r = i / (count - 1);
+        return (
+          <span
+            key={i}
+            style={{
+              left: `${r * 100}%`,
+              transform:
+                i === 0
+                  ? "none"
+                  : i === count - 1
+                    ? "translateX(-100%)"
+                    : "translateX(-50%)",
+            }}
+          >
+            {r === 0 ? "0" : amount(scale * r)}
+          </span>
+        );
+      })}
     </div>
   );
 }

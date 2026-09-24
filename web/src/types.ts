@@ -21,6 +21,9 @@ export type Zone = {
   changeCents: number;
 };
 export type Coverage = {
+  fetchedAt?: string;
+  rate?: string;
+  fxAt?: string | null;
   venue: string;
   symbol: string;
   quote: string;
@@ -35,6 +38,15 @@ export type Coverage = {
   resyncs: number;
 };
 export type Frame = {
+  summary?: {
+    bidCents: number;
+    askCents: number;
+    zoneCount: number;
+    hasData: boolean;
+    oldestSourceAt: string | null;
+    newestSourceAt: string | null;
+  };
+  coverageKind?: string;
   priceAt?: string | null;
   priceValid?: boolean;
   note?: string;
