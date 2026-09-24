@@ -4,6 +4,8 @@
 
 首次使用请阅读 [看板使用说明](docs/USAGE.md)。
 
+![2026-09-24 真实行情运行界面](docs/qa/production-desktop.png)
+
 ## 数据说明
 
 - 五家现货：OKX、Binance、Coinbase、Kraken、Bybit，24 个 BTC / ETH 交易对。USD / USDT / USDC 按采样时 Kraken 美元汇率换算；过期汇率退出有效汇总。
