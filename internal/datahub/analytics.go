@@ -3,7 +3,6 @@ package datahub
 import (
 	"context"
 	"fmt"
-	"hash/fnv"
 	"math"
 	"sort"
 	"strings"
@@ -27,24 +26,26 @@ type Coverage struct {
 	FXAt       *time.Time `json:"fxAt"`
 }
 type Zone struct {
-	UpdatedAt  time.Time        `json:"updatedAt"`
-	Price      float64          `json:"price"`
-	Step       float64          `json:"step"`
-	Side       string           `json:"side"`
-	USD        int64            `json:"usdCents"`
-	Sources    map[string]int64 `json:"sources"`
-	Since      time.Time        `json:"since"`
-	Seconds    int64            `json:"seconds"`
-	Occupancy  float64          `json:"occupancy"`
-	Evidence   string           `json:"evidence"`
-	Grade      string           `json:"grade"`
-	Traded     int64            `json:"tradedCents"`
-	Samples    int              `json:"samples"`
-	Sampled    bool             `json:"sampled"`
-	Percentile *float64         `json:"percentile"`
-	Covered    []string         `json:"covered"`
-	Strong     bool             `json:"strong"`
-	Reason     string           `json:"reason"`
+	Changes       []LiquidityEvent `json:"changes,omitempty"`
+	NearReference bool             `json:"nearReference"`
+	UpdatedAt     time.Time        `json:"updatedAt"`
+	Price         float64          `json:"price"`
+	Step          float64          `json:"step"`
+	Side          string           `json:"side"`
+	USD           int64            `json:"usdCents"`
+	Sources       map[string]int64 `json:"sources"`
+	Since         time.Time        `json:"since"`
+	Seconds       int64            `json:"seconds"`
+	Occupancy     float64          `json:"occupancy"`
+	Evidence      string           `json:"evidence"`
+	Grade         string           `json:"grade"`
+	Traded        int64            `json:"tradedCents"`
+	Samples       int              `json:"samples"`
+	Sampled       bool             `json:"sampled"`
+	Percentile    *float64         `json:"percentile"`
+	Covered       []string         `json:"covered"`
+	Strong        bool             `json:"strong"`
+	Reason        string           `json:"reason"`
 }
 type RangeSummary struct {
 	BidCents  int64      `json:"bidCents"`
@@ -55,22 +56,23 @@ type RangeSummary struct {
 	HasData   bool       `json:"hasData"`
 }
 type Frame struct {
-	Summary      RangeSummary     `json:"summary"`
-	CoverageKind string           `json:"coverageKind"`
-	Asset        string           `json:"asset"`
-	At           time.Time        `json:"at"`
-	Price        float64          `json:"price"`
-	PriceAt      *time.Time       `json:"priceAt"`
-	PriceValid   bool             `json:"priceValid"`
-	Step         float64          `json:"step"`
-	Zones        []Zone           `json:"zones"`
-	Coverage     []Coverage       `json:"coverage"`
-	Rates        []map[string]any `json:"rates"`
-	StartedAt    time.Time        `json:"startedAt"`
-	Source       string           `json:"source"`
-	Rules        string           `json:"rulesVersion"`
-	Partial      bool             `json:"partial"`
-	Note         string           `json:"note"`
+	RecentChanges []LiquidityEvent `json:"recentChanges,omitempty"`
+	Summary       RangeSummary     `json:"summary"`
+	CoverageKind  string           `json:"coverageKind"`
+	Asset         string           `json:"asset"`
+	At            time.Time        `json:"at"`
+	Price         float64          `json:"price"`
+	PriceAt       *time.Time       `json:"priceAt"`
+	PriceValid    bool             `json:"priceValid"`
+	Step          float64          `json:"step"`
+	Zones         []Zone           `json:"zones"`
+	Coverage      []Coverage       `json:"coverage"`
+	Rates         []map[string]any `json:"rates"`
+	StartedAt     time.Time        `json:"startedAt"`
+	Source        string           `json:"source"`
+	Rules         string           `json:"rulesVersion"`
+	Partial       bool             `json:"partial"`
+	Note          string           `json:"note"`
 }
 type Baseline struct {
 	Values []int64         `json:"values"`
@@ -129,8 +131,20 @@ func best(b *Book) (float64, float64) {
 	}
 	return bid, ask
 }
-func makeZones(asset string, step, price float64, books map[string]Observation, registry map[string]Dataset, rates map[string]string, now time.Time, live bool) ([]Zone, []Coverage) {
-	zones := map[string]*Zone{}
+
+type pricedLevel struct {
+	price       float64
+	cents       int64
+	venue, side string
+	at          time.Time
+}
+type preparedBooks struct {
+	levels   []pricedLevel
+	coverage []Coverage
+}
+
+func prepareBooks(books map[string]Observation, registry map[string]Dataset, rates map[string]string, now time.Time, live bool) preparedBooks {
+	var prepared preparedBooks
 	coverage := []Coverage{}
 	for id, o := range books {
 		d := registry[id]
@@ -161,25 +175,40 @@ func makeZones(asset string, step, price float64, books map[string]Observation, 
 		}
 		for side, levels := range map[string][]Level{"bid": b.Bids, "ask": b.Asks} {
 			for _, l := range levels {
-				usdPrice := num(multiply(l.Price, rate))
-				p := math.Floor(usdPrice/step) * step
-				if p <= 0 {
-					continue
-				}
-				key := fmt.Sprintf("%s/%.8f", side, p)
-				z := zones[key]
-				if z == nil {
-					z = &Zone{Price: p, Step: step, Side: side, Sources: map[string]int64{}, Evidence: "尚未触及", Grade: "样本不足", Since: o.Time(), UpdatedAt: o.Time(), Sampled: true, Reason: "金额、持续和成交证据分别判断"}
-					zones[key] = z
-				}
-				value := money(multiply(multiply(l.Price, l.Quantity), rate))
-				z.USD += value
-				z.Sources[strings.ToLower(d.Venue)] += value
-				if o.Time().Before(z.Since) {
-					z.Since = o.Time()
-					z.UpdatedAt = o.Time()
-				}
+				prepared.levels = append(prepared.levels, pricedLevel{num(multiply(l.Price, rate)), money(multiply(multiply(l.Price, l.Quantity), rate)), strings.ToLower(d.Venue), side, o.Time()})
 			}
+		}
+	}
+	sort.Slice(coverage, func(i, j int) bool { return coverage[i].Venue < coverage[j].Venue })
+	prepared.coverage = coverage
+	return prepared
+}
+func makeZones(asset string, step, price float64, books map[string]Observation, registry map[string]Dataset, rates map[string]string, now time.Time, live bool) ([]Zone, []Coverage) {
+	return prepareBooks(books, registry, rates, now, live).zones(step)
+}
+func (p preparedBooks) zones(step float64) ([]Zone, []Coverage) {
+	type zoneID struct {
+		side  string
+		price float64
+	}
+	zones := map[zoneID]*Zone{}
+	coverage := p.coverage
+	for _, l := range p.levels {
+		price := math.Floor(l.price/step) * step
+		if price <= 0 {
+			continue
+		}
+		key := zoneID{l.side, price}
+		z := zones[key]
+		if z == nil {
+			z = &Zone{Price: price, Step: step, Side: l.side, Sources: map[string]int64{}, Evidence: "尚无匹配触及／成交证据", Grade: "样本不足", Since: l.at, UpdatedAt: l.at, Sampled: true, Reason: "金额、持续和成交证据分别判断"}
+			zones[key] = z
+		}
+		z.USD += l.cents
+		z.Sources[l.venue] += l.cents
+		if l.at.Before(z.Since) {
+			z.Since = l.at
+			z.UpdatedAt = l.at
 		}
 	}
 	out := []Zone{}
@@ -266,7 +295,11 @@ func (h *Hub) grade(a string, z *Zone, p float64) {
 		z.Grade = "常见金额"
 	}
 }
-func (h *Hub) Overview(ctx context.Context, asset string, step, span float64, minAge int64) Frame {
+func (h *Hub) Overview(ctx context.Context, asset string, step, span float64, minAge int64, policies ...LiquidityPolicy) Frame {
+	policy := LiquidityPolicy{.3, 50}
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
 	now := time.Now().UTC()
 	f := h.rawFrame(asset, step, now)
 	if span < 1000 && !f.PriceValid {
@@ -302,6 +335,16 @@ func (h *Hub) Overview(ctx context.Context, asset string, step, span float64, mi
 				}
 				return nil
 			})
+		}
+	}
+	events, _ := h.LiquidityEvents(ctx, asset, step, now.Add(-30*time.Minute), now, 300)
+	// Advanced timeline is bounded and only reads precomputed source facts.
+	for _, e := range events {
+		if e.Distance <= policy.Near || e.Decrease != nil && *e.Decrease >= policy.Decrease {
+			f.RecentChanges = append(f.RecentChanges, e)
+			if len(f.RecentChanges) >= 30 {
+				break
+			}
 		}
 	}
 	result := []Zone{}
@@ -354,6 +397,20 @@ func (h *Hub) Overview(ctx context.Context, asset string, step, span float64, mi
 				z.Strong = true
 				z.Evidence = "证据较强"
 				z.Reason = "历史P95、持续大额、三家贡献、匹配足迹和随后两根K线共同支持"
+			}
+		}
+		z.NearReference = f.PriceValid && math.Min(math.Abs(z.Price/f.Price-1), math.Abs((z.Price+z.Step)/f.Price-1))*100 <= policy.Near
+		seen := map[string]bool{}
+		for _, e := range events {
+			if e.Side != z.Side || e.DisplayLow >= z.Price+z.Step || e.DisplayHigh <= z.Price || seen[fmt.Sprintf("%s/%.8f", e.Venue, e.Low)] {
+				continue
+			}
+			seen[fmt.Sprintf("%s/%.8f", e.Venue, e.Low)] = true
+			z.Changes = append(z.Changes, e)
+			if f.PriceValid && z.Evidence != "等待盘口更新" && now.Sub(e.At) <= 5*time.Minute && (e.Kind == "unreturned" || e.Kind == "uncomparable" || e.Decrease != nil && *e.Decrease >= policy.Decrease) {
+				z.Strong = false
+				z.Evidence = "近期采样变化，原因待确认"
+				z.Reason = "可比区间减量、未返回或覆盖变化；暂停综合强度标签"
 			}
 		}
 		if z.Seconds >= minAge {
@@ -518,110 +575,6 @@ func (h *Hub) SampleWalls(now time.Time) {
 	h.walls = histories
 	h.continuity = continuity
 	h.wallMu.Unlock()
-}
-func (h *Hub) BuildBaselines(ctx context.Context) error {
-	now := time.Now().UTC()
-	from := now.Add(-30 * 24 * time.Hour)
-	registry := h.datasets()
-	result := map[string]Baseline{}
-	totalValues := 0
-	// Hourly FX history is required for USDT samples. Missing historical FX never
-	// becomes a 1:1 assumption; those source cohorts remain unavailable.
-	fx := map[int64]map[string]string{}
-	fd, _ := h.Dataset("fx.usd.kraken")
-	_ = h.Store.Visit(ctx, fd, 3600, from, now, func(o Observation) error {
-		rates := map[string]string{"USD": "1"}
-		for _, r := range o.Payload.Rates {
-			rates[r.Quote] = r.USD
-		}
-		fx[recordTime(o).Truncate(time.Hour).Unix()] = rates
-		return nil
-	})
-	for _, a := range Assets() {
-		hourBooks := map[int64]map[string]Observation{}
-		for id, d := range registry {
-			if d.Kind != "book" || d.Asset != a {
-				continue
-			}
-			if e := h.Store.Visit(ctx, d, 3600, from, now, func(o Observation) error {
-				if o.Quality == "missing" || o.Payload.Book == nil {
-					return nil
-				}
-				key := recordTime(o).Truncate(time.Hour).Unix()
-				if hourBooks[key] == nil {
-					hourBooks[key] = map[string]Observation{}
-				}
-				hourBooks[key][id] = o
-				return nil
-			}); e != nil {
-				return e
-			}
-		}
-		times := make([]int64, 0, len(hourBooks))
-		for ts := range hourBooks {
-			times = append(times, ts)
-		}
-		sort.Slice(times, func(i, j int) bool { return times[i] < times[j] })
-		for _, ts := range times {
-			books := hourBooks[ts]
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			rates := fx[ts]
-			if rates == nil {
-				rates = map[string]string{"USD": "1"}
-			}
-			midpoints := []float64{}
-			for id, o := range books {
-				rate, ok := rates[registry[id].Quote]
-				if !ok {
-					continue
-				}
-				b, a := best(o.Payload.Book)
-				if b > 0 && a > 0 {
-					midpoints = append(midpoints, (a+b)/2*num(rate))
-				}
-			}
-			if len(midpoints) == 0 {
-				continue
-			}
-			sort.Float64s(midpoints)
-			p := midpoints[len(midpoints)/2]
-			for _, step := range steps(a) {
-				zones, _ := makeZones(a, step, p, books, registry, rates, now, false)
-				for _, z := range zones {
-					key := baselineKey(a, z, p)
-					b := result[key]
-					if b.Days == nil {
-						b.Days = map[string]bool{}
-					}
-					b.Count++
-					b.Days[time.Unix(ts, 0).UTC().Format("2006-01-02")] = true
-					b.At = now
-					if len(b.Values) < 1024 && totalValues < 4_000_000 {
-						b.Values = append(b.Values, z.USD)
-						totalValues++
-					} else if len(b.Values) > 0 {
-						hash := fnv.New64a()
-						fmt.Fprintf(hash, "%s/%d/%.8f", key, ts, z.Price)
-						idx := int64(hash.Sum64() % uint64(b.Count))
-						if idx < int64(len(b.Values)) {
-							b.Values[idx] = z.USD
-						}
-					}
-					result[key] = b
-				}
-			}
-		}
-	}
-	for k, b := range result {
-		sort.Slice(b.Values, func(i, j int) bool { return b.Values[i] < b.Values[j] })
-		result[k] = b
-	}
-	h.baselineMu.Lock()
-	h.baselines = result
-	h.baselineMu.Unlock()
-	return h.Store.SaveState("baselines", result)
 }
 
 func persistence(samples []wallSample, now time.Time) (float64, int64, time.Time) {

@@ -490,7 +490,7 @@ func (h *Hub) CandleView(ctx context.Context, a string, hours int) (any, error) 
 	return map[string]any{"points": points, "resolution": fmt.Sprintf("%ds", res), "quote": "USDT", "source": "Binance"}, e
 }
 func (h *Hub) Status() any {
-	return map[string]any{"datasets": h.Catalog(), "scheduler": h.Scheduler.State(), "storage": h.Store.Status(), "startedAt": h.boot, "at": time.Now().UTC(), "rulesVersion": RulesVersion, "legacyCollectorsRunning": false}
+	return map[string]any{"bookBaseline": h.baselineProgress(), "datasets": h.Catalog(), "scheduler": h.Scheduler.State(), "storage": h.Store.Status(), "startedAt": h.boot, "at": time.Now().UTC(), "rulesVersion": RulesVersion, "legacyCollectorsRunning": false}
 }
 
 // Read never schedules or fetches. Even a completely empty local query is pure.
@@ -521,7 +521,7 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 	return h.cached(ctx, key, ttl, func() (any, error) {
 		switch path {
 		case "overview", "levels":
-			return h.Overview(ctx, a, step, span, int64(parseInt(q, "minAge", 0, 0, 86400*30))), nil
+			return h.Overview(ctx, a, step, span, int64(parseInt(q, "minAge", 0, 0, 86400*30)), LiquidityPolicy{parseFloat(q, "nearPercent", .3, .1, 1), parseFloat(q, "decreasePercent", 50, 25, 90)}), nil
 		case "flow":
 			return h.FlowView(ctx, a, market, hours, q.Get("anchor"))
 		case "derivatives":

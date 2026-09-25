@@ -3,6 +3,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
 permissions:
   contents: read
 jobs:
@@ -38,9 +39,54 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: v23-linux-resource-replay
+          name: v24-linux-resource-replay
           path: |
-            tmp/resource-v23/*.json*
-            tmp/resource-v23/*.log
-            tmp/resource-v23/*.pprof
+            tmp/resource-v24/*.json*
+            tmp/resource-v24/*.log
+            tmp/resource-v24/*.pprof
+          retention-days: 30
+
+  resource-long:
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'resource-long')
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: bash scripts/resource-replay.sh
+        env:
+          TIDAL_REPLAY_LONG: '1'
+          TIDAL_REPLAY_DURATION: 5h15m
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v24-linux-resource-long
+          path: |
+            tmp/resource-v24/*.json*
+            tmp/resource-v24/*.log
+            tmp/resource-v24/*.pprof
+          retention-days: 30
+  baseline-reference:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: bash scripts/resource-replay.sh
+        env:
+          TIDAL_REPLAY_MODE: reference
+          TIDAL_BASELINE_REFERENCE: '1'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v24-baseline-reference
+          path: |
+            tmp/resource-v24/*.json*
+            tmp/resource-v24/*.log
+            tmp/resource-v24/*.pprof
           retention-days: 30

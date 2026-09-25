@@ -272,6 +272,9 @@ func (w *Warehouse) EndedOrders(ctx context.Context, asset string, limit, offset
 	return out, more, rows.Err()
 }
 func (w *Warehouse) maintainOrders(ctx context.Context, now time.Time, days int) error {
+	if _, err := w.db.ExecContext(ctx, "DELETE FROM liquidity_events WHERE ts<?", now.Add(-time.Duration(days)*24*time.Hour).Unix()); err != nil {
+		return err
+	}
 	w.write.Lock()
 	defer w.write.Unlock()
 	tx, err := w.db.BeginTx(ctx, nil)
@@ -299,7 +302,7 @@ func (w *Warehouse) maintainOrders(ctx context.Context, now time.Time, days int)
 		}
 	}
 	var bytes int64
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT sum(length(payload)+length(k)+length(order_key)+128) FROM order_events),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM tracked_orders),0)+coalesce((SELECT sum(length(payload)+64) FROM order_hours),0)`).Scan(&bytes); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT sum(length(payload)+length(k)+length(order_key)+128) FROM order_events),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM tracked_orders),0)+coalesce((SELECT sum(length(payload)+64) FROM order_hours),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM liquidity_events),0)`).Scan(&bytes); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {

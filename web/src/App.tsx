@@ -11,6 +11,7 @@ import {
 } from "@phosphor-icons/react";
 import { api, amount, price, age, clock, venue, useAPI } from "./data";
 import type { Asset, Frame, Zone, Health, History } from "./types";
+import { LiquidityTrail } from "./LiquidityTrail";
 import { Chart } from "./Chart";
 import { MarketPages, OverviewSummary } from "./Pages";
 import { designFixture } from "./demo";
@@ -37,6 +38,31 @@ export function App() {
   const [view, setView] = useState(location.hash.slice(1) || "liquidity");
   const [step, setStep] = useState(100);
   const [span, setSpan] = useState(10);
+  const [liquidityPolicies, setLiquidityPolicies] = useState<
+    Record<Asset, { near: number; decrease: number }>
+  >(() => {
+    try {
+      const saved = JSON.parse(
+        localStorage.getItem("tidal-liquidity-display-v24") || "null",
+      );
+      if (saved?.BTC?.near && saved?.ETH?.near) return saved;
+    } catch {
+      /* display preference only */
+    }
+    return {
+      BTC: { near: 0.3, decrease: 50 },
+      ETH: { near: 0.3, decrease: 50 },
+    };
+  });
+  const liquidityPolicy = liquidityPolicies[asset];
+  const setLiquidityPolicy = (key: "near" | "decrease", n: number) =>
+    setLiquidityPolicies((p) => ({ ...p, [asset]: { ...p[asset], [key]: n } }));
+  useEffect(() => {
+    localStorage.setItem(
+      "tidal-liquidity-display-v24",
+      JSON.stringify(liquidityPolicies),
+    );
+  }, [liquidityPolicies]);
   const [minAge, setMinAge] = useState(fixture ? 300 : 0);
   const [frame, setFrame] = useState<Frame | null>(
     fixture ? designFixture() : null,
@@ -75,7 +101,7 @@ export function App() {
     let socket: WebSocket | undefined;
     let reconnect: ReturnType<typeof setTimeout>;
     const abort = new AbortController();
-    const query = `asset=${asset}&step=${step}&range=${span}&minAge=${minAge}`;
+    const query = `asset=${asset}&step=${step}&range=${span}&minAge=${minAge}&nearPercent=${liquidityPolicy.near}&decreasePercent=${liquidityPolicy.decrease}`;
     setFrame(null);
     setError("");
     const load = () =>
@@ -126,7 +152,15 @@ export function App() {
       clearInterval(fallback);
       socket?.close();
     };
-  }, [authenticated, asset, step, span, minAge]);
+  }, [
+    authenticated,
+    asset,
+    step,
+    span,
+    minAge,
+    liquidityPolicy.near,
+    liquidityPolicy.decrease,
+  ]);
   const zones = frame?.zones ?? [];
   const selected =
     zones.find((z) => `${z.side}/${z.price}` === selectedKey) ??
@@ -536,6 +570,12 @@ export function App() {
                         <dd>{selected.evidence}</dd>
                       </div>
                     </dl>
+                    {selected.nearReference && (
+                      <p className="amber">
+                        临近参考价，待下一次盘口确认。参考价来自币安，不证明其他交易所已触及。
+                      </p>
+                    )}
+                    <LiquidityTrail events={selected.changes || []} compact />
                     <div className="sources">
                       <h3>
                         来源分布{" "}
@@ -593,7 +633,7 @@ export function App() {
                       查看成交明细 <ArrowRight size={19} />
                     </button>
                     <p className="helper">
-                      挂单金额、持续时间、成交证据分别判断。疑似撤走不等于已确认撤单。
+                      挂单金额、持续时间、成交证据分别判断。采样减量和未再返回均不等于已确认撤单。
                       {selected.sampled &&
                         " 盘口约2分钟更新，持续指价位采样稳定程度。"}
                     </p>
@@ -604,6 +644,48 @@ export function App() {
               </aside>
             </div>
 
+            <details className="data-section liquidity-recent">
+              <summary>临近价位变化 · 含本次未再返回的区间</summary>
+              <div className="liquidity-policies">
+                <label>
+                  临近参考价{" "}
+                  <select
+                    aria-label="临近提示范围"
+                    value={liquidityPolicy.near}
+                    onChange={(e) =>
+                      setLiquidityPolicy("near", +e.target.value)
+                    }
+                  >
+                    {[0.1, 0.3, 1].map((n) => (
+                      <option value={n} key={n}>
+                        ±{n}%
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  显著减量{" "}
+                  <select
+                    aria-label="显著减量提示"
+                    value={liquidityPolicy.decrease}
+                    onChange={(e) =>
+                      setLiquidityPolicy("decrease", +e.target.value)
+                    }
+                  >
+                    {[25, 50, 75].map((n) => (
+                      <option value={n} key={n}>
+                        ≥{n}%
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <p className="helper">
+                {asset}
+                独立显示设置，仅调整关注提示，不改变BTC预警。最近30分钟最多30条；按来源原始报价区间比较，区间可能跨美元价格档。未返回记录不补零。
+              </p>
+              <LiquidityTrail events={frame?.recentChanges || []} />
+            </details>
             <section className="wall-history">
               <div className="section-heading">
                 <h2>

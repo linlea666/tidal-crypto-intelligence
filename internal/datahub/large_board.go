@@ -24,18 +24,6 @@ func (h *Hub) LargeBoard(ctx context.Context, a string, q url.Values) (any, erro
 	if q.Get("history") == "1" {
 		return h.LargeOrdersPage(ctx, a, true, parseInt(q, "limit", 50, 1, 100), parseInt(q, "offset", 0, 0, 10000))
 	}
-	side, venue, order := q.Get("side"), q.Get("venue"), q.Get("sort")
-	if side != "" && side != "all" && side != "bid" && side != "ask" {
-		return nil, errors.New("无效买卖方向")
-	}
-	if order == "" {
-		order = "amount_desc"
-	}
-	allowed := map[string]string{"amount_desc": "usdCents", "amount_asc": "usdCents", "price_asc": "priceUsd", "price_desc": "priceUsd", "distance_asc": "distancePercent", "duration_desc": "durationSeconds"}
-	field, ok := allowed[order]
-	if !ok {
-		return nil, errors.New("无效排序")
-	}
 	now := time.Now().UTC()
 	version := q.Get("version")
 	var v map[string]any
@@ -110,23 +98,87 @@ func (h *Hub) LargeBoard(ctx context.Context, a string, q url.Values) (any, erro
 	}
 	v["newSnapshotAvailable"] = v["sourceVersion"] != h.largeSourceVersion(a)
 	all := v["items"].([]any)
-	rows := []map[string]any{}
+	if err := h.reconcileOrderRows(ctx, a, all, now); err != nil {
+		return nil, err
+	}
+	v["version"] = version
+	v["note"] = "独立大单快照；金额及排序固定于所选快照，状态另按最新本地事实核对。只统计已获取样本，不额外计入普通买卖墙或BTC信号。"
+	if q.Get("layout") == "split" {
+		scale := 0.0
+		for _, side := range []string{"bid", "ask"} {
+			params := url.Values{"side": {side}}
+			for _, key := range []string{"venue", "sort", "minUsd", "distance", "offset", "limit"} {
+				params.Set(key, q.Get(side+"_"+key))
+			}
+			col, err := filterOrderRows(all, params)
+			if err != nil {
+				return nil, err
+			}
+			v[side] = col
+			scale = math.Max(scale, num(col["scaleMaxCents"]))
+		}
+		// The full immutable snapshot is cached once; a split reply only contains
+		// the two requested pages. Both use the union's scale across all pages.
+		delete(v, "items")
+		v["scaleMaxCents"] = scale
+		return v, nil
+	}
+	col, err := filterOrderRows(all, q)
+	if err != nil {
+		return nil, err
+	}
+	for k, value := range col {
+		v[k] = value
+	}
+	return v, nil
+}
+
+func filterOrderRows(all []any, q url.Values) (map[string]any, error) {
+	side, venue, order := q.Get("side"), q.Get("venue"), q.Get("sort")
+	if side != "" && side != "all" && side != "bid" && side != "ask" {
+		return nil, errors.New("无效买卖方向")
+	}
+	if order == "" {
+		order = "amount_desc"
+	}
+	allowed := map[string]string{"amount_desc": "usdCents", "amount_asc": "usdCents", "price_asc": "priceUsd", "price_desc": "priceUsd", "distance_asc": "distancePercent", "duration_desc": "durationSeconds"}
+	field, ok := allowed[order]
+	if !ok {
+		return nil, errors.New("无效排序")
+	}
 	minimum := parseFloat(q, "minUsd", 0, 0, 1e12) * 100
-	var buy, sell int64
-	valid := 0
+	distance := parseFloat(q, "distance", 0, 0, 10000)
+	rows := []map[string]any{}
+	var buy, sell, total int64
+	valid, fetched, excludedFX, excludedDistance := 0, 0, 0, 0
 	maxAmount := 0.0
 	for _, raw := range all {
 		r := raw.(map[string]any)
-		if side != "" && side != "all" && r["side"] != side || venue != "" && venue != "all" && !strings.EqualFold(str(r["venue"]), venue) {
+		if side != "" && side != "all" && r["side"] != side {
 			continue
 		}
-		if minimum > 0 && (r["usdCents"] == nil || num(r["usdCents"]) < minimum) {
+		fetched++
+		if venue != "" && venue != "all" && !strings.EqualFold(str(r["venue"]), venue) {
 			continue
 		}
-		// Freshness changes while browsing; source timestamps and amounts do not.
-		expires, _ := time.Parse(time.RFC3339Nano, str(r["expiresAt"]))
-		if expires.IsZero() || now.After(expires) {
-			r["valid"] = false
+		if minimum > 0 && r["usdCents"] == nil {
+			excludedFX++
+			continue
+		}
+		if minimum > 0 && num(r["usdCents"]) < minimum {
+			continue
+		}
+		if distance > 0 {
+			if r["distancePercent"] == nil {
+				excludedDistance++
+				continue
+			}
+			if math.Abs(num(r["distancePercent"])) > distance {
+				continue
+			}
+		}
+		if r["usdCents"] != nil {
+			total += int64(num(r["usdCents"]))
 		}
 		if r["valid"] == true {
 			valid++
@@ -158,14 +210,85 @@ func (h *Hub) LargeBoard(ctx context.Context, a string, q url.Values) (any, erro
 	})
 	offset, limit := parseInt(q, "offset", 0, 0, 10000), parseInt(q, "limit", 50, 1, 100)
 	end := min(len(rows), offset+limit)
-	v["items"], v["total"], v["fetchedCount"], v["validCount"] = rows[min(offset, len(rows)):end], len(rows), len(all), valid
-	v["version"], v["offset"], v["limit"], v["hasMore"] = version, offset, limit, end < len(rows)
-	v["bidCents"], v["askCents"], v["scaleMaxCents"] = buy, sell, maxAmount
-	if len(rows) > 0 && valid == 0 {
-		v["bidCents"], v["askCents"] = nil, nil
+	v := map[string]any{"items": rows[min(offset, len(rows)):end], "total": len(rows), "fetchedCount": fetched, "validCount": valid, "bidCents": buy, "askCents": sell, "snapshotCents": total, "validCents": buy + sell, "scaleMaxCents": maxAmount, "offset": offset, "limit": limit, "hasMore": end < len(rows), "excludedFX": excludedFX, "excludedDistance": excludedDistance}
+	if fetched == 0 || (len(rows) > 0 && valid == 0) {
+		v["bidCents"], v["askCents"], v["validCents"] = nil, nil, nil
 	}
-	v["note"] = "独立大单快照；只统计已获取样本，不额外计入普通买卖墙或BTC信号。时长截至快照，不承诺采样间一直存在。"
+	known := false
+	for _, r := range rows {
+		if r["usdCents"] != nil {
+			known = true
+			break
+		}
+	}
+	if !known {
+		v["snapshotCents"] = nil
+	}
 	return v, nil
+}
+
+// GET only reads facts. Newer lifecycle facts may invalidate a pinned row but
+// never replace its quantity, amount, FX, distance or position within that page.
+func (h *Hub) reconcileOrderRows(ctx context.Context, a string, all []any, now time.Time) error {
+	latest := map[string]Observation{}
+	identities := map[string]map[string]LargeOrder{}
+	for _, d := range Registry() {
+		if d.Asset == a && d.Kind == "large" {
+			if o, ok := h.Store.Latest(d.ID); ok {
+				latest[d.ID] = o
+				ids := map[string]LargeOrder{}
+				for _, r := range o.Payload.Large {
+					ids[d.ID+":"+r.ID] = r
+				}
+				identities[d.ID] = ids
+			}
+		}
+	}
+	for _, raw := range all {
+		r := raw.(map[string]any)
+		expires, _ := time.Parse(time.RFC3339Nano, str(r["expiresAt"]))
+		r["presenceState"], r["presenceNote"] = "observed", "截至所选来源快照仍有记录"
+		if expires.IsZero() || now.After(expires) {
+			r["valid"] = false
+			r["presenceState"], r["presenceNote"] = "stale", "快照或换算已过期，当前状态待更新"
+		}
+		parts := strings.SplitN(str(r["id"]), ":", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		o, ok := latest[parts[0]]
+		fetched, _ := time.Parse(time.RFC3339Nano, str(r["fetchedAt"]))
+		if ok && o.FetchedAt.After(fetched) {
+			r["checkedAt"] = o.FetchedAt
+			if n, found := identities[parts[0]][str(r["id"])]; found {
+				r["lastReturnedAt"] = o.FetchedAt
+				if n.Quantity != str(r["quantity"]) || n.Price != str(r["price"]) {
+					r["valid"] = false
+					r["presenceState"], r["presenceNote"] = "changed", "本地已有更新余量或价格，请刷新快照"
+				}
+			} else {
+				r["valid"] = false
+				r["presenceState"], r["presenceNote"] = "unreturned", "本次列表未再返回，原因待确认；可能低于筛选门槛或上游覆盖变化"
+				if o.Quality != "valid" {
+					r["presenceState"], r["presenceNote"] = "coverage_unknown", "最新列表覆盖不完整，当前是否存在待确认"
+				}
+			}
+		}
+		var tracked TrackedOrder
+		var b []byte
+		if h.Store.db.QueryRowContext(ctx, "SELECT payload FROM tracked_orders WHERE k=?", r["key"]).Scan(&b) == nil && json.Unmarshal(b, &tracked) == nil && tracked.Order.RawState > 1 {
+			r["valid"] = false
+			r["presenceState"] = "ended"
+			r["presenceNote"] = "上游记录已结束，结束不等于撤销"
+			if tracked.Order.RawState == 3 {
+				r["presenceState"], r["presenceNote"] = "revoked", "上游标记撤销"
+			}
+			r["latestRawState"], r["latestEndAt"] = tracked.Order.RawState, tracked.Order.End
+		}
+		// A reference-price prompt is not a venue-level touch or execution claim.
+		r["nearReference"] = r["distancePercent"] != nil && math.Abs(num(r["distancePercent"])) <= .3
+	}
+	return ctx.Err()
 }
 
 // Dataset revisions and retrieval times, independent of page visits or FX ticks.

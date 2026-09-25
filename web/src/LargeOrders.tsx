@@ -4,6 +4,10 @@ import { Status } from "./Pages";
 import type { Meta } from "./Pages";
 import type { Asset } from "./types";
 type Order = {
+  presenceNote?: string;
+  checkedAt?: string;
+  lastReturnedAt?: string;
+  nearReference?: boolean;
   id: string;
   venue: string;
   side: string;
@@ -37,9 +41,15 @@ type Board = {
   total: number;
   fetchedCount: number;
   validCount: number;
-  bidCents: number;
-  askCents: number;
+  bidCents: number | null;
+  askCents: number | null;
   scaleMaxCents: number;
+  snapshotCents?: number | null;
+  validCents?: number | null;
+  excludedFX?: number;
+  excludedDistance?: number;
+  bid?: Board;
+  ask?: Board;
   hasMore: boolean;
   snapshotExpired?: boolean;
   newSnapshotAvailable?: boolean;
@@ -60,21 +70,48 @@ const stamp = (s?: string | null) =>
         hour12: false,
       })
     : "未知";
+type Filter = {
+  venue: string;
+  minUsd: string;
+  distance: string;
+  sort: string;
+  limit: number;
+  offset: number;
+};
+const initialFilter = (): Filter => ({
+  venue: "all",
+  minUsd: "",
+  distance: "0",
+  sort: "amount_desc",
+  limit: 50,
+  offset: 0,
+});
+const venues = ["all", "Binance", "OKX", "Coinbase", "Kraken", "Bitfinex"];
+const sorts = [
+  ["amount_desc", "金额：从大到小"],
+  ["amount_asc", "金额：从小到大"],
+  ["price_asc", "价格：从低到高"],
+  ["price_desc", "价格：从高到低"],
+  ["distance_asc", "距参考价：从近到远"],
+  ["duration_desc", "时长：从长到短"],
+];
 export function LargeOrderBoard({ asset }: { asset: Asset }) {
-  const [side, setSide] = useState("all"),
-    [venue, setVenue] = useState("all"),
-    [sort, setSort] = useState("amount_desc"),
-    [min, setMin] = useState(""),
-    [limit, setLimit] = useState(50),
-    [offset, setOffset] = useState(0),
-    [history, setHistory] = useState(false);
+  const [filters, setFilters] = useState({
+    bid: initialFilter(),
+    ask: initialFilter(),
+  });
+  const [mobileSide, setMobileSide] = useState<"bid" | "ask">("bid");
+  const [history, setHistory] = useState(false),
+    [historyOffset, setHistoryOffset] = useState(0);
   const [version, setVersion] = useState(""),
     [refresh, setRefresh] = useState(0),
-    [d, setData] = useState<Board | null>(null),
+    [tick, setTick] = useState(0);
+  const [d, setData] = useState<Board | null>(null),
     [error, setError] = useState(""),
-    [loading, setLoading] = useState(false),
-    [selected, setSelected] = useState<Order | null>(null),
-    [hasNew, setHasNew] = useState(false);
+    [loading, setLoading] = useState(false);
+  const [selected, setSelected] = useState<Order | null>(null);
+  const dialog = useRef<HTMLDialogElement>(null),
+    opener = useRef<HTMLElement | null>(null);
   const [eventsOpen, setEventsOpen] = useState(false),
     [eventHours, setEventHours] = useState(1),
     [eventOffset, setEventOffset] = useState(0);
@@ -95,35 +132,48 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
       : null,
     300000,
   );
-  const dialog = useRef<HTMLDialogElement>(null);
-  const [tick, setTick] = useState(0);
   useEffect(() => {
     const t = setInterval(() => setTick((n) => n + 1), 15000);
     return () => clearInterval(t);
   }, []);
   useEffect(() => {
-    if (selected) dialog.current?.showModal();
+    if (selected && !dialog.current?.open) dialog.current?.showModal();
   }, [selected]);
+  useEffect(() => {
+    setVersion("");
+    setData(null);
+    setFilters({ bid: initialFilter(), ask: initialFilter() });
+    setSelected(null);
+    setHistoryOffset(0);
+  }, [asset]);
   useEffect(() => {
     let alive = true;
     setLoading(true);
     setError("");
     const q = new URLSearchParams({
       asset,
-      side,
-      venue,
-      sort,
-      minUsd: min || "0",
-      limit: String(limit),
-      offset: String(offset),
-      history: history ? "1" : "0",
+      layout: "split",
       version,
+      history: history ? "1" : "0",
+      offset: String(historyOffset),
+      limit: "50",
     });
+    for (const side of ["bid", "ask"] as const)
+      for (const [k, v] of Object.entries(filters[side]))
+        q.set(`${side}_${k}`, String(v));
     api<Board>("large-orders?" + q)
       .then((v) => {
         if (!alive) return;
         setData(v);
-        setHasNew(!!v.newSnapshotAvailable);
+        setSelected((old) =>
+          old
+            ? [
+                ...(v.items || []),
+                ...(v.bid?.items || []),
+                ...(v.ask?.items || []),
+              ].find((o) => o.id === old.id) || old
+            : null,
+        );
         if (!version && v.version) setVersion(v.version);
       })
       .catch((e) => alive && setError(e.message))
@@ -131,272 +181,292 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
     return () => {
       alive = false;
     };
-  }, [
-    asset,
-    side,
-    venue,
-    sort,
-    min,
-    limit,
-    offset,
-    history,
-    version,
-    refresh,
-    tick,
-  ]);
+  }, [asset, filters, history, historyOffset, version, refresh, tick]);
+  function closeDetail() {
+    dialog.current?.close();
+    setSelected(null);
+    opener.current?.focus();
+  }
   function fresh() {
     setVersion("");
-    setOffset(0);
-    setSelected(null);
-    setHasNew(false);
+    setData(null);
+    setFilters((f) => ({
+      bid: { ...f.bid, offset: 0 },
+      ask: { ...f.ask, offset: 0 },
+    }));
+    setHistoryOffset(0);
+    closeDetail();
     setRefresh((n) => n + 1);
   }
-  const changed = (f: () => void) => {
-    f();
-    setOffset(0);
-    setSelected(null);
-  };
+  function change(
+    side: "bid" | "ask",
+    key: keyof Filter,
+    value: string | number,
+  ) {
+    setFilters((f) => ({
+      ...f,
+      [side]: {
+        ...f[side],
+        [key]: value,
+        offset: key === "offset" ? value : 0,
+      },
+    }));
+  }
+  function select(o: Order, el: HTMLElement) {
+    opener.current = el;
+    setSelected(o);
+  }
+  const visibleItems = history
+    ? d?.items || []
+    : [...(d?.bid?.items || []), ...(d?.ask?.items || [])];
+  const different = ["venue", "minUsd", "distance"].some(
+    (k) => filters.bid[k as keyof Filter] !== filters.ask[k as keyof Filter],
+  );
   return (
     <section className="order-board">
       <div className="research-heading">
         <div>
           <span className="eyebrow">独立观察 · 不计入普通买卖墙或BTC信号</span>
           <h2>大额挂单看板</h2>
-          <p>五家交易所已获取的大单样本 · 约5分钟采集，12分钟有效</p>
+          <p>五家交易所已获取样本 · 约5分钟采集 · 金额固定于所选快照</p>
         </div>
         <button className="secondary" onClick={fresh} disabled={loading}>
-          {loading ? "读取中…" : hasNew ? "新快照可用 · 刷新" : "刷新快照"}
+          {loading
+            ? "读取中…"
+            : d?.newSnapshotAvailable
+              ? "新快照可用 · 刷新两侧"
+              : "刷新两侧快照"}
         </button>
       </div>
       <div className="research-tabs">
         <button
-          aria-pressed={!history}
           className={!history ? "active" : ""}
-          onClick={() =>
-            changed(() => {
-              setHistory(false);
-              setVersion("");
-            })
-          }
+          aria-pressed={!history}
+          onClick={() => {
+            setHistory(false);
+            fresh();
+          }}
         >
           当前挂单
         </button>
         <button
-          aria-pressed={history}
           className={history ? "active" : ""}
-          onClick={() =>
-            changed(() => {
-              setHistory(true);
-              setVersion("");
-            })
-          }
+          aria-pressed={history}
+          onClick={() => {
+            setHistory(true);
+            fresh();
+          }}
         >
           历史结束记录
         </button>
       </div>
-      {!history && (
-        <>
-          <div className="order-filters">
-            <label>
-              方向
-              <select
-                value={side}
-                onChange={(e) => changed(() => setSide(e.target.value))}
-              >
-                <option value="all">全部买卖</option>
-                <option value="bid">买单</option>
-                <option value="ask">卖单</option>
-              </select>
-            </label>
-            <label>
-              交易所
-              <select
-                value={venue}
-                onChange={(e) => changed(() => setVenue(e.target.value))}
-              >
-                {[
-                  "all",
-                  "Binance",
-                  "OKX",
-                  "Coinbase",
-                  "Kraken",
-                  "Bitfinex",
-                ].map((x) => (
-                  <option key={x} value={x}>
-                    {x === "all" ? "全部来源" : x}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              最低金额 · USD
-              <input
-                type="number"
-                min="0"
-                placeholder="不限"
-                value={min}
-                onChange={(e) => changed(() => setMin(e.target.value))}
-              />
-            </label>
-            <label>
-              排序
-              <select
-                value={sort}
-                onChange={(e) => changed(() => setSort(e.target.value))}
-              >
-                {[
-                  ["amount_desc", "金额：从大到小"],
-                  ["amount_asc", "金额：从小到大"],
-                  ["price_asc", "价格：从低到高"],
-                  ["price_desc", "价格：从高到低"],
-                  ["distance_asc", "距现价：从近到远"],
-                  ["duration_desc", "时长：从长到短"],
-                ].map(([v, n]) => (
-                  <option value={v} key={v}>
-                    {n}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          <div className="range-summary">
-            <div>
-              <span>筛选范围内有效买单</span>
-              <strong className="buy">
-                {d?.bidCents != null ? amount(d.bidCents) : "—"}
-              </strong>
-            </div>
-            <div>
-              <span>筛选范围内有效卖单</span>
-              <strong className="sell">
-                {d?.askCents != null ? amount(d.askCents) : "—"}
-              </strong>
-            </div>
-            <div>
-              <span>已获取 / 筛选后 / 有效</span>
-              <strong>
-                {d?.total != null
-                  ? `${d.fetchedCount} / ${d.total} / ${d.validCount}`
-                  : "—"}
-              </strong>
-            </div>
-          </div>
-        </>
-      )}
       {error && (
-        <p className="sell" role="alert">
+        <p role="alert" className="sell">
           {error}
         </p>
       )}
+      <p className="helper">
+        {d?.note} {d?.at && `所选快照 ${stamp(d.at)}（北京时间）`}
+      </p>
       {d?.snapshotExpired ? (
-        <p className="amber">快照已过期，请刷新；筛选条件会保留。</p>
-      ) : (
+        <p role="status" className="amber">
+          快照已过期，请刷新两侧；筛选条件保留。
+        </p>
+      ) : history ? (
         <>
-          <p className="helper">
-            {d?.note} {d?.at && `快照 ${stamp(d.at)}`} ·{" "}
-            {history
-              ? "历史记录分批展示"
-              : `当前展示 ${d?.items.length ? offset + 1 : 0}–${offset + (d?.items.length || 0)} / ${d?.total ?? 0} 条`}
-          </p>
-          <div className="order-board-head">
-            <span>来源 / 方向 / 价格</span>
-            <span>剩余金额 · USD</span>
-            <span>已出现时长</span>
-            <span>数据状态</span>
-          </div>
-          <div className="order-board-list">
-            {d?.items.map((o) => (
-              <button
-                key={o.id}
-                className={`order-board-row ${o.side === "bid" ? "buy" : "sell"} ${!o.valid ? "stale-row" : ""}`}
-                onClick={() => setSelected(o)}
-              >
-                <span>
-                  <b>
-                    {o.side === "bid" ? "买单" : "卖单"} · {o.venue}
-                  </b>
-                  <strong>
-                    {price(+o.price)} <small>{o.quote}</small>
-                  </strong>
-                  <small>
-                    {o.distancePercent == null
-                      ? "距现价未知"
-                      : `${o.distancePercent > 0 ? "+" : ""}${o.distancePercent.toFixed(2)}%`}
-                  </small>
-                </span>
-                <span className="order-amount">
-                  <meter
-                    min={0}
-                    max={Math.max(1, d.scaleMaxCents || 1)}
-                    value={o.usdCents || 0}
-                  />
-                  <strong>
-                    {o.historical
-                      ? "已结束"
-                      : o.usdCents == null
-                        ? "汇率不可用"
-                        : amount(o.usdCents)}
-                  </strong>
-                </span>
-                <span>
-                  {o.durationSeconds == null
-                    ? "时长未知"
-                    : age(o.durationSeconds)}
-                  <small>
-                    {o.durationSeconds != null
-                      ? o.durationBasis === "local_observed"
-                        ? "本地已观察"
-                        : "自来源创建"
-                      : "创建时间未知"}
-                  </small>
-                  <small>截至 {clock(o.durationThrough || o.fetchedAt)}</small>
-                </span>
-                <span className="order-state">
-                  {o.historical || o.rawState > 1
-                    ? o.state
-                    : o.valid
-                      ? "快照有效"
-                      : "快照或换算已过期"}
-                  <small>{clock(o.fetchedAt)} 获取</small>
-                </span>
-              </button>
-            ))}
-          </div>
-          {!d?.items.length && !loading && (
-            <p className="empty">
-              没有符合筛选条件的已获取记录，不代表市场没有挂单。
-            </p>
-          )}
+          <OrderRows
+            items={d?.items || []}
+            scale={d?.scaleMaxCents || 1}
+            onSelect={select}
+          />
           <div className="pagination">
             <button
-              disabled={loading || offset === 0}
-              onClick={() => {
-                setOffset((n) => Math.max(0, n - limit));
-                setSelected(null);
-              }}
+              disabled={loading || !historyOffset}
+              onClick={() => setHistoryOffset((n) => Math.max(0, n - 50))}
             >
               上一页
             </button>
-            <span>第{Math.floor(offset / limit) + 1}页</span>
+            <span>第{historyOffset / 50 + 1}页</span>
             <button
               disabled={loading || !d?.hasMore}
-              onClick={() => {
-                setOffset((n) => n + limit);
-                setSelected(null);
-              }}
+              onClick={() => setHistoryOffset((n) => n + 50)}
             >
               下一页
             </button>
-            <label>
-              每页
-              <select
-                value={limit}
-                onChange={(e) => changed(() => setLimit(+e.target.value))}
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="split-summaries">
+            {(["bid", "ask"] as const).map((side) => (
+              <div key={side}>
+                <span>{side === "bid" ? "买单" : "卖单"} · 所选快照金额</span>
+                <strong className={side === "bid" ? "buy" : "sell"}>
+                  {d?.[side]?.snapshotCents == null
+                    ? "—"
+                    : amount(d[side]!.snapshotCents!)}
+                </strong>
+                <small>
+                  仍有效{" "}
+                  {d?.[side]?.validCents == null
+                    ? "—"
+                    : amount(d[side]!.validCents!)}{" "}
+                  USD · 已失效记录不计入
+                </small>
+              </div>
+            ))}
+          </div>
+          <p className="helper">
+            两列共用美元线性比例尺，包含全部筛选分页。
+            {different
+              ? "两侧筛选条件不同，金额不可直接比较市场强弱。"
+              : "快照金额不是期间成交，也不是市场全部挂单。"}
+          </p>
+          <div
+            className="order-mobile-tabs"
+            role="group"
+            aria-label="查看买单或卖单"
+          >
+            {(["bid", "ask"] as const).map((side) => (
+              <button
+                key={side}
+                aria-pressed={mobileSide === side}
+                onClick={() => setMobileSide(side)}
               >
-                <option value={50}>50条</option>
-                <option value={100}>100条</option>
-              </select>
-            </label>
+                {side === "bid" ? "买单" : "卖单"} · {d?.[side]?.total ?? "—"}条
+              </button>
+            ))}
+          </div>
+          <div className="order-columns">
+            {(["bid", "ask"] as const).map((side) => {
+              const col = d?.[side],
+                f = filters[side],
+                name = side === "bid" ? "买单" : "卖单";
+              return (
+                <section
+                  key={side}
+                  className={`order-column ${side === mobileSide ? "mobile-active" : ""}`}
+                  aria-label={`${name}列表`}
+                >
+                  <h3 className={side === "bid" ? "buy" : "sell"}>{name}</h3>
+                  <div className="order-side-filters">
+                    <label>
+                      交易所
+                      <select
+                        aria-label={`${name}交易所`}
+                        value={f.venue}
+                        onChange={(e) => change(side, "venue", e.target.value)}
+                      >
+                        {venues.map((v) => (
+                          <option key={v} value={v}>
+                            {v === "all" ? "全部来源" : v}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      最低金额 · USD
+                      <input
+                        aria-label={`${name}最低金额`}
+                        type="number"
+                        min="0"
+                        value={f.minUsd}
+                        placeholder="不限"
+                        onChange={(e) => change(side, "minUsd", e.target.value)}
+                      />
+                    </label>
+                    <label>
+                      距参考价
+                      <select
+                        aria-label={`${name}价格范围`}
+                        value={f.distance}
+                        onChange={(e) =>
+                          change(side, "distance", e.target.value)
+                        }
+                      >
+                        {[
+                          ["0", "全部已获取范围"],
+                          ["1", "附近 ±1%"],
+                          ["5", "附近 ±5%"],
+                          ["10", "附近 ±10%"],
+                        ].map(([v, n]) => (
+                          <option key={v} value={v}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      排序
+                      <select
+                        aria-label={`${name}排序`}
+                        value={f.sort}
+                        onChange={(e) => change(side, "sort", e.target.value)}
+                      >
+                        {sorts.map(([v, n]) => (
+                          <option key={v} value={v}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <p className="helper">
+                    已获取 {col?.fetchedCount ?? "—"} · 筛选后{" "}
+                    {col?.total ?? "—"} · 有效 {col?.validCount ?? "—"}
+                    <br />
+                    本页 {col?.items.length ? f.offset + 1 : 0}–
+                    {f.offset + (col?.items.length || 0)} 条
+                  </p>
+                  {!!(col?.excludedFX || col?.excludedDistance) && (
+                    <p className="amber">
+                      筛选排除：美元金额未知 {col?.excludedFX || 0}{" "}
+                      条，参考距离未知 {col?.excludedDistance || 0} 条。
+                    </p>
+                  )}
+                  <OrderRows
+                    items={col?.items || []}
+                    scale={d?.scaleMaxCents || 1}
+                    onSelect={select}
+                  />
+                  {!loading && !col?.items.length && (
+                    <p className="empty">
+                      暂无符合条件的已获取{name}，不代表市场没有挂单。
+                    </p>
+                  )}
+                  <div className="pagination">
+                    <button
+                      aria-label={`${name}上一页`}
+                      disabled={loading || !f.offset}
+                      onClick={() =>
+                        change(side, "offset", Math.max(0, f.offset - f.limit))
+                      }
+                    >
+                      上一页
+                    </button>
+                    <span>第{Math.floor(f.offset / f.limit) + 1}页</span>
+                    <button
+                      aria-label={`${name}下一页`}
+                      disabled={loading || !col?.hasMore}
+                      onClick={() => change(side, "offset", f.offset + f.limit)}
+                    >
+                      下一页
+                    </button>
+                    <label>
+                      每页
+                      <select
+                        aria-label={`${name}每页条数`}
+                        value={f.limit}
+                        onChange={(e) => change(side, "limit", +e.target.value)}
+                      >
+                        <option value={50}>50条</option>
+                        <option value={100}>100条</option>
+                      </select>
+                    </label>
+                  </div>
+                </section>
+              );
+            })}
           </div>
         </>
       )}
@@ -412,9 +482,24 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
               {selected.venue} · {selected.side === "bid" ? "买单" : "卖单"}{" "}
               {price(+selected.price)} {selected.quote}
             </h3>
-            <button onClick={() => setSelected(null)}>关闭详情</button>
+            <button onClick={closeDetail}>关闭详情</button>
           </div>
           <dl>
+            <dt>当前核对结果</dt>
+            <dd>{selected.presenceNote || selected.state}</dd>
+            <dt>最新核对 / 最后返回</dt>
+            <dd>
+              {stamp(selected.checkedAt)} /{" "}
+              {stamp(selected.lastReturnedAt || selected.fetchedAt)}
+            </dd>
+            {selected.nearReference && (
+              <>
+                <dt>临近提示</dt>
+                <dd>
+                  距所选快照参考价不足0.3%；等候新快照，不代表该交易所已触及。
+                </dd>
+              </>
+            )}
             <dt>来源创建</dt>
             <dd>{stamp(selected.startAt)}</dd>
             <dt>最后变更</dt>
@@ -448,7 +533,7 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
         <p className="helper">
           线长代表创建至快照的跨度；本地观察另行标注，不表示金额始终未变。全部数值截至各自快照。
         </p>
-        {d?.items
+        {visibleItems
           .filter((o) => o.durationSeconds != null)
           .map((o) => (
             <div
@@ -461,7 +546,7 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
               <meter
                 max={Math.max(
                   1,
-                  ...(d?.items ?? []).map((v) => v.durationSeconds ?? 0),
+                  ...visibleItems.map((v) => v.durationSeconds ?? 0),
                 )}
                 value={o.durationSeconds ?? 0}
               />
@@ -537,5 +622,69 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
         ))}
       </details>
     </section>
+  );
+}
+function OrderRows({
+  items,
+  scale,
+  onSelect,
+}: {
+  items: Order[];
+  scale: number;
+  onSelect: (o: Order, el: HTMLElement) => void;
+}) {
+  return (
+    <div className="order-board-list">
+      {items.map((o) => (
+        <button
+          key={o.id}
+          className={`order-split-row ${o.side === "bid" ? "buy" : "sell"} ${!o.valid ? "stale-row" : ""}`}
+          onClick={(e) => onSelect(o, e.currentTarget)}
+        >
+          <span className="order-row-top">
+            <strong>
+              {price(+o.price)} <small>{o.quote}</small>
+            </strong>
+            <b>
+              {o.historical
+                ? "已结束"
+                : o.usdCents == null
+                  ? "换算未知"
+                  : amount(o.usdCents)}
+            </b>
+          </span>
+          <span className="order-amount">
+            <meter
+              aria-label={`${o.venue}${o.side === "bid" ? "买单" : "卖单"}所选快照美元金额`}
+              min={0}
+              max={Math.max(1, scale)}
+              value={o.usdCents || 0}
+            />
+          </span>
+          <span className="order-row-meta">
+            <span>
+              {o.venue} · {o.side === "bid" ? "买单" : "卖单"}
+            </span>
+            <span>
+              {o.distancePercent == null
+                ? "参考距离未知"
+                : `${o.distancePercent > 0 ? "+" : ""}${o.distancePercent.toFixed(2)}% 距参考价`}
+            </span>
+          </span>
+          <span className="order-row-meta">
+            <span>
+              {o.durationSeconds == null
+                ? "时长未知"
+                : `${age(o.durationSeconds)} · ${o.durationBasis === "local_observed" ? "本地观察" : "来源创建"}`}
+            </span>
+            <span>截至 {clock(o.durationThrough || o.fetchedAt)}</span>
+          </span>
+          <span className="order-state">
+            {o.presenceNote || o.state}
+            {o.nearReference && " · 临近参考价，待新快照"}
+          </span>
+        </button>
+      ))}
+    </div>
   );
 }

@@ -88,6 +88,10 @@ CREATE TABLE IF NOT EXISTS rollups(dataset TEXT,res INTEGER,through_ts INTEGER,P
 		db.Close()
 		return nil, e
 	}
+	if e = w.initLiquidity(); e != nil {
+		db.Close()
+		return nil, e
+	}
 	if e = w.initResearch(); e != nil {
 		db.Close()
 		return nil, e

@@ -1,5 +1,31 @@
 export type Asset = "BTC" | "ETH";
+export type LiquidityChange = {
+  key: string;
+  venue: string;
+  quote: string;
+  side: string;
+  quoteLow: number;
+  step: number;
+  displayLow: number;
+  displayHigh: number;
+  from: string | null;
+  at: string;
+  knownAt: string;
+  kind: string;
+  Before: string | null;
+  After: string | null;
+  BeforeQuote: string | null;
+  AfterQuote: string | null;
+  decreasePercent: number | null;
+  nearReference: boolean;
+  referenceDistancePercent: number;
+  note: string;
+  tradeNote?: string;
+  tradeKnownAt?: string;
+};
 export type Zone = {
+  changes?: LiquidityChange[];
+  nearReference?: boolean;
   updatedAt?: string;
   sampled?: boolean;
   percentile?: number | null;
@@ -38,6 +64,7 @@ export type Coverage = {
   resyncs: number;
 };
 export type Frame = {
+  recentChanges?: LiquidityChange[];
   summary?: {
     bidCents: number;
     askCents: number;
