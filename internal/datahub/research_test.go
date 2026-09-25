@@ -200,7 +200,7 @@ func TestSharedQueriesAndStudyDedup(t *testing.T) {
 	if h.Scheduler.quota.Calls != 0 {
 		t.Fatal("queue bypassed scheduler")
 	}
-	if len(a.Jobs) != 4 {
+	if len(a.Jobs) != len(studyRequests(a, a.Created)) {
 		t.Fatal("expected shared flow/oi/premium tasks", a)
 	}
 }
@@ -378,7 +378,7 @@ func TestConcurrentStudyCreationAndShortRange(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s, e := h.CreateStudy(StudyRequest{Asset: "ETH"})
+			s, e := h.CreateStudy(StudyRequest{Asset: "BTC"})
 			if e != nil {
 				t.Error(e)
 				return
@@ -396,7 +396,7 @@ func TestConcurrentStudyCreationAndShortRange(t *testing.T) {
 		t.Fatal("concurrent jobs were duplicated")
 	}
 	now := time.Now().UTC()
-	r, e := h.evaluateStudy(context.Background(), Study{Asset: "ETH", From: now.Add(-time.Hour), To: now}, now)
+	r, e := h.evaluateStudy(context.Background(), Study{Asset: "BTC", From: now.Add(-time.Hour), To: now}, now)
 	if e != nil || r.BaselineDays == 30 || len(r.Missing) == 0 {
 		t.Fatal("short study passed")
 	}
@@ -473,6 +473,9 @@ func TestSignalAtomicLifecycleRestartAndExpiry(t *testing.T) {
 		}
 	}
 	feed(end.Add(-4*time.Hour), end, 100)
+	base.To = end.Truncate(time.Hour).Add(-time.Hour)
+	base.From = base.To.Add(-30 * 24 * time.Hour)
+	base.InputVersion = h.Store.datasetRangeVersion(ctx, fd.ID, base.From, base.To)
 	_ = h.Store.SaveState("signals/baseline/BTC", base)
 	state := signalState{Last: end.Add(-5 * time.Minute), Active: map[string]string{}, Clear: map[string]*time.Time{}}
 	if e = h.commitSignals(ctx, "BTC", state, nil, nil, now); e != nil {

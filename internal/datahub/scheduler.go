@@ -23,7 +23,40 @@ type OrderRange struct {
 	To   time.Time `json:"to"`
 }
 
+func mergeRanges(ranges []OrderRange) []OrderRange {
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i].From.Before(ranges[j].From) })
+	out := make([]OrderRange, 0, len(ranges))
+	for _, r := range ranges {
+		if !r.From.Before(r.To) {
+			continue
+		}
+		if len(out) > 0 && !r.From.After(out[len(out)-1].To) {
+			if r.To.After(out[len(out)-1].To) {
+				out[len(out)-1].To = r.To
+			}
+		} else {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+var errHistoryRange = errors.New("上游返回的时点不在请求窗口内")
+
+type HistoryGap struct {
+	From   time.Time `json:"from"`
+	To     time.Time `json:"to"`
+	Reason string    `json:"reason"`
+}
 type Job struct {
+	ReusedLocal bool         `json:"reusedLocal,omitempty"`
+	RangeStart  *time.Time   `json:"requestedFrom,omitempty"`
+	RangeEnd    *time.Time   `json:"requestedTo,omitempty"`
+	Covered     []OrderRange `json:"covered,omitempty"`
+	Gaps        []HistoryGap `json:"gaps,omitempty"`
+	ErrorKind   string       `json:"errorKind,omitempty"`
+	Purpose     string       `json:"purpose,omitempty"`
+
 	ContractStatus string       `json:"contractStatus,omitempty"`
 	OrderRanges    []OrderRange `json:"orderRanges,omitempty"`
 	OrderThrough   *time.Time   `json:"orderThrough,omitempty"`
@@ -187,6 +220,7 @@ func NewScheduler(store *Warehouse, registry []Dataset, fetch Fetcher, enabled b
 				j.Next = now.Add(phase)
 			}
 		}
+		j.Disabled = j.Disabled || d.Disabled
 		s.jobs[j.ID] = &j
 	}
 	for _, j := range saved {
@@ -195,6 +229,10 @@ func NewScheduler(store *Warehouse, registry []Dataset, fetch Fetcher, enabled b
 				j.Dataset.TTL = WhaleTTLSeconds
 			}
 			j.InFlight = false
+			if j.Dataset.Asset == "ETH" && (j.Dataset.Kind == "flow" || j.Dataset.Kind == "oi-history") {
+				j.Disabled = true
+				j.Error = "ETH研究已停用"
+			}
 			s.jobs[j.ID] = &j
 		}
 	}
@@ -218,6 +256,8 @@ func (s *Scheduler) State() map[string]any {
 	for _, j := range s.jobs {
 		cp := *j
 		cp.Dataset.Params = nil
+		cp.Covered = append([]OrderRange(nil), j.Covered...)
+		cp.Gaps = append([]HistoryGap(nil), j.Gaps...)
 		jobs = append(jobs, cp)
 	}
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].ID < jobs[j].ID })
@@ -232,7 +272,14 @@ func (s *Scheduler) priority(j *Job, now time.Time) float64 {
 			p = 4500 - wait/2
 		}
 		if j.Mode == "baseline" {
-			p = 5500 - wait/2
+			p = 5500 - min(wait/2, 500)
+		}
+		if j.Purpose == "signal_baseline" {
+			p = 1000 - min(wait/2, 500)
+		} else if j.Purpose == "case" {
+			p = 2000 - min(wait/2, 500)
+		} else if j.Purpose == "research" {
+			p = 4000 - min(wait/2, 500)
 		}
 	}
 	if j.Mode == "live" && j.Dataset.Kind != "large-history" {
@@ -334,16 +381,18 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 	}
 	var last time.Time
 	valid := 0
+	accepted := []Observation{}
 	if err == nil {
 		for _, o := range observations {
 			if j.From != nil && o.Time().Before(*j.From) {
 				continue
 			}
-			if j.To != nil && !o.Time().Before(*j.To) {
+			if j.From != nil && j.To != nil && !o.Time().Before(minTime(*j.To, j.From.Add(time.Duration(max(60, d.Resolution)*pageSize)*time.Second))) {
 				continue
 			}
 			if o.Quality != "missing" {
 				valid++
+				accepted = append(accepted, o)
 			}
 			if o.Time().After(last) {
 				last = o.Time()
@@ -353,8 +402,17 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 				break
 			}
 		}
-		if valid == 0 {
+		if valid == 0 && err == nil {
 			err = ErrNoData
+			if len(observations) > 0 && j.From != nil && len(accepted) == 0 {
+				outside := true
+				for _, o := range observations {
+					outside = outside && (o.Time().Before(*j.From) || !o.Time().Before(*j.To))
+				}
+				if outside {
+					err = errHistoryRange
+				}
+			}
 		}
 	}
 	s.mu.Lock()
@@ -366,6 +424,30 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 	if err != nil {
 		current.Failures++
 		current.Error = err.Error()
+		current.ErrorKind = "transient"
+		if j.Mode == "history" {
+			var fe *FetchError
+			switch {
+			case errors.Is(err, errHistoryRange):
+				current.ErrorKind = "range_mismatch"
+				current.Disabled = true
+			case errors.As(err, &fe) && (fe.Code == "400" || fe.Status == 400):
+				current.ErrorKind = "request_rejected"
+				current.Disabled = true
+			case errors.Is(err, ErrNoData):
+				current.ErrorKind = "empty_window"
+				if current.Failures >= 2 {
+					current.Disabled = true
+				}
+			case contractError:
+				current.ErrorKind = "contract_mismatch"
+				current.Disabled = true
+			}
+			if current.Disabled && j.From != nil && j.To != nil {
+				end := minTime(*j.To, j.From.Add(time.Duration(max(60, d.Resolution)*pageSize)*time.Second))
+				current.Gaps = append(current.Gaps, HistoryGap{*j.From, end, current.ErrorKind})
+			}
+		}
 		if d.Contract && current.LastSuccess == nil && contractError {
 			current.ContractStatus = "failed"
 			current.Disabled = true
@@ -392,6 +474,7 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 		}
 	} else {
 		current.Error = ""
+		current.ErrorKind = ""
 		current.Failures = 0
 		current.LastSuccess = &fetched
 		if d.Contract {
@@ -407,6 +490,24 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 				current.Next = nextETF(now)
 			}
 		} else if j.From != nil && j.To != nil {
+			sort.Slice(accepted, func(i, k int) bool { return recordTime(accepted[i]).Before(recordTime(accepted[k])) })
+			cursor := *j.From
+			for _, o := range accepted {
+				at := recordTime(o)
+				if at.Before(cursor) || !at.Before(*j.To) {
+					continue
+				}
+				if at.After(cursor) {
+					current.Gaps = append(current.Gaps, HistoryGap{cursor, at, "missing_samples"})
+				}
+				end := at.Add(time.Duration(max(60, d.Resolution)) * time.Second)
+				current.Covered = append(current.Covered, OrderRange{at, end})
+				cursor = end
+			}
+			current.Covered = mergeRanges(current.Covered)
+			if len(current.Gaps) > 128 {
+				current.Gaps = current.Gaps[:128]
+			}
 			next := last.Add(time.Duration(max(60, d.Resolution)) * time.Second)
 			if !next.After(*j.From) {
 				current.Error = "历史接口未推进，停止重复补采"
@@ -440,6 +541,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 }
 
 type DataRequest struct {
+	Purpose    string     `json:"purpose,omitempty"`
 	Dataset    string     `json:"dataset"`
 	From       *time.Time `json:"from"`
 	To         *time.Time `json:"to"`
@@ -451,9 +553,15 @@ type DataRequest struct {
 var publicAddress = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
 
 func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job, error) {
+	if req.Purpose != "" && req.Purpose != "signal_baseline" && req.Purpose != "case" && req.Purpose != "research" {
+		return Job{}, errors.New("无效研究任务用途")
+	}
 	d, e := FindDataset(req.Dataset)
 	if e != nil {
 		return Job{}, e
+	}
+	if d.Disabled {
+		return Job{}, errors.New("该研究数据集已停采")
 	}
 	if d.Source != "coinglass" {
 		return Job{}, errors.New("该数据不使用CoinGlass按需队列")
@@ -519,19 +627,22 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 		}
 		id = fmt.Sprintf("%s@history%d", d.ID, req.Resolution)
 	}
+	if req.Purpose != "" {
+		if !researchAsset(d.Asset) || req.From == nil || req.To == nil {
+			return Job{}, errors.New("研究仅支持BTC时间窗口")
+		}
+		hash := sha256.Sum256([]byte(req.From.UTC().Format(time.RFC3339) + "/" + req.To.UTC().Format(time.RFC3339)))
+		id += fmt.Sprintf("/v23/%s/%x", req.Purpose, hash[:8])
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.jobs) >= 128 {
-		for key, j := range s.jobs {
-			if j.Mode != "live" && !j.InFlight && (j.Completed || j.Disabled) && j.LastSuccess != nil && now.Sub(*j.LastSuccess) > 24*time.Hour {
-				delete(s.jobs, key)
-			}
-		}
-		if len(s.jobs) >= 128 {
-			return Job{}, errors.New("任务记录达到上限，请等待过期清理")
-		}
-	}
 	if old, ok := s.jobs[id]; ok {
+		if req.Purpose != "" {
+			return *old, nil
+		}
+		if old.Disabled {
+			return *old, nil
+		}
 		if old.Mode == "live" {
 			return *old, nil
 		}
@@ -556,20 +667,70 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 		_ = s.persistLocked()
 		return *old, nil
 	}
+	var archived Job
+	if req.Purpose != "" && s.store.document(context.Background(), "history-job", id, &archived) == nil {
+		return archived, nil
+	}
+	if len(s.jobs) >= 128 {
+		keys := []string{}
+		for key, j := range s.jobs {
+			if j.Mode != "live" && !j.InFlight && (j.Completed || j.Disabled) {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			j := s.jobs[key]
+			if e := s.store.saveDocument("history-job", key, j.Dataset.Asset, now, j); e != nil {
+				return Job{}, e
+			}
+			delete(s.jobs, key)
+			if len(s.jobs) < 120 {
+				break
+			}
+		}
+		if len(s.jobs) >= 128 {
+			return Job{}, errors.New("任务记录达到上限，请等待正在执行的任务结束")
+		}
+	}
 	active := 0
 	for _, j := range s.jobs {
-		if j.Mode != "live" && !j.Completed {
+		if j.Mode != "live" && !j.Completed && !j.Disabled {
 			active++
 		}
 	}
-	if active >= 32 {
+	reused := false
+	if req.Purpose != "" && req.From != nil && req.To != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		reused = s.store.completeNativeWindow(ctx, d, *req.From, *req.To, now)
+		cancel()
+	}
+	if active >= 32 && !reused {
 		return Job{}, errors.New("后台队列已满，请稍后再试")
 	}
-	j := Job{ID: id, Dataset: d, Mode: mode, Next: now, From: req.From, To: req.To}
+	j := Job{ID: id, Dataset: d, Mode: mode, Next: now, From: req.From, To: req.To, RangeStart: req.From, RangeEnd: req.To, Purpose: req.Purpose}
+	if reused {
+		j.ReusedLocal = true
+		j.Completed = true
+		j.LastSuccess = &now
+		j.Covered = []OrderRange{{*req.From, *req.To}}
+	}
 	s.jobs[id] = &j
 	if e = s.persistLocked(); e != nil {
 		delete(s.jobs, id)
 		return Job{}, e
 	}
 	return j, nil
+}
+
+// Caller holds s.mu. Archived terminal jobs preserve range capability and dedup.
+func (s *Scheduler) historyJobLocked(id string) (*Job, bool) {
+	if j, ok := s.jobs[id]; ok {
+		return j, true
+	}
+	var j Job
+	if s.store.document(context.Background(), "history-job", id, &j) == nil {
+		return &j, true
+	}
+	return nil, false
 }

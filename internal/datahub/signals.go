@@ -27,18 +27,19 @@ func (b FlowBar) Share() float64 {
 }
 
 type SignalBaseline struct {
-	At       time.Time `json:"at"`
-	From     time.Time `json:"from"`
-	To       time.Time `json:"to"`
-	Coverage float64   `json:"coverage"`
-	Dates    int       `json:"validDates"`
-	Valid    bool      `json:"valid"`
-	P95      float64   `json:"p95Cents"`
-	P05      float64   `json:"p05Cents"`
-	P90      float64   `json:"p90HourCents"`
-	P10      float64   `json:"p10HourCents"`
-	Median15 float64   `json:"median15VolumeCents"`
-	Median60 float64   `json:"median60VolumeCents"`
+	InputVersion string    `json:"inputVersion,omitempty"`
+	At           time.Time `json:"at"`
+	From         time.Time `json:"from"`
+	To           time.Time `json:"to"`
+	Coverage     float64   `json:"coverage"`
+	Dates        int       `json:"validDates"`
+	Valid        bool      `json:"valid"`
+	P95          float64   `json:"p95Cents"`
+	P05          float64   `json:"p05Cents"`
+	P90          float64   `json:"p90HourCents"`
+	P10          float64   `json:"p10HourCents"`
+	Median15     float64   `json:"median15VolumeCents"`
+	Median60     float64   `json:"median60VolumeCents"`
 }
 type Signal struct {
 	ID             string         `json:"id"`
@@ -65,9 +66,10 @@ type Signal struct {
 	Missing        []string       `json:"missing"`
 }
 type signalState struct {
-	Last   time.Time             `json:"last"`
-	Active map[string]string     `json:"active"`
-	Clear  map[string]*time.Time `json:"clear"`
+	InputVersion string                `json:"inputVersion"`
+	Last         time.Time             `json:"last"`
+	Active       map[string]string     `json:"active"`
+	Clear        map[string]*time.Time `json:"clear"`
 }
 
 func percentile(a []float64, p float64) float64 {
@@ -80,48 +82,62 @@ func percentile(a []float64, p float64) float64 {
 	j := min(i+1, len(a)-1)
 	return a[i] + (a[j]-a[i])*(f-float64(i))
 }
+
+type flowAccumulator struct {
+	out, direct map[int64]FlowBar
+	counts      map[int64]int
+	bad         map[int64]bool
+	res         int
+}
+
+func newFlowAccumulator(res int) *flowAccumulator {
+	return &flowAccumulator{map[int64]FlowBar{}, map[int64]FlowBar{}, map[int64]int{}, map[int64]bool{}, res}
+}
+func (f *flowAccumulator) add(o Observation) {
+	if o.Payload.Flow == nil {
+		return
+	}
+	at := recordTime(o)
+	native := max(60, o.Resolution)
+	if native > f.res || f.res%native != 0 || at.Unix()%int64(native) != 0 {
+		return
+	}
+	if native == f.res {
+		if o.Quality == "valid" {
+			f.direct[at.Unix()] = FlowBar{at, money(o.Payload.Flow.Buy), money(o.Payload.Flow.Sell)}
+		}
+		return
+	}
+	key := at.Truncate(time.Duration(f.res) * time.Second).Unix()
+	v := f.out[key]
+	v.At = time.Unix(key, 0).UTC()
+	if o.Quality != "valid" {
+		f.bad[key] = true
+	}
+	v.Buy += money(o.Payload.Flow.Buy)
+	v.Sell += money(o.Payload.Flow.Sell)
+	f.counts[key] += native
+	f.out[key] = v
+}
+func (f *flowAccumulator) finish() map[int64]FlowBar {
+	for k := range f.out {
+		if f.counts[k] != f.res || f.bad[k] {
+			delete(f.out, k)
+		}
+	}
+	for k, v := range f.direct {
+		if _, ok := f.out[k]; !ok {
+			f.out[k] = v
+		}
+	}
+	return f.out
+}
 func flowBars(rows []Observation, res int) map[int64]FlowBar {
-	out := map[int64]FlowBar{}
-	counts := map[int64]int{}
-	bad := map[int64]bool{}
-	direct := map[int64]FlowBar{}
+	f := newFlowAccumulator(res)
 	for _, o := range rows {
-		if o.Payload.Flow == nil {
-			continue
-		}
-		at := recordTime(o)
-		native := max(60, o.Resolution)
-		if native > res || res%native != 0 || at.Unix()%int64(native) != 0 {
-			continue
-		}
-		if native == res {
-			if o.Quality == "valid" {
-				direct[at.Unix()] = FlowBar{At: at, Buy: money(o.Payload.Flow.Buy), Sell: money(o.Payload.Flow.Sell)}
-			}
-			continue
-		}
-		key := at.Truncate(time.Duration(res) * time.Second).Unix()
-		b := out[key]
-		b.At = time.Unix(key, 0).UTC()
-		if o.Quality != "valid" {
-			bad[key] = true
-		}
-		b.Buy += money(o.Payload.Flow.Buy)
-		b.Sell += money(o.Payload.Flow.Sell)
-		counts[key] += native
-		out[key] = b
+		f.add(o)
 	}
-	for k := range out {
-		if counts[k] != res || bad[k] {
-			delete(out, k)
-		}
-	}
-	for k, b := range direct {
-		if _, ok := out[k]; !ok {
-			out[k] = b
-		}
-	}
-	return out
+	return f.finish()
 }
 func sumBars(bars map[int64]FlowBar, end time.Time, n int) (FlowBar, bool) {
 	b := FlowBar{At: end.Add(-time.Duration(n) * 5 * time.Minute)}
@@ -267,11 +283,11 @@ func confirms(s Signal, bars map[int64]FlowBar, candles map[int64]Candle, end ti
 	}
 	return true
 }
-func (h *Hub) signalInput(ctx context.Context, a string, from, to, asOf time.Time) ([]Observation, map[int64]Candle, error) {
-	rows := []Observation{}
+func (h *Hub) signalInput(ctx context.Context, a string, from, to, asOf time.Time) (map[int64]FlowBar, map[int64]Candle, error) {
+	acc := newFlowAccumulator(300)
 	candles := map[int64]Candle{}
 	fd := ID("flow", a, "", "spot")
-	e := h.Store.FactsAsOf(ctx, fd, from, to, asOf, func(o Observation) error { rows = append(rows, o); return nil })
+	e := h.Store.FactsAsOf(ctx, fd, from, to, asOf, func(o Observation) error { acc.add(o); return nil })
 	if e != nil {
 		return nil, nil, e
 	}
@@ -281,7 +297,7 @@ func (h *Hub) signalInput(ctx context.Context, a string, from, to, asOf time.Tim
 		}
 		return nil
 	})
-	return rows, candles, e
+	return acc.finish(), candles, e
 }
 func candleBounds(c map[int64]Candle, to time.Time) (float64, float64, float64, bool) {
 	high, low, last := 0.0, math.Inf(1), 0.0
@@ -327,7 +343,7 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 	if h.Store.Status().ResearchPaused || h.Store.Status().Paused {
 		return errors.New("容量保护：预警记录暂停，停止发出新告警")
 	}
-	for _, a := range Assets() {
+	for _, a := range ResearchAssets() {
 		var state signalState
 		if e := h.Store.document(ctx, "signal-engine", a, &state); e != nil && e != sql.ErrNoRows {
 			return e
@@ -353,14 +369,16 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 		}
 		var baseline SignalBaseline
 		_ = h.Store.LoadState("signals/baseline/"+a, &baseline)
-		if baseline.At.IsZero() || now.Sub(baseline.At) >= time.Hour {
-			to := end.Truncate(time.Hour).Add(-time.Hour)
-			from := to.Add(-30 * 24 * time.Hour)
-			rows := []Observation{}
-			if e := h.Store.FactsAsOf(ctx, fd.ID, from, to, now, func(o Observation) error { rows = append(rows, o); return nil }); e != nil {
+		to := end.Truncate(time.Hour).Add(-time.Hour)
+		from := to.Add(-30 * 24 * time.Hour)
+		baseVersion := h.Store.datasetRangeVersion(ctx, fd.ID, from, to)
+		if baseline.At.IsZero() || !baseline.To.Equal(to) || baseline.InputVersion != baseVersion {
+			acc := newFlowAccumulator(300)
+			if e := h.Store.FactsAsOf(ctx, fd.ID, from, to, now, func(o Observation) error { acc.add(o); return nil }); e != nil {
 				return e
 			}
-			baseline = buildSignalBaseline(rows, from, to, now)
+			baseline = newRollingBaseline(acc.finish(), from, to).result(now)
+			baseline.InputVersion = baseVersion
 			if e := h.Store.SaveState("signals/baseline/"+a, baseline); e != nil {
 				return e
 			}
@@ -373,11 +391,28 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 		if !fresh {
 			reason = "数据不足 / 当前成交或价格过期"
 		}
-		rows, candles, e := h.signalInput(ctx, a, end.Add(-16*time.Hour), end, now)
+		version := h.Store.factVersion(ctx, a)
+		hasActive := false
+		for _, id := range state.Active {
+			hasActive = hasActive || id != ""
+		}
+		if state.InputVersion == version && end.Equal(state.Last) && !hasActive {
+			var quality map[string]any
+			if h.Store.LoadState("signals/quality/"+a, &quality) {
+				quality["at"] = now
+				quality["fresh"] = fresh
+				if !fresh {
+					quality["reason"] = reason
+				}
+				_ = h.Store.SaveState("signals/quality/"+a, quality)
+			}
+			continue
+		}
+		state.InputVersion = version
+		bars, candles, e := h.signalInput(ctx, a, end.Add(-16*time.Hour), end, now)
 		if e != nil {
 			return e
 		}
-		bars := flowBars(rows, 300)
 		_, windowComplete := sumBars(bars, end, 36)
 		_, _, _, priceComplete := candleBounds(candles, end)
 		if !windowComplete || !priceComplete {
@@ -509,6 +544,10 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 	return tx.Commit()
 }
 func (h *Hub) SignalsView(ctx context.Context, a, id string) (any, error) {
+	if !researchAsset(a) {
+		rows, e := h.Store.documents(ctx, "signal", a, 100)
+		return map[string]any{"items": rows, "enabled": false, "enabledAssets": ResearchAssets(), "note": "仅BTC启用预警；ETH旧记录只读，不再发送通知"}, e
+	}
 	if id != "" {
 		var s Signal
 		e := h.Store.document(ctx, "signal", id, &s)
@@ -527,7 +566,7 @@ func (h *Hub) SignalsView(ctx context.Context, a, id string) (any, error) {
 			observers = append(observers, map[string]any{"kind": d.Kind, "meta": metadata(d, o, exists), "data": o.Payload, "weight": 0})
 		}
 	}
-	return map[string]any{"items": rows, "quality": quality, "observers": observers, "rulesVersion": SignalRules, "auxiliaryWeight": 0, "mail": h.mailStatus(), "note": "实验性资金异动：不识别交易者身份，不承诺提前量或胜率。数据缺失时停发。"}, nil
+	return map[string]any{"enabled": true, "enabledAssets": ResearchAssets(), "items": rows, "quality": quality, "observers": observers, "rulesVersion": SignalRules, "auxiliaryWeight": 0, "mail": h.mailStatus(), "note": "实验性资金异动：不识别交易者身份，不承诺提前量或胜率。数据缺失时停发。"}, nil
 }
 func nextETF(now time.Time) time.Time {
 	loc := time.FixedZone("CST", 8*3600)

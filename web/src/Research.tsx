@@ -28,6 +28,11 @@ const labels: Record<string, string> = {
   partial_queue: "部分任务待排队",
   incomplete: "数据不足 · 研究未完成",
   complete: "关联研究已计算",
+  partial: "部分可用",
+  unavailable: "当前窗口不可用",
+  hourly_available: "小时对比可用",
+  calculated: "策略关联已计算",
+  calculating: "正在分批计算，可恢复进度",
 };
 const axis = {
   axisLabel: { color: "#9dafaa" },
@@ -643,6 +648,20 @@ type StudyItem = {
   error?: string;
   jobs: string[];
   result: {
+    strategyState?: string;
+    caseState?: string;
+    coverage?: {
+      dataset: string;
+      resolutionSeconds: number;
+      from: string;
+      to: string;
+      cursor: string;
+      state: string;
+      reason: string;
+      errorKind: string;
+      purpose: string;
+      gaps: { from: string; to: string; reason: string }[];
+    }[];
     flowCoverage: number;
     candleCoverage: number;
     events: {
@@ -664,11 +683,26 @@ type StudyItem = {
       date: string;
       observations: number | null;
       note: string;
+      state?: string;
+      flowNote?: string;
+      errors?: string[];
+      coverage?: {
+        expectedHours: number;
+        flowHours: number;
+        fineFlowHours: number;
+        priceHours: number;
+        oiHours: number;
+        premiumHours: number;
+      };
       wallet: Change[];
       hourly: {
         end: string;
         netCents: number | null;
         priceChange: number | null;
+        priceClose?: number | null;
+        oiChange?: number | null;
+        premiumUsd?: number | null;
+        flowResolutionSeconds?: number;
       }[];
     }[];
   } | null;
@@ -719,7 +753,11 @@ export function StudiesPage({ asset }: { asset: Asset }) {
             先验证数据完整性，再比较加入指标是否改善结果。指定行情只作案例。
           </p>
         </div>
-        <button className="action" disabled={busy} onClick={start}>
+        <button
+          className="action"
+          disabled={busy || asset !== "BTC"}
+          onClick={start}
+        >
           {busy ? "正在排队…" : "创建90天研究"}
         </button>
       </div>
@@ -775,6 +813,10 @@ export function StudiesPage({ asset }: { asset: Asset }) {
             </p>
             {d.error && <p className="amber">{d.error}</p>}
           </div>
+          <h3>
+            完整策略检验 ·{" "}
+            {labels[d.result?.strategyState ?? "incomplete"] ?? "等待计算"}
+          </h3>
           <div className="metric-strip">
             <Metric
               title="五分钟现货成交覆盖"
@@ -844,13 +886,69 @@ export function StudiesPage({ asset }: { asset: Asset }) {
               {d.result.cases.map((c) => (
                 <details key={c.date} className="data-section">
                   <summary>
-                    {c.date} ·{" "}
-                    {c.observations == null
-                      ? "实验条件尚未计算"
-                      : `${c.observations}次条件满足`}{" "}
-                    · 非独立验证
+                    {c.date} · {labels[c.state ?? "partial"]} ·
+                    案例关联（非独立验证）
                   </summary>
                   <p className="helper">{c.note}</p>
+                  {c.coverage && (
+                    <p className="case-coverage">
+                      成交 {c.coverage.flowHours}/{c.coverage.expectedHours}{" "}
+                      小时 · 价格 {c.coverage.priceHours}/
+                      {c.coverage.expectedHours} · OI {c.coverage.oiHours}/
+                      {c.coverage.expectedHours} · 溢价{" "}
+                      {c.coverage.premiumHours}/{c.coverage.expectedHours}
+                    </p>
+                  )}
+                  <p className="helper">{c.flowNote}</p>
+                  {c.errors?.map((e, i) => (
+                    <p className="amber" key={i}>
+                      {e}
+                    </p>
+                  ))}
+                  {!!c.hourly?.some((h) => h.netCents != null) && (
+                    <Chart
+                      label="案例小时主动净买卖"
+                      height={250}
+                      option={bars(
+                        c.hourly.map((h) => [
+                          stamp(h.end),
+                          h.netCents == null ? null : h.netCents / 100,
+                        ]),
+                        "USD",
+                      )}
+                    />
+                  )}
+                  {!!c.hourly?.some((h) => h.priceClose != null) && (
+                    <Chart
+                      label="案例小时收盘价格"
+                      height={230}
+                      option={{
+                        grid: { left: 65, right: 20, top: 25, bottom: 40 },
+                        tooltip: { trigger: "axis" },
+                        xAxis: {
+                          ...axis,
+                          type: "category",
+                          data: c.hourly.map((h) => stamp(h.end)),
+                          axisLabel: { hideOverlap: true, color: "#9dafaa" },
+                        },
+                        yAxis: {
+                          ...axis,
+                          type: "value",
+                          scale: true,
+                          name: "USDT",
+                        },
+                        series: [
+                          {
+                            type: "line",
+                            showSymbol: false,
+                            connectNulls: false,
+                            data: c.hourly.map((h) => h.priceClose ?? null),
+                            lineStyle: { color: "#d6c987" },
+                          },
+                        ],
+                      }}
+                    />
+                  )}
                   <h4>实际钱包快照变化</h4>
                   {c.wallet?.length ? (
                     c.wallet.map((w) => (
@@ -868,37 +966,88 @@ export function StudiesPage({ asset }: { asset: Asset }) {
                   ) : (
                     <p>尚无可比钱包快照。</p>
                   )}
-                  <div className="table-scroll">
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>小时截止</th>
-                          <th>现货主动净买卖 USD</th>
-                          <th>同期价格变化</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {c.hourly?.map((h) => (
-                          <tr key={h.end}>
-                            <td>{stamp(h.end)}</td>
-                            <td>
-                              {h.netCents == null
-                                ? "数据不足"
-                                : amount(h.netCents, true)}
-                            </td>
-                            <td>
-                              {h.priceChange == null
-                                ? "—"
-                                : `${h.priceChange.toFixed(2)}%`}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  {!!c.hourly?.some((h) => h.netCents != null) && (
+                    <details>
+                      <summary>逐小时数字与实际粒度</summary>
+                      <div className="table-scroll">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>小时截止</th>
+                              <th>现货主动净买卖 USD</th>
+                              <th>同期价格变化</th>
+                              <th>OI变化</th>
+                              <th>溢价 · USD</th>
+                              <th>成交粒度</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {c.hourly
+                              ?.filter((h) => h.netCents != null)
+                              .map((h) => (
+                                <tr key={h.end}>
+                                  <td>{stamp(h.end)}</td>
+                                  <td>
+                                    {h.netCents == null
+                                      ? "数据不足"
+                                      : amount(h.netCents, true)}
+                                  </td>
+                                  <td>
+                                    {h.priceChange == null
+                                      ? "—"
+                                      : `${h.priceChange.toFixed(2)}%`}
+                                  </td>
+                                  <td>
+                                    {h.oiChange == null
+                                      ? "—"
+                                      : `${h.oiChange.toFixed(2)}%`}
+                                  </td>
+                                  <td>
+                                    {h.premiumUsd == null
+                                      ? "—"
+                                      : price(h.premiumUsd, 2)}
+                                  </td>
+                                  <td>
+                                    {h.flowResolutionSeconds === 300
+                                      ? "5分钟汇总"
+                                      : "1小时"}
+                                  </td>
+                                </tr>
+                              ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
+                  )}
                 </details>
               ))}
             </section>
+          )}
+          {!!d.result?.coverage?.length && (
+            <details className="data-section">
+              <summary>补采进度、实际范围与失败原因</summary>
+              {d.result.coverage.map((c, i) => (
+                <div key={i} className="coverage-job">
+                  <strong>
+                    {c.dataset} · {c.resolutionSeconds / 60}分钟 ·{" "}
+                    {labels[c.state] ?? c.state}
+                  </strong>
+                  <p>
+                    {stamp(c.from)} → {stamp(c.to)}
+                  </p>
+                  <p className="helper">
+                    游标 {stamp(c.cursor)} · {c.gaps?.length ?? 0}个已记录缺口{" "}
+                    {c.reason}
+                  </p>
+                  {c.errorKind && (
+                    <small>
+                      失败类型：{c.errorKind}
+                      。仅描述本窗口；其他粒度和时间段独立核验。
+                    </small>
+                  )}
+                </div>
+              ))}
+            </details>
           )}
           <details className="data-section">
             <summary>事件与1/4/24小时方向表现</summary>

@@ -327,7 +327,11 @@ func (h *Hub) LargeView(a string, history bool) any {
 				usd = money(multiply(multiply(r.Price, r.Quantity), rate))
 				priceUSD = num(multiply(r.Price, rate))
 			}
-			items = append(items, map[string]any{"id": d.ID + ":" + r.ID, "venue": d.Venue, "side": r.Side, "price": r.Price, "quote": d.Quote, "priceUsd": priceUSD, "quantity": r.Quantity, "usdCents": usd, "reportedUsd": r.ReportedUSD, "executedUsd": r.ExecutedUSD, "state": r.State, "startAt": r.Start, "changedAt": r.Changed, "fetchedAt": o.FetchedAt, "valid": fx && o.Fresh(d, now) && (r.RawState == 1 || r.RawState == 0), "fxAt": fxAt, "trades": r.Trades, "rawState": r.RawState, "endAt": r.End, "initialQuantity": r.InitialQuantity, "initialUsd": r.InitialUSD, "executedQuantity": r.ExecutedQuantity})
+			expires := o.Time().Add(time.Duration(d.TTL) * time.Second)
+			if fxAt != nil {
+				expires = minTime(expires, fxAt.Add(30*time.Second))
+			}
+			items = append(items, map[string]any{"key": orderKey(d, r), "expiresAt": expires, "fxRate": rate, "observedAt": o.ObservedAt, "id": d.ID + ":" + r.ID, "venue": d.Venue, "side": r.Side, "price": r.Price, "quote": d.Quote, "priceUsd": priceUSD, "quantity": r.Quantity, "usdCents": usd, "reportedUsd": r.ReportedUSD, "executedUsd": r.ExecutedUSD, "state": r.State, "startAt": r.Start, "changedAt": r.Changed, "fetchedAt": o.FetchedAt, "valid": fx && o.Fresh(d, now) && (r.RawState == 1 || r.RawState == 0), "fxAt": fxAt, "trades": r.Trades, "rawState": r.RawState, "endAt": r.End, "initialQuantity": r.InitialQuantity, "initialUsd": r.InitialUSD, "executedQuantity": r.ExecutedQuantity})
 		}
 	}
 	sort.Slice(items, func(i, j int) bool { return num(items[i]["price"]) > num(items[j]["price"]) })
@@ -544,7 +548,7 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 		case "etf":
 			return h.ETFView(ctx, a)
 		case "large-orders":
-			return h.LargeOrdersPage(ctx, a, q.Get("history") == "1", parseInt(q, "limit", 100, 1, 300), parseInt(q, "offset", 0, 0, 10000))
+			return h.LargeBoard(ctx, a, q)
 		case "liquidations":
 			r := q.Get("period")
 			if r == "" {

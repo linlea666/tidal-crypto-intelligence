@@ -177,13 +177,38 @@ func (w *Warehouse) LoadState(key string, v any) bool {
 	}
 	return json.Unmarshal(b, v) == nil
 }
+
+// Fixed-size codec pools bound retained buffers while avoiding a new 1.2MiB
+// deflater per fact. Buffers returned to callers never belong to a pooled codec.
+var encoders = make(chan *gzip.Writer, 2)
+
+type pooledDecoder struct {
+	z     *gzip.Reader
+	input *bytes.Reader
+}
+
+var decoders = make(chan *pooledDecoder, 4)
+
 func pack(o Observation) ([]byte, error) {
 	b, e := json.Marshal(o)
 	if e != nil {
 		return nil, e
 	}
 	var out bytes.Buffer
-	z, _ := gzip.NewWriterLevel(&out, gzip.BestSpeed)
+	var z *gzip.Writer
+	select {
+	case z = <-encoders:
+		z.Reset(&out)
+	default:
+		z, _ = gzip.NewWriterLevel(&out, gzip.BestSpeed)
+	}
+	defer func() {
+		z.Reset(io.Discard)
+		select {
+		case encoders <- z:
+		default:
+		}
+	}()
 	if _, e = z.Write(b); e != nil {
 		return nil, e
 	}
@@ -194,13 +219,28 @@ func pack(o Observation) ([]byte, error) {
 }
 func unpack(b []byte) (Observation, error) {
 	var o Observation
-	z, e := gzip.NewReader(bytes.NewReader(b))
+	var p *pooledDecoder
+	var e error
+	select {
+	case p = <-decoders:
+		p.input.Reset(b)
+		e = p.z.Reset(p.input)
+	default:
+		p = &pooledDecoder{input: bytes.NewReader(b)}
+		p.z, e = gzip.NewReader(p.input)
+	}
 	if e != nil {
 		return o, e
 	}
-	defer z.Close()
-	d := json.NewDecoder(io.LimitReader(z, 16<<20))
-	e = d.Decode(&o)
+	defer func() {
+		p.z.Close()
+		p.input.Reset(nil)
+		select {
+		case decoders <- p:
+		default:
+		}
+	}()
+	e = json.NewDecoder(io.LimitReader(p.z, 16<<20)).Decode(&o)
 	return o, e
 }
 func digest(o Observation) string {

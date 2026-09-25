@@ -12,11 +12,12 @@ import {
 import { api, amount, price, age, clock, venue, useAPI } from "./data";
 import type { Asset, Frame, Zone, Health, History } from "./types";
 import { Chart } from "./Chart";
-import { MarketPages, OverviewSummary, LargeOrders } from "./Pages";
+import { MarketPages, OverviewSummary } from "./Pages";
 import { designFixture } from "./demo";
 const nav = [
   ["overview", "总览"],
   ["liquidity", "现货挂单"],
+  ["large-orders", "大额挂单"],
   ["flow", "成交分析"],
   ["activity", "大资金动向"],
   ["derivatives", "合约态势"],
@@ -259,6 +260,7 @@ export function App() {
                 {(
                   {
                     liquidity: "现货买卖墙",
+                    "large-orders": "大额挂单",
                     overview: "市场总览",
                     flow: "成交证据",
                     activity: "大资金动向",
@@ -601,7 +603,7 @@ export function App() {
                 )}
               </aside>
             </div>
-            {!fixture && <LargeOrders asset={asset} panorama={span === 1000} />}
+
             <section className="wall-history">
               <div className="section-heading">
                 <h2>

@@ -46,7 +46,7 @@ def main():
         "tidal-monitor@" + parsed.hostname, "report"
     ], capture_output=True, text=True, timeout=60, check=True)
     report = json.loads(result.stdout)
-    generation = next((g for g in ["v2.2", "v2.1", "v2"] if (PRIVATE / f"soak-{g}-start.json").exists()), "v1")
+    generation = next((g for g in ["v2.3", "v2.2", "v2.1", "v2"] if (PRIVATE / f"soak-{g}-start.json").exists()), "v1")
     stem = f"soak-{generation}" if generation != "v1" else "soak"
     path = PRIVATE / f"{stem}-latest.json"
     fd = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
@@ -72,7 +72,7 @@ def main():
     summary["versionMatches"] = not baseline.get("version") or deployed[:3] == [baseline.get("version"), baseline.get("revision"), baseline.get("digest")]
     summary["mixedVersionSamples"] = [s["utc"] for s in samples if baseline.get("version") and s.get("health",{}).get("version") != baseline["version"]]
     expected_identity = " ".join(baseline.get(k, "") for k in ["version", "revision", "digest"])
-    summary["identityMismatchSamples"] = [s["utc"] for s in samples if generation == "v2.2" and s.get("deployedVersion") != expected_identity]
+    summary["identityMismatchSamples"] = [s["utc"] for s in samples if generation in ("v2.2", "v2.3") and s.get("deployedVersion") != expected_identity]
     summary["containerIssueSamples"] = [s["utc"] for s in samples if any(c.get("oomKilled") or c.get("restartCount", 0) > 0 or c.get("running") is False or c.get("health") == "unhealthy" for c in s.get("containerStates", {}).values())]
     if generation != "v1":
         collector=latest.get("collector", {})
@@ -94,8 +94,8 @@ def main():
         with client.open(req, timeout=15) as response:
             json.load(response)
         summary["apiMs"] = {}
-        extra = ["signals?asset=BTC", "wallet-trends?asset=BTC", "etf?asset=BTC", "etf?asset=ETH", "studies?asset=BTC"] if generation == "v2.2" else []
-        for endpoint in extra + (["activity?asset=BTC&hours=1"] if generation in ("v2.1","v2.2") else []) + ["levels?asset=BTC", "levels?asset=ETH", "flow?asset=BTC&hours=1", "candles?asset=BTC&hours=24", "whales?asset=BTC&limit=50", "derivatives?asset=ETH"]:
+        extra = ["signals?asset=BTC", "wallet-trends?asset=BTC", "etf?asset=BTC", "etf?asset=ETH", "studies?asset=BTC"] if generation in ("v2.2", "v2.3") else []
+        for endpoint in (["large-orders?asset=BTC&limit=50", "signals?asset=ETH"] if generation == "v2.3" else []) + extra + (["activity?asset=BTC&hours=1"] if generation in ("v2.1","v2.2","v2.3") else []) + ["levels?asset=BTC", "levels?asset=ETH", "flow?asset=BTC&hours=1", "candles?asset=BTC&hours=24", "whales?asset=BTC&limit=50", "derivatives?asset=ETH"]:
             before = time.monotonic()
             with client.open(base + "/api/v1/" + endpoint, timeout=20) as response:
                 json.load(response)

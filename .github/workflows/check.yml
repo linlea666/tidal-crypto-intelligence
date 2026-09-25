@@ -25,3 +25,22 @@ jobs:
       - run: npm ci && npm run typecheck && npm run build && npm test
         working-directory: web
       - run: bash -n deploy/*.sh
+  resource-replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: bash scripts/resource-replay.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v23-linux-resource-replay
+          path: |
+            tmp/resource-v23/*.json*
+            tmp/resource-v23/*.log
+            tmp/resource-v23/*.pprof
+          retention-days: 30

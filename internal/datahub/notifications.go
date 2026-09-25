@@ -60,6 +60,9 @@ func (h *Hub) mailStatus() any {
 	return map[string]any{"configured": h.mail != nil, "lastError": lastError, "limitPerHour": 6, "note": "站内记录始终可见；未配置邮件时不会补发旧事件。发送结果不确定时不自动重复发送。"}
 }
 func (h *Hub) queueNotice(s Signal, kind string, now time.Time) error {
+	if !researchAsset(s.Asset) {
+		return nil
+	}
 	b, e := json.Marshal(map[string]any{"asset": s.Asset, "direction": s.Direction, "kind": kind, "at": s.At, "dataThrough": s.DataThrough, "id": s.ID})
 	if e != nil {
 		return e
@@ -127,6 +130,9 @@ func sendMail(ctx context.Context, c MailConfig, subject, body string) error {
 	return nil
 }
 func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_scope' WHERE status='pending' AND signal_id LIKE 'ETH-%'"); e != nil {
+		return e
+	}
 	if h.mail == nil {
 		return nil
 	}
@@ -164,7 +170,7 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 			Kind      string
 			At        time.Time
 		}
-		if json.Unmarshal(b, &v) != nil {
+		if json.Unmarshal(b, &v) != nil || !researchAsset(v.Asset) {
 			continue
 		}
 		side := "买方"
