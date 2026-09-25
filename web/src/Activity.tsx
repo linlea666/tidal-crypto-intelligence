@@ -9,7 +9,7 @@ import {
   type Derivatives,
 } from "./Pages";
 import type { Asset } from "./types";
-import {SignalsPage,StudiesPage,WalletPage} from "./Research";
+import { SignalsPage, StudiesPage, WalletPage } from "./Research";
 
 type FlowWindow = {
   buyCents: number;
@@ -82,6 +82,7 @@ type Activity = {
   orderBidCents: number;
   orderAskCents: number;
   orderHasData: boolean;
+  interpretation?: { flow: string; price: string };
   orderSources: Meta[];
   events: Event[];
   eventsHasMore: boolean;
@@ -112,8 +113,46 @@ const stamp = (s: string) =>
     hour12: false,
   });
 export function ActivityPage({ asset }: { asset: Asset }) {
- const [tab,setTab]=useState("snapshot");
- return <><nav className="research-tabs" aria-label="大资金动向视图">{[["snapshot","当前动向"],["signals","异动预警"],["studies","历史复盘"],["wallet","钱包趋势"]].map(([id,name])=><button key={id} aria-pressed={tab===id} className={tab===id?"active":""} onClick={()=>setTab(id)}>{name}</button>)}</nav>{tab==="signals"?<SignalsPage asset={asset}/>:tab==="studies"?<StudiesPage asset={asset}/>:tab==="wallet"?<WalletPage asset={asset}/>:<ActivitySnapshot asset={asset}/>}</>
+  const [tab, setTab] = useState("snapshot");
+  return (
+    <>
+      <nav className="research-tabs" aria-label="大资金动向视图">
+        {[
+          ["snapshot", "当前动向"],
+          ["signals", "异动预警"],
+          ["studies", "历史复盘"],
+          ["wallet", "钱包趋势"],
+        ].map(([id, name]) => (
+          <button
+            key={id}
+            aria-pressed={tab === id}
+            className={tab === id ? "active" : ""}
+            disabled={asset !== "BTC" && (id === "signals" || id === "studies")}
+            title={
+              asset !== "BTC" && (id === "signals" || id === "studies")
+                ? "仅BTC启用"
+                : ""
+            }
+            onClick={() => setTab(id)}
+          >
+            {name}
+            {asset !== "BTC" && (id === "signals" || id === "studies")
+              ? " · 仅BTC"
+              : ""}
+          </button>
+        ))}
+      </nav>
+      {tab === "signals" ? (
+        <SignalsPage asset={asset} />
+      ) : tab === "studies" ? (
+        <StudiesPage asset={asset} />
+      ) : tab === "wallet" ? (
+        <WalletPage asset={asset} />
+      ) : (
+        <ActivitySnapshot asset={asset} />
+      )}
+    </>
+  );
 }
 function ActivitySnapshot({ asset }: { asset: Asset }) {
   const [hours, setHours] = useState(1),
@@ -184,17 +223,7 @@ function ActivitySnapshot({ asset }: { asset: Asset }) {
             ))}
           </select>
         </label>
-        <label>
-          当前大单价格范围{" "}
-          <select value={span} onChange={(e) => setSpan(+e.target.value)}>
-            {[5, 10, 25, 1000].map((n) => (
-              <option key={n} value={n}>
-                {n === 1000 ? "全部已覆盖范围" : `现价±${n}%`}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="helper">现货大单 ＋ 合约背景</span>
+        <span className="helper">现货主动成交 ＋ 同窗价格反馈</span>
       </div>
       {error && (
         <p className="sell" role="alert">
@@ -227,90 +256,57 @@ function ActivitySnapshot({ asset }: { asset: Asset }) {
           <span>{d ? `${stamp(d.from)} → ${stamp(d.to)}` : ""}</span>
         </div>
       </section>
-      <div className="metric-strip">
-        <Metric
-          title="已观察现货主动净买卖"
-          value={
-            d?.flow.rows
-              ? amount(d.flow.buyCents - d.flow.sellCents, true)
-              : "—"
-          }
-          tone={d && d.flow.buyCents >= d.flow.sellCents ? "buy" : "sell"}
-        />
-        <Metric
-          title="主动买入占比"
-          value={d?.buyShare != null ? d.buyShare.toFixed(1) : "—"}
-          unit="%"
-        />
-        <Metric
-          title={d?.priceReaction ?? "价格反馈"}
-          value={
-            d?.priceChangePercent != null
-              ? `${d.priceChangePercent > 0 ? "+" : ""}${d.priceChangePercent.toFixed(2)}`
-              : "—"
-          }
-          unit="%"
-        />
-      </div>
       <Status meta={d?.flowMeta} />
       <p className="helper">
         成交金额是选定期间的流量；价格反馈来自同一窗口的币安USDT K线。
         {d?.pressureReaction ? d.pressureReaction + "。" : ""}
         数字不足以识别“洗盘、诱多或对倒”。
       </p>
-      <div className="activity-columns">
-        <section className="data-section">
-          <h2>01　当前大单集中在哪里？</h2>
-          <div className="range-summary compact">
-            <div>
-              <span>已发现大买单</span>
-              <strong className="buy">
-                {d?.orderHasData ? amount(d.orderBidCents) : "—"}
-              </strong>
-            </div>
-            <div>
-              <span>已发现大卖单</span>
-              <strong className="sell">
-                {d?.orderHasData ? amount(d.orderAskCents) : "—"}
-              </strong>
-            </div>
-          </div>
-          <p className="helper">
-            当前存量 · USD ·
-            约5分钟采集，12分钟有效。与普通盘口可能重叠，不重复相加。已发现
-            {d?.orderCount ?? 0}条，展示金额前12条。
-          </p>
-          {d?.orders.slice(0, 12).map((o) => (
-            <div
-              className={`activity-order ${o.side === "bid" ? "buy" : "sell"}`}
-              key={o.id}
-            >
-              <span>
-                ${price(o.priceUsd, 0)}
-                <small>
-                  {o.venue} · {o.side === "bid" ? "买挂单" : "卖挂单"}
-                </small>
+      <section className="activity-verdict data-section">
+        <h2>谁更主动，价格有没有跟上？</h2>
+        <div className="verdict-grid">
+          <div>
+            <span>① 谁更主动</span>
+            <h3>{d?.interpretation?.flow ?? headline}</h3>
+            <div className="buy-sell-share" aria-label="主动买卖占比">
+              <span style={{ width: `${d?.buyShare ?? 50}%` }}>
+                买 {d?.buyShare?.toFixed(1) ?? "—"}%
               </span>
-              <div>
-                <meter value={o.usdCents} max={bookMax} />
-                <strong>{amount(o.usdCents)}</strong>
-              </div>
+              <span>
+                卖 {d?.buyShare != null ? (100 - d.buyShare).toFixed(1) : "—"}%
+              </span>
             </div>
-          ))}
-          {!d?.orders.length && (
-            <p className="empty">
-              暂无该范围内有效大单，不能据此判断没有挂单。
+            <p>
+              {d?.flow.rows
+                ? `主动买 ${amount(d.flow.buyCents)}，主动卖 ${amount(d.flow.sellCents)}；${d.flow.buyCents >= d.flow.sellCents ? "买方" : "卖方"}多 ${amount(Math.abs(d.flow.buyCents - d.flow.sellCents))} USD`
+                : "等待成交数据"}
             </p>
-          )}
-          <details className="source-details">
-            <summary>各来源获取状态</summary>
-            {d?.orderSources.map((m, i) => (
-              <Status key={i} meta={m} />
-            ))}
-          </details>
-        </section>
+          </div>
+          <div>
+            <span>② 价格有没有跟随</span>
+            <h3>{d?.interpretation?.price ?? "等待数据"}</h3>
+            <p>
+              {d?.priceChangePercent == null
+                ? "价格窗口尚未补齐"
+                : `同窗价格 ${d.priceChangePercent > 0 ? "+" : ""}${d.priceChangePercent.toFixed(2)}%`}
+            </p>
+            <p>{d?.pressureReaction}</p>
+          </div>
+          <div>
+            <span>③ 证据够不够</span>
+            <h3>{d?.bias === "证据不足" ? "证据不足" : "可描述本窗口"}</h3>
+            <p>
+              已覆盖 {(100 * (d?.flow.coverage ?? 0)).toFixed(1)}% ·{" "}
+              {d?.flow.boundaries ? "起止齐全" : "边界待补齐"}
+            </p>
+            <p>{d?.reason}</p>
+          </div>
+        </div>
+      </section>
+      <details className="data-section">
+        <summary>查看详细证据 · CVD与成交价位</summary>
         <section className="data-section">
-          <h2>02　成交是否配合？</h2>
+          <h3>主动成交累计变化</h3>
           <div className="flow-compare">
             <span className="buy">
               主动买 {d?.flow.rows ? amount(d.flow.buyCents) : "—"}
@@ -353,9 +349,9 @@ function ActivitySnapshot({ asset }: { asset: Asset }) {
             。本图是独立成交分布，未将成交关联为某笔大单。
           </p>
         </section>
-      </div>
+      </details>
       <section className="data-section">
-        <h2>03　合约背景</h2>
+        <h2>合约背景 · 辅助观察</h2>
         <div className="metric-strip">
           <Metric
             title="窗口内OI变化（端点采样）"
@@ -420,136 +416,10 @@ function ActivitySnapshot({ asset }: { asset: Asset }) {
           </div>
         </details>
       </section>
-      <section className="data-section">
-        <h2>04　大单发生了什么变化？</h2>
-        <p className="helper">
-          {d?.tradeFeedNote ?? "逐笔大额成交暂未接入。"}{" "}
-          事件覆盖全部价位。首次获取的累计成交不计入本期；买挂单被成交是被动承接，不能当成主动买入。
-        </p>
-        {(d?.storage.orderHistoryPaused || d?.orderHistoryGap) && (
-          <p className="amber">
-            本窗口包含容量保护期间的历史缺口，当前快照仍可查看。
-          </p>
-        )}
-        <ol className="activity-events">
-          {d?.events.map((e) => (
-            <li key={e.key}>
-              <time title={stamp(e.at)}>{clock(e.at)}发现</time>
-              <div>
-                <strong>
-                  {kind[e.kind] ?? e.kind} · {e.venue}{" "}
-                  <span className={e.side === "bid" ? "buy" : "sell"}>
-                    {e.side === "bid" ? "买挂单" : "卖挂单"} {price(+e.price)}{" "}
-                    {e.quote}
-                  </span>
-                </strong>
-                <p>
-                  {e.executedQuantityDelta != null &&
-                  +e.executedQuantityDelta > 0
-                    ? `累计成交数量增加 ${price(+e.executedQuantityDelta, 4)} ${asset}；`
-                    : ""}
-                  {e.quantityDelta != null
-                    ? `余量变化 ${price(+e.quantityDelta, 4)} ${asset}；`
-                    : ""}
-                  {e.note}
-                </p>
-                <small>
-                  {e.from
-                    ? `采样区间 ${stamp(e.from)} → ${stamp(e.at)}`
-                    : "首次观察，不归因当前时段的成交"}
-                  {e.after?.endAt ? ` · 上游结束 ${stamp(e.after.endAt)}` : ""}
-                </small>
-              </div>
-            </li>
-          ))}
-        </ol>
-        {!d?.events.length && (
-          <p className="empty">本窗口尚无已跟踪变化，历史补采状态见下方。</p>
-        )}
-        {d?.eventsHasMore && (
-          <p className="helper">
-            仅展示最近100条变化，完整记录保存于共享历史仓库。
-          </p>
-        )}
-        <details className="source-details">
-          <summary>历史完整范围与缺口</summary>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>来源／状态</th>
-                  <th>已处理时间范围</th>
-                  <th>待补页／缺口</th>
-                </tr>
-              </thead>
-              <tbody>
-                {d?.historyStatus.map((s) => (
-                  <tr key={s.venue + s.state}>
-                    <td>
-                      {s.venue} · {s.state === "2" ? "结束" : "撤销"}
-                    </td>
-                    <td>
-                      {s.from ? stamp(s.from) : "待首次补采"} →{" "}
-                      {s.through ? stamp(s.through) : "—"}
-                    </td>
-                    <td>
-                      {s.pendingPages} / {s.gaps}
-                      {s.error && <p className="amber">{s.error}</p>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
-      </section>
-      <section className="data-section">
-        <button className="text-button" onClick={() => setAdvanced(!advanced)}>
-          {advanced ? "收起" : "展开"}高级视图 · K线与挂单存续
-        </button>
-        {advanced && (
-          <>
-            <Chart
-              option={candles}
-              label="币安5分钟K线，不含逐笔成交圆圈"
-              height={300}
-            />
-            <p className="helper">
-              下面的线展示上游创建时间至最后一次获取之间的记录跨度，不承诺两次采样之间一直存在；粗细表示当前金额。颜色仅表示买卖方向。
-            </p>
-            {d?.orders.slice(0, 12).map((o) => {
-              const from = +new Date(d.from),
-                to = +new Date(d.at),
-                start = o.startAt ? Math.max(from, +new Date(o.startAt)) : to;
-              const end = Math.min(to, +new Date(o.fetchedAt));
-              const length = Math.max(
-                0,
-                Math.min(1, (end - start) / (to - from)),
-              );
-              return (
-                <div
-                  key={o.id}
-                  className={`duration-row ${o.side === "bid" ? "buy" : "sell"}`}
-                >
-                  <span>
-                    {o.venue} ${price(o.priceUsd, 0)}
-                  </span>
-                  <div>
-                    <span
-                      style={{
-                        width: `${length * 100}%`,
-                        marginRight: `${Math.max(0, ((to - end) / (to - from)) * 100)}%`,
-                        height: Math.max(2, (12 * o.usdCents) / bookMax),
-                      }}
-                    />
-                  </div>
-                  <small>{o.startAt ? stamp(o.startAt) : "创建时间未知"}</small>
-                </div>
-              );
-            })}
-          </>
-        )}
-      </section>
+      <details className="data-section">
+        <summary>查看同一窗口K线</summary>
+        <Chart option={candles} label="币安5分钟K线" height={300} />
+      </details>
       <p className="helper">
         规则 {d?.rulesVersion ?? "evidence-2.1"} · 55% /
         45%为成交描述阈值，不是预测胜率。所有页面复用本地数据，本页不会直接请求上游。

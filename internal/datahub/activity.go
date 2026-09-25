@@ -158,65 +158,23 @@ func (h *Hub) ActivityView(ctx context.Context, a string, hours int, span float6
 		return nil, err
 	}
 	feetMap := feet.(map[string]any)
-	events, more, err := h.Store.OrderEvents(ctx, a, from, now, 100, 0)
-	if err != nil {
-		return nil, err
-	}
 	matched := []string{}
 	for _, m := range feetMap["footprintSources"].([]map[string]any) {
 		if (m["venue"] == "Binance" || m["venue"] == "OKX") && m["status"] == "fresh" {
 			matched = append(matched, m["venue"].(string))
 		}
 	}
-	orders := h.LargeView(a, false).(map[string]any)
-	all := orders["items"].([]map[string]any)
-	items := []map[string]any{}
-	bid, ask := int64(0), int64(0)
-	reference, _, referenceOK := h.CurrentPrice(a, now)
-	for _, r := range all {
-		if r["valid"] != true || !referenceOK {
-			continue
-		}
-		p := num(r["priceUsd"])
-		if span < 1000 && math.Abs(p-reference)/reference*100 > span {
-			continue
-		}
-		if a == "BTC" && span >= 1000 && (p < 10000 || p > 200000) {
-			continue
-		}
-		items = append(items, r)
-		n, _ := r["usdCents"].(int64)
-		if r["side"] == "bid" {
-			bid += n
-		} else {
-			ask += n
-		}
-	}
-	sort.Slice(items, func(i, j int) bool { return num(items[i]["usdCents"]) > num(items[j]["usdCents"]) })
 	reason := "按已覆盖主动成交描述买卖压力，不代表主力身份或未来涨跌"
 	if bias == "证据不足" {
 		reason = "需要≥90%有效分钟、完整起止边界及新鲜价格/成交；缺失数据不补零"
 	}
-	// Ended records do not become recent executions just because a historical
-	// page was fetched now. Only bounded consecutive-observation events qualify.
-	for i := range events {
-		if events[i].From == nil || events[i].From.Before(from) {
-			events[i].ExecutedDelta = nil
-			events[i].QuantityDelta = nil
-			events[i].ExecutedQuantityDelta = nil
-		}
-	}
-	historyGap, err := h.Store.OrderGap(ctx, a, from, now)
-	if err != nil {
-		return nil, err
-	}
 	return map[string]any{
-		"orderHistoryGap": historyGap, "asset": a, "from": from, "to": to, "hours": hours, "bias": bias, "reason": reason, "buyShare": share, "flow": stats, "flowMeta": metadata(fd, flow, flowOK),
+		"orderHistoryGap": false, "interpretation": activityInterpretation(bias, pct), "asset": a, "from": from, "to": to, "hours": hours, "bias": bias, "reason": reason, "buyShare": share, "flow": stats, "flowMeta": metadata(fd, flow, flowOK),
 		"pressureReaction": pressureReaction(bias, pct), "priceChangePercent": pct, "priceReaction": reaction, "priceQuote": "USDT · 币安5分钟K线", "candles": candles,
 		"perpFlow": perp, "perpMeta": metadata(perpD, perpLatest, perpOK), "derivatives": derivatives,
 		"footprint": feetMap["footprint"], "footprintVenues": feetMap["footprintVenues"], "footprintPartial": feetMap["footprintPartial"], "footprintQuote": "USDT", "matchedFootprintVenues": matched,
-		"orders": items[:min(50, len(items))], "orderHasData": len(items) > 0, "orderCount": len(items), "orderBidCents": bid, "orderAskCents": ask, "orderSources": orders["sources"],
-		"events": events, "eventsHasMore": more, "historyStatus": h.orderHistoryStatus(a), "rulesVersion": RulesVersion,
+		"orders": []any{}, "orderCount": 0, "orderHasData": false, "orderBidCents": 0, "orderAskCents": 0, "orderSources": []any{},
+		"events": []any{}, "eventsHasMore": false, "historyStatus": []any{}, "ordersMovedTo": "large-orders", "rulesVersion": RulesVersion,
 		"tradeFeedAvailable": false, "tradeFeedNote": "逐笔大额成交暂未接入；累计成交变化不等于逐笔成交",
 		"at": now, "storage": h.Store.Status(),
 	}, nil
@@ -254,7 +212,20 @@ func (h *Hub) LargeOrdersPage(ctx context.Context, a string, history bool, limit
 	items := []map[string]any{}
 	for _, t := range rows {
 		r := t.Order
-		items = append(items, map[string]any{"id": t.Key, "venue": t.Venue, "side": r.Side, "price": r.Price, "quote": t.Quote, "quantity": r.Quantity, "usdCents": nil, "reportedUsd": r.ReportedUSD, "executedUsd": r.ExecutedUSD, "state": r.State, "rawState": r.RawState, "startAt": r.Start, "changedAt": r.Changed, "endAt": r.End, "fetchedAt": t.Seen, "valid": true, "historical": true, "trades": r.Trades, "initialQuantity": r.InitialQuantity, "initialUsd": r.InitialUSD, "executedQuantity": r.ExecutedQuantity})
+		end := t.Seen
+		if r.End != nil {
+			end = *r.End
+		}
+		start, basis := r.Start, "source_created"
+		if start == nil && !t.FirstSeen.IsZero() {
+			start = &t.FirstSeen
+			basis = "local_observed"
+		}
+		var duration any
+		if start != nil && !end.Before(*start) {
+			duration = end.Sub(*start).Seconds()
+		}
+		items = append(items, map[string]any{"durationThrough": end, "durationBasis": basis, "durationSeconds": duration, "id": t.Key, "venue": t.Venue, "side": r.Side, "price": r.Price, "quote": t.Quote, "quantity": r.Quantity, "usdCents": nil, "reportedUsd": r.ReportedUSD, "executedUsd": r.ExecutedUSD, "state": r.State, "rawState": r.RawState, "startAt": r.Start, "changedAt": r.Changed, "endAt": r.End, "fetchedAt": t.Seen, "valid": true, "historical": true, "trades": r.Trades, "initialQuantity": r.InitialQuantity, "initialUsd": r.InitialUSD, "executedQuantity": r.ExecutedQuantity})
 	}
 	return map[string]any{"items": items, "hasMore": more, "offset": offset, "historyStatus": h.orderHistoryStatus(a), "note": "结束记录按上游标记展示；残留数量不计当前挂单，累计成交不归入获取时段。历史窗口未完整时不声称没有订单。"}, nil
 }
@@ -273,4 +244,27 @@ func pressureReaction(bias string, pct *float64) string {
 		return "价格与主动成交方向一致"
 	}
 	return "价格与主动成交方向背离，单一信号不充分"
+}
+
+func activityInterpretation(bias string, pct *float64) map[string]string {
+	flow := bias
+	if bias == "相对均衡" {
+		flow = "买卖力量接近"
+	}
+	reaction := "等待完整价格窗口"
+	if pct != nil {
+		switch {
+		case bias == "证据不足":
+			reaction = "数据不足，暂不判断配合"
+		case math.Abs(*pct) <= .05:
+			reaction = "价格变化小"
+		case bias == "相对均衡":
+			reaction = "买卖接近，价格另有方向"
+		case bias == "买方较主动" && *pct > 0 || bias == "卖方较主动" && *pct < 0:
+			reaction = "成交与价格方向一致"
+		default:
+			reaction = "成交与价格方向不同"
+		}
+	}
+	return map[string]string{"flow": flow, "price": reaction}
 }

@@ -11,15 +11,16 @@ import (
 const OrderHistoryLimit = 512 << 20
 
 type TrackedOrder struct {
-	Key      string     `json:"key"`
-	Dataset  string     `json:"dataset"`
-	Asset    string     `json:"asset"`
-	Venue    string     `json:"venue"`
-	Quote    string     `json:"quote"`
-	Order    LargeOrder `json:"order"`
-	Seen     time.Time  `json:"seenAt"`
-	FactAt   time.Time  `json:"factAt"`
-	Revision string     `json:"revision"`
+	FirstSeen time.Time  `json:"firstSeenAt"`
+	Key       string     `json:"key"`
+	Dataset   string     `json:"dataset"`
+	Asset     string     `json:"asset"`
+	Venue     string     `json:"venue"`
+	Quote     string     `json:"quote"`
+	Order     LargeOrder `json:"order"`
+	Seen      time.Time  `json:"seenAt"`
+	FactAt    time.Time  `json:"factAt"`
+	Revision  string     `json:"revision"`
 }
 type OrderEvent struct {
 	Key                   string      `json:"key"`
@@ -116,7 +117,7 @@ func (w *Warehouse) ingestOrders(d Dataset, o Observation) error {
 		factFields := r
 		factFields.Changed = nil
 		rev := digest(Observation{Payload: Payload{Large: []LargeOrder{factFields}}})
-		next := TrackedOrder{key, ID("large", d.Asset, d.Venue, d.Market), d.Asset, d.Venue, d.Quote, r, o.FetchedAt, fact, rev}
+		next := TrackedOrder{o.FetchedAt, key, ID("large", d.Asset, d.Venue, d.Market), d.Asset, d.Venue, d.Quote, r, o.FetchedAt, fact, rev}
 		var old TrackedOrder
 		var raw []byte
 		err = tx.QueryRow("SELECT payload FROM tracked_orders WHERE k=?", key).Scan(&raw)
@@ -130,6 +131,12 @@ func (w *Warehouse) ingestOrders(d Dataset, o Observation) error {
 		if exists {
 			if err = json.Unmarshal(raw, &old); err != nil {
 				return err
+			}
+		}
+		if exists {
+			next.FirstSeen = old.FirstSeen
+			if next.FirstSeen.IsZero() {
+				next.FirstSeen = old.Seen
 			}
 		}
 		if exists && (fact.Before(old.FactAt) || o.FetchedAt.Before(old.Seen)) {

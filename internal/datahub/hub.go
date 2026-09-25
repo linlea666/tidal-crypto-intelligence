@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"sort"
@@ -89,7 +90,7 @@ func Open(cfg Config) (*Hub, error) {
 				}
 				j.Failures = 0
 				j.Error = ""
-				j.Disabled = false
+				j.Disabled = j.Dataset.Disabled
 			}
 		}
 		_ = w.SaveState("parserVersion", RulesVersion)
@@ -435,7 +436,7 @@ func parseInt(q url.Values, key string, def, low, high int) int {
 }
 func parseFloat(q url.Values, key string, def, low, high float64) float64 {
 	v, e := strconv.ParseFloat(q.Get(key), 64)
-	if e != nil || v < low || v > high {
+	if e != nil || math.IsNaN(v) || math.IsInf(v, 0) || v < low || v > high {
 		return def
 	}
 	return v

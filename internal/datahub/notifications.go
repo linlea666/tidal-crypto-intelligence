@@ -127,6 +127,9 @@ func sendMail(ctx context.Context, c MailConfig, subject, body string) error {
 	return nil
 }
 func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_scope' WHERE status='pending' AND signal_id LIKE 'ETH-%'"); e != nil {
+		return e
+	}
 	if h.mail == nil {
 		return nil
 	}
@@ -164,7 +167,7 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 			Kind      string
 			At        time.Time
 		}
-		if json.Unmarshal(b, &v) != nil {
+		if json.Unmarshal(b, &v) != nil || !researchAsset(v.Asset) {
 			continue
 		}
 		side := "买方"

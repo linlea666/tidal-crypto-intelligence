@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const RulesVersion = "evidence-2.1"
+const RulesVersion = "evidence-2.3"
+
+func ResearchAssets() []string    { return []string{"BTC"} }
+func researchAsset(a string) bool { return a == "BTC" }
 
 const WhaleRefreshSeconds = 300
 const WhaleTTLSeconds = 480
@@ -19,6 +22,7 @@ func freshWhale(w Whale, now time.Time) bool {
 }
 
 type Dataset struct {
+	Disabled     bool              `json:"disabled,omitempty"`
 	Contract     bool              `json:"requiresContractCheck,omitempty"`
 	ID           string            `json:"id"`
 	Kind         string            `json:"kind"`
@@ -256,6 +260,9 @@ func Registry() []Dataset {
 		add("oi", a, "futures", "", "USD", "futures/open-interest/exchange-list", "USD", 0, 300, 720, 1, map[string]string{"symbol": a})
 		add("oi-history", a, "futures", "", "USD", "futures/open-interest/aggregated-history", "USD", 300, 300, 720, 2, map[string]string{"symbol": a, "unit": "usd", "interval": "5m", "limit": "12"})
 		out[len(out)-1].Contract = true
+		if a == "ETH" {
+			out[len(out)-1].Disabled = true
+		}
 		add("balance-list", a, "chain", "", a, "exchange/balance/list", a, 0, 3600, 9000, 3, map[string]string{"symbol": a})
 		out[len(out)-1].Contract = true
 		add("balance-history", a, "chain", "", a, "exchange/balance/chart", a, 86400, 21600, 172800, 3, map[string]string{"symbol": a})

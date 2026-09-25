@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -196,4 +197,35 @@ func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days in
 	w.status.ResearchPaused = (pages-free)*size >= ResearchBudget-(8<<20) || used >= ResearchBudget
 	w.mu.Unlock()
 	return nil
+}
+
+// Includes corrections and newly acquired facts, without reacting to price ticks.
+func (w *Warehouse) factVersion(ctx context.Context, a string) string {
+	var n, last int64
+	_ = w.research.QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE dataset IN (?,?,?)", ID("flow", a, "", "spot"), ID("candles", a, "Binance", "spot"), ID("oi-history", a, "", "futures")).Scan(&n, &last)
+	return fmt.Sprintf("%d/%d", n, last)
+}
+
+func (w *Warehouse) researchVersion(ctx context.Context, a string, from, to time.Time) string {
+	var n, last int64
+	_ = w.research.QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE ts>=? AND ts<? AND dataset LIKE ?", from.Unix(), to.Unix(), "%."+strings.ToLower(a)+".%").Scan(&n, &last)
+	return fmt.Sprintf("%d/%d", n, last)
+}
+
+func (w *Warehouse) nativeCursor(ctx context.Context, d Dataset, from, to, now time.Time) (time.Time, error) {
+	cursor := from
+	e := w.FactsAsOf(ctx, d.ID, from, to, now, func(o Observation) error {
+		if o.Resolution == d.Resolution && o.Quality == "valid" && recordTime(o).Equal(cursor) {
+			cursor = cursor.Add(time.Duration(d.Resolution) * time.Second)
+		}
+		return nil
+	})
+	return cursor, e
+}
+func (w *Warehouse) completeNativeWindow(ctx context.Context, d Dataset, from, to, now time.Time) bool {
+	if !researchKind(d) {
+		return false
+	}
+	cursor, e := w.nativeCursor(ctx, d, from, to, now)
+	return e == nil && !cursor.Before(to)
 }

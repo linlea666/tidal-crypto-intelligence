@@ -104,7 +104,7 @@ func (h *Hub) writeReport() {
 		}
 	}
 	quality := map[string]any{}
-	for _, a := range Assets() {
+	for _, a := range ResearchAssets() {
 		var q map[string]any
 		h.Store.LoadState("signals/quality/"+a, &q)
 		quality[a] = q
@@ -113,7 +113,7 @@ func (h *Hub) writeReport() {
 	h.Store.LoadState("signals/error", &signalError)
 	h.Store.LoadState("studies/error", &studyError)
 	h.Store.LoadState("research/gap", &gap)
-	b, e := json.Marshal(map[string]any{"at": now, "generation": "v2", "markets": markets, "fx": metadata(d, fx, ok), "scheduler": quota, "storage": h.Store.Status(), "datasets": statuses, "legacyCollectorsRunning": false, "contracts": contracts, "signals": quality, "signalError": signalError, "studyError": studyError, "researchGap": gap, "mail": h.mailStatus()})
+	b, e := json.Marshal(map[string]any{"at": now, "generation": "v2", "markets": markets, "fx": metadata(d, fx, ok), "scheduler": quota, "storage": h.Store.Status(), "datasets": statuses, "legacyCollectorsRunning": false, "contracts": contracts, "researchAssets": ResearchAssets(), "signals": quality, "signalError": signalError, "studyError": studyError, "researchGap": gap, "mail": h.mailStatus()})
 	if e != nil {
 		return
 	}
@@ -128,6 +128,9 @@ func (h *Hub) pruneWallets(now time.Time) {
 	defer h.Scheduler.mu.Unlock()
 	for id, j := range h.Scheduler.jobs {
 		if j.Mode == "live" || j.InFlight || (!j.Completed && !j.Disabled) || j.LastAttempt == nil || now.Sub(*j.LastAttempt) < 24*time.Hour {
+			continue
+		}
+		if j.Purpose != "" && now.Sub(*j.LastAttempt) < 90*24*time.Hour {
 			continue
 		}
 		delete(h.Scheduler.jobs, id)

@@ -1,3 +1,4 @@
+import { LargeOrderBoard } from "./LargeOrders";
 import { ActivityPage } from "./Activity";
 import { ETFPage } from "./Research";
 import { useEffect, useMemo, useState } from "react";
@@ -282,6 +283,7 @@ function Backfill({
   );
 }
 export function MarketPages(p: Props) {
+  if(p.view==="large-orders")return <LargeOrderBoard key={p.asset} asset={p.asset}/>;
   if (p.view === "etf") return <ETFPage key={p.asset} asset={p.asset}/>;
   if (p.view === "activity")
     return <ActivityPage key={p.asset} asset={p.asset} />;
