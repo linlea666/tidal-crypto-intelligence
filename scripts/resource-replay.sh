@@ -28,6 +28,8 @@ memory=[mib(s['MemUsage'].split('/')[0]) for s in samples]
 state=json.loads((p/'container.json').read_text())[0]['State']
 result={'samples':len(samples),'peakMiB':max(memory,default=0),'medianMiB':statistics.median(memory) if memory else 0,'lastMiB':memory[-1] if memory else 0,'peakCPUPercent':max(float(s['CPUPerc'].rstrip('%')) for s in samples) if samples else 0,'exit':state['ExitCode'],'oom':state['OOMKilled'],'memoryLimitMiB':768,'cpuLimit':1.7,'memoryGoalMiB':600}
 runtime=[json.loads(s) for s in (p/'runtime.jsonl').read_text().splitlines()] if (p/'runtime.jsonl').exists() else []
+if (p/'phase.json').exists():
+ result['maintenancePhaseSeconds']=json.loads((p/'phase.json').read_text())['elapsedSeconds']
 if runtime:
  result['runtimeSamples']=len(runtime)
  result['wallHours']=(datetime.datetime.fromisoformat(runtime[-1]['at'].replace('Z','+00:00'))-datetime.datetime.fromisoformat(runtime[0]['at'].replace('Z','+00:00'))).total_seconds()/3600
@@ -38,5 +40,7 @@ assert len(samples)>=8,'insufficient Linux replay samples'
 assert state['ExitCode']==0 and not state['OOMKilled'],'resource replay failed'
 if os.getenv('TIDAL_REPLAY_MODE') != 'reference':
  assert max(memory)<600,'resource target exceeded'
- if os.getenv('TIDAL_REPLAY_LONG') == '1': assert result.get('wallHours',0)>=5.1,'long replay did not cover observed failure span'
+ if os.getenv('TIDAL_REPLAY_LONG') == '1':
+  assert result.get('maintenancePhaseSeconds',0)>=5.25*3600,'long replay did not complete 5h15m of full maintenance'
+  assert result.get('wallHours',0)>=5.1,'long replay samples did not cover observed failure span'
 PY

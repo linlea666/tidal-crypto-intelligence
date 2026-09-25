@@ -100,7 +100,8 @@ func TestResourceReplay(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
-	until := time.Now().Add(duration)
+	phaseStarted := time.Now()
+	until := phaseStarted.Add(duration)
 	lastMaintenance, lastBooks := time.Time{}, time.Time{}
 	for cycle := 0; time.Now().Before(until); cycle++ {
 		current := time.Now().UTC()
@@ -188,7 +189,8 @@ func TestResourceReplay(t *testing.T) {
 			}
 		}
 		if out := os.Getenv("TIDAL_RESOURCE_OUTPUT"); out != "" {
-			f, err := os.OpenFile(filepath.Join(out, "runtime.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+			// Synthetic telemetry must also be readable by the host CI runner.
+			f, err := os.OpenFile(filepath.Join(out, "runtime.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -209,6 +211,13 @@ func TestResourceReplay(t *testing.T) {
 		t.Fatal("local replay invoked upstream")
 	}
 	if out := os.Getenv("TIDAL_RESOURCE_OUTPUT"); out != "" {
+		phase, err := json.Marshal(map[string]any{"startedAt": phaseStarted.UTC(), "endedAt": time.Now().UTC(), "elapsedSeconds": time.Since(phaseStarted).Seconds()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(out, "phase.json"), phase, 0644); err != nil {
+			t.Fatal(err)
+		}
 		f, e := os.Create(filepath.Join(out, "heap.pprof"))
 		if e != nil {
 			t.Fatal(e)
