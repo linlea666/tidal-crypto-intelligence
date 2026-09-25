@@ -300,3 +300,39 @@ func TestActivityPlainLanguage(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalHistoryLedgerDoesNotBlockOrRetry(t *testing.T) {
+	w := testStore(t)
+	now := time.Now().UTC().Truncate(time.Hour)
+	s := NewScheduler(w, Registry(), nil, true, now)
+	d, _ := FindDataset("flow.btc..spot")
+	for len(s.jobs) < 128 {
+		id := fmt.Sprintf("old-%03d", len(s.jobs))
+		s.jobs[id] = &Job{ID: id, Dataset: d, Mode: "history", Disabled: true, Error: "empty", ErrorKind: "empty_window"}
+	}
+	from, to := now.Add(-24*time.Hour), now.Add(-23*time.Hour)
+	req := DataRequest{Dataset: d.ID, From: &from, To: &to, Resolution: 300, Purpose: "case"}
+	j, e := s.Request(req, now, false)
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.jobs[j.ID].Disabled = true
+	s.jobs[j.ID].Error = "bounded failure"
+	if e = w.saveDocument("history-job", j.ID, d.Asset, now, s.jobs[j.ID]); e != nil {
+		t.Fatal(e)
+	}
+	delete(s.jobs, j.ID)
+	s.persistLocked()
+	again, e := s.Request(req, now, false)
+	if e != nil || !again.Disabled || again.Error != "bounded failure" {
+		t.Fatalf("archived retry %+v %v", again, e)
+	}
+	restored := NewScheduler(w, Registry(), nil, true, now)
+	prior, ok := restored.historyJobLocked(j.ID)
+	if !ok || !prior.Disabled {
+		t.Fatal("lost archived coverage on restart")
+	}
+	if s.quota.Calls != 0 {
+		t.Fatal("archive lookup invoked upstream")
+	}
+}

@@ -636,16 +636,6 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.jobs) >= 128 {
-		for key, j := range s.jobs {
-			if j.Mode != "live" && !j.InFlight && (j.Completed || j.Disabled) && j.LastSuccess != nil && now.Sub(*j.LastSuccess) > 24*time.Hour {
-				delete(s.jobs, key)
-			}
-		}
-		if len(s.jobs) >= 128 {
-			return Job{}, errors.New("任务记录达到上限，请等待过期清理")
-		}
-	}
 	if old, ok := s.jobs[id]; ok {
 		if req.Purpose != "" {
 			return *old, nil
@@ -677,6 +667,32 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 		_ = s.persistLocked()
 		return *old, nil
 	}
+	var archived Job
+	if req.Purpose != "" && s.store.document(context.Background(), "history-job", id, &archived) == nil {
+		return archived, nil
+	}
+	if len(s.jobs) >= 128 {
+		keys := []string{}
+		for key, j := range s.jobs {
+			if j.Mode != "live" && !j.InFlight && (j.Completed || j.Disabled) {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			j := s.jobs[key]
+			if e := s.store.saveDocument("history-job", key, j.Dataset.Asset, now, j); e != nil {
+				return Job{}, e
+			}
+			delete(s.jobs, key)
+			if len(s.jobs) < 120 {
+				break
+			}
+		}
+		if len(s.jobs) >= 128 {
+			return Job{}, errors.New("任务记录达到上限，请等待正在执行的任务结束")
+		}
+	}
 	active := 0
 	for _, j := range s.jobs {
 		if j.Mode != "live" && !j.Completed && !j.Disabled {
@@ -705,4 +721,16 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 		return Job{}, e
 	}
 	return j, nil
+}
+
+// Caller holds s.mu. Archived terminal jobs preserve range capability and dedup.
+func (s *Scheduler) historyJobLocked(id string) (*Job, bool) {
+	if j, ok := s.jobs[id]; ok {
+		return j, true
+	}
+	var j Job
+	if s.store.document(context.Background(), "history-job", id, &j) == nil {
+		return &j, true
+	}
+	return nil, false
 }

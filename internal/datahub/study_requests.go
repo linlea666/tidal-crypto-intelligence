@@ -59,7 +59,7 @@ func (h *Hub) studyCoverage(s Study) []map[string]any {
 	defer h.Scheduler.mu.Unlock()
 	out := []map[string]any{}
 	for _, id := range s.Jobs {
-		if j := h.Scheduler.jobs[id]; j != nil {
+		if j, ok := h.Scheduler.historyJobLocked(id); ok {
 			state := "queued"
 			if j.LastAttempt != nil {
 				state = "collecting"

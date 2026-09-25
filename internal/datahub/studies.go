@@ -574,7 +574,7 @@ func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
 		jobsDone, jobFailed := true, false
 		h.Scheduler.mu.Lock()
 		for _, id := range s.Jobs {
-			j, ok := h.Scheduler.jobs[id]
+			j, ok := h.Scheduler.historyJobLocked(id)
 			if !ok {
 				jobFailed = true
 			}
