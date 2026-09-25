@@ -294,7 +294,7 @@ function ActivitySnapshot({ asset }: { asset: Asset }) {
           </div>
           <div>
             <span>③ 证据够不够</span>
-            <h3>{d?.bias === "证据不足" ? "证据不足" : "可描述本窗口"}</h3>
+            <h3>{!d || d.bias === "证据不足" ? "证据不足" : "可描述本窗口"}</h3>
             <p>
               已覆盖 {(100 * (d?.flow.coverage ?? 0)).toFixed(1)}% ·{" "}
               {d?.flow.boundaries ? "起止齐全" : "边界待补齐"}

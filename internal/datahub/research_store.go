@@ -229,3 +229,9 @@ func (w *Warehouse) completeNativeWindow(ctx context.Context, d Dataset, from, t
 	cursor, e := w.nativeCursor(ctx, d, from, to, now)
 	return e == nil && !cursor.Before(to)
 }
+
+func (w *Warehouse) datasetRangeVersion(ctx context.Context, id string, from, to time.Time) string {
+	var n, last int64
+	_ = w.research.QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE dataset=? AND ts>=? AND ts<?", id, from.Unix(), to.Unix()).Scan(&n, &last)
+	return fmt.Sprintf("%d/%d", n, last)
+}

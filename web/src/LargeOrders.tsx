@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { api, amount, price, age, clock, useAPI } from "./data";
 import { Status } from "./Pages";
 import type { Meta } from "./Pages";
@@ -42,6 +42,7 @@ type Board = {
   scaleMaxCents: number;
   hasMore: boolean;
   snapshotExpired?: boolean;
+  newSnapshotAvailable?: boolean;
   sources: Meta[];
   note: string;
   historyStatus?: {
@@ -94,10 +95,15 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
       : null,
     300000,
   );
+  const dialog = useRef<HTMLDialogElement>(null);
+  const [tick, setTick] = useState(0);
   useEffect(() => {
-    const t = setInterval(() => setHasNew(true), 300000);
+    const t = setInterval(() => setTick((n) => n + 1), 15000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, []);
+  useEffect(() => {
+    if (selected) dialog.current?.showModal();
+  }, [selected]);
   useEffect(() => {
     let alive = true;
     setLoading(true);
@@ -117,6 +123,7 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
       .then((v) => {
         if (!alive) return;
         setData(v);
+        setHasNew(!!v.newSnapshotAvailable);
         if (!version && v.version) setVersion(v.version);
       })
       .catch((e) => alive && setError(e.message))
@@ -124,7 +131,19 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
     return () => {
       alive = false;
     };
-  }, [asset, side, venue, sort, min, limit, offset, history, version, refresh]);
+  }, [
+    asset,
+    side,
+    venue,
+    sort,
+    min,
+    limit,
+    offset,
+    history,
+    version,
+    refresh,
+    tick,
+  ]);
   function fresh() {
     setVersion("");
     setOffset(0);
@@ -146,7 +165,7 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
           <p>五家交易所已获取的大单样本 · 约5分钟采集，12分钟有效</p>
         </div>
         <button className="secondary" onClick={fresh} disabled={loading}>
-          {loading ? "读取中…" : hasNew ? "定时检查 · 刷新快照" : "刷新快照"}
+          {loading ? "读取中…" : hasNew ? "新快照可用 · 刷新" : "刷新快照"}
         </button>
       </div>
       <div className="research-tabs">
@@ -333,11 +352,11 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
                   <small>截至 {clock(o.durationThrough || o.fetchedAt)}</small>
                 </span>
                 <span className="order-state">
-                  {o.historical
+                  {o.historical || o.rawState > 1
                     ? o.state
                     : o.valid
                       ? "快照有效"
-                      : "已过期 / 待更新"}
+                      : "快照或换算已过期"}
                   <small>{clock(o.fetchedAt)} 获取</small>
                 </span>
               </button>
@@ -382,7 +401,12 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
         </>
       )}
       {selected && (
-        <section className="order-inspector" aria-label="挂单详情">
+        <dialog
+          ref={dialog}
+          className="order-inspector"
+          aria-label="挂单详情"
+          onClose={() => setSelected(null)}
+        >
           <div className="section-heading">
             <h3>
               {selected.venue} · {selected.side === "bid" ? "买单" : "卖单"}{" "}
@@ -417,7 +441,7 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
           <p className="helper">
             累计成交不是本小时成交，也不是主动买入。余量减少或记录消失不能直接认定撤单；创建至获取的跨度不证明金额一直不变。
           </p>
-        </section>
+        </dialog>
       )}
       <details className="data-section">
         <summary>高级视图 · 本页挂单已出现时长</summary>

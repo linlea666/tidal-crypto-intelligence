@@ -60,6 +60,9 @@ func (h *Hub) mailStatus() any {
 	return map[string]any{"configured": h.mail != nil, "lastError": lastError, "limitPerHour": 6, "note": "站内记录始终可见；未配置邮件时不会补发旧事件。发送结果不确定时不自动重复发送。"}
 }
 func (h *Hub) queueNotice(s Signal, kind string, now time.Time) error {
+	if !researchAsset(s.Asset) {
+		return nil
+	}
 	b, e := json.Marshal(map[string]any{"asset": s.Asset, "direction": s.Direction, "kind": kind, "at": s.At, "dataThrough": s.DataThrough, "id": s.ID})
 	if e != nil {
 		return e

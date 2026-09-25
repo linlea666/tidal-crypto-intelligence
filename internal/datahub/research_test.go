@@ -473,6 +473,9 @@ func TestSignalAtomicLifecycleRestartAndExpiry(t *testing.T) {
 		}
 	}
 	feed(end.Add(-4*time.Hour), end, 100)
+	base.To = end.Truncate(time.Hour).Add(-time.Hour)
+	base.From = base.To.Add(-30 * 24 * time.Hour)
+	base.InputVersion = h.Store.datasetRangeVersion(ctx, fd.ID, base.From, base.To)
 	_ = h.Store.SaveState("signals/baseline/BTC", base)
 	state := signalState{Last: end.Add(-5 * time.Minute), Active: map[string]string{}, Clear: map[string]*time.Time{}}
 	if e = h.commitSignals(ctx, "BTC", state, nil, nil, now); e != nil {

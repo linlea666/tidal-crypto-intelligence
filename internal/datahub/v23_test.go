@@ -111,6 +111,9 @@ func TestLargeBoardAllRowsFrozenAndIsolated(t *testing.T) {
 	for page := 0; page < 3; page++ {
 		q.Set("offset", fmt.Sprint(page*50))
 		m := boardWire(t, h, q)
+		if m["newSnapshotAvailable"] != (page > 0) {
+			t.Fatal("new source version detection")
+		}
 		if m["total"] != float64(137) || m["scaleMaxCents"] != first["scaleMaxCents"] {
 			t.Fatal("page scale or total changed")
 		}
@@ -165,6 +168,14 @@ func TestBTCScope(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer h.Store.Close()
+	if e = h.queueNotice(Signal{Asset: "ETH", ID: "ETH-test"}, "anomaly", time.Now()); e != nil {
+		t.Fatal(e)
+	}
+	var notices int
+	h.Store.research.QueryRow("SELECT count(*) FROM notices").Scan(&notices)
+	if notices != 0 {
+		t.Fatal("ETH notice queued")
+	}
 	if _, e = h.CreateStudy(StudyRequest{Asset: "ETH"}); e == nil {
 		t.Fatal("ETH research accepted")
 	}

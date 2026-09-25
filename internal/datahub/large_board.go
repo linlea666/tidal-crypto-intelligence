@@ -78,6 +78,7 @@ func (h *Hub) LargeBoard(ctx context.Context, a string, q url.Values) (any, erro
 			}
 		}
 		v["at"] = now
+		v["sourceVersion"] = h.largeSourceVersion(a)
 		b, err := json.Marshal(v)
 		if err != nil {
 			return nil, err
@@ -107,6 +108,7 @@ func (h *Hub) LargeBoard(ctx context.Context, a string, q url.Values) (any, erro
 			return nil, err
 		}
 	}
+	v["newSnapshotAvailable"] = v["sourceVersion"] != h.largeSourceVersion(a)
 	all := v["items"].([]any)
 	rows := []map[string]any{}
 	minimum := parseFloat(q, "minUsd", 0, 0, 1e12) * 100
@@ -159,6 +161,23 @@ func (h *Hub) LargeBoard(ctx context.Context, a string, q url.Values) (any, erro
 	v["items"], v["total"], v["fetchedCount"], v["validCount"] = rows[min(offset, len(rows)):end], len(rows), len(all), valid
 	v["version"], v["offset"], v["limit"], v["hasMore"] = version, offset, limit, end < len(rows)
 	v["bidCents"], v["askCents"], v["scaleMaxCents"] = buy, sell, maxAmount
+	if len(rows) > 0 && valid == 0 {
+		v["bidCents"], v["askCents"] = nil, nil
+	}
 	v["note"] = "独立大单快照；只统计已获取样本，不额外计入普通买卖墙或BTC信号。时长截至快照，不承诺采样间一直存在。"
 	return v, nil
+}
+
+// Dataset revisions and retrieval times, independent of page visits or FX ticks.
+func (h *Hub) largeSourceVersion(a string) string {
+	parts := []string{}
+	for _, d := range h.datasets() {
+		if d.Asset == a && d.Kind == "large" {
+			if o, ok := h.Store.Latest(d.ID); ok {
+				parts = append(parts, fmt.Sprintf("%s/%s/%d", d.ID, o.Revision, o.FetchedAt.UnixNano()))
+			}
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ";")
 }

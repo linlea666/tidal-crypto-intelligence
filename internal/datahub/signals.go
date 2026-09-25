@@ -27,18 +27,19 @@ func (b FlowBar) Share() float64 {
 }
 
 type SignalBaseline struct {
-	At       time.Time `json:"at"`
-	From     time.Time `json:"from"`
-	To       time.Time `json:"to"`
-	Coverage float64   `json:"coverage"`
-	Dates    int       `json:"validDates"`
-	Valid    bool      `json:"valid"`
-	P95      float64   `json:"p95Cents"`
-	P05      float64   `json:"p05Cents"`
-	P90      float64   `json:"p90HourCents"`
-	P10      float64   `json:"p10HourCents"`
-	Median15 float64   `json:"median15VolumeCents"`
-	Median60 float64   `json:"median60VolumeCents"`
+	InputVersion string    `json:"inputVersion,omitempty"`
+	At           time.Time `json:"at"`
+	From         time.Time `json:"from"`
+	To           time.Time `json:"to"`
+	Coverage     float64   `json:"coverage"`
+	Dates        int       `json:"validDates"`
+	Valid        bool      `json:"valid"`
+	P95          float64   `json:"p95Cents"`
+	P05          float64   `json:"p05Cents"`
+	P90          float64   `json:"p90HourCents"`
+	P10          float64   `json:"p10HourCents"`
+	Median15     float64   `json:"median15VolumeCents"`
+	Median60     float64   `json:"median60VolumeCents"`
 }
 type Signal struct {
 	ID             string         `json:"id"`
@@ -368,14 +369,16 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 		}
 		var baseline SignalBaseline
 		_ = h.Store.LoadState("signals/baseline/"+a, &baseline)
-		if baseline.At.IsZero() || now.Sub(baseline.At) >= time.Hour {
-			to := end.Truncate(time.Hour).Add(-time.Hour)
-			from := to.Add(-30 * 24 * time.Hour)
+		to := end.Truncate(time.Hour).Add(-time.Hour)
+		from := to.Add(-30 * 24 * time.Hour)
+		baseVersion := h.Store.datasetRangeVersion(ctx, fd.ID, from, to)
+		if baseline.At.IsZero() || !baseline.To.Equal(to) || baseline.InputVersion != baseVersion {
 			acc := newFlowAccumulator(300)
 			if e := h.Store.FactsAsOf(ctx, fd.ID, from, to, now, func(o Observation) error { acc.add(o); return nil }); e != nil {
 				return e
 			}
 			baseline = newRollingBaseline(acc.finish(), from, to).result(now)
+			baseline.InputVersion = baseVersion
 			if e := h.Store.SaveState("signals/baseline/"+a, baseline); e != nil {
 				return e
 			}
