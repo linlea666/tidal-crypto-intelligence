@@ -182,6 +182,11 @@ func (h *Hub) maintain(ctx context.Context) {
 	cancelCtx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
 	_ = h.Store.Maintain(cancelCtx, h.datasets(), time.Now().UTC())
+	liquidityError := ""
+	if err := h.SampleLiquidity(cancelCtx, time.Now().UTC()); err != nil {
+		liquidityError = err.Error()
+	}
+	_ = h.Store.SaveState("liquidityError", liquidityError)
 	h.SampleWalls(time.Now().UTC())
 	h.SampleDistributions(time.Now().UTC())
 	h.writeReport()
@@ -208,9 +213,14 @@ func (h *Hub) maintain(ctx context.Context) {
 	// Baselines are prepared off the read path, at most once per hour.
 	var last time.Time
 	if !h.Store.LoadState("baselineComputed", &last) || time.Since(last) > time.Hour {
-		if h.BuildBaselines(cancelCtx) == nil {
-			_ = h.Store.SaveState("baselineComputed", time.Now().UTC())
+		baselineCtx, baselineCancel := context.WithTimeout(cancelCtx, 12*time.Second)
+		err := h.BuildBaselines(baselineCtx)
+		baselineCancel()
+		message := ""
+		if err != nil {
+			message = err.Error()
 		}
+		_ = h.Store.SaveState("baselineBuildError", message)
 	}
 }
 func (h *Hub) Ready() bool {

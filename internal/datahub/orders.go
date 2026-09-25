@@ -279,6 +279,29 @@ func (w *Warehouse) maintainOrders(ctx context.Context, now time.Time, days int)
 		return err
 	}
 	defer tx.Rollback()
+	// The UI exposes 30 minutes of detailed native-bucket changes. Keep at least
+	// an hour for delayed footprints, then preserve sampled counts by source,
+	// side and bucket width. Never sum inventory reductions as executed flow.
+	cut := now.Add(-time.Hour).Truncate(time.Hour).Unix()
+	_, err = tx.ExecContext(ctx, `INSERT INTO liquidity_hours
+SELECT asset,dataset,json_extract(payload,'$.side'),json_extract(payload,'$.step'),(ts/3600)*3600,
+json_object('kind','sampled_liquidity_observations','resolutionSeconds',3600,
+'count',count(*),'decreases',sum(json_extract(payload,'$.kind')='decrease'),
+'unreturned',sum(json_extract(payload,'$.kind')='unreturned'),
+'uncomparable',sum(json_extract(payload,'$.kind')='uncomparable'),
+'maxDecreasePercent',max(CASE WHEN json_extract(payload,'$.decreasePercent')>0 THEN json_extract(payload,'$.decreasePercent') END),
+'firstSourceAt',min(ts),'lastSourceAt',max(ts),'detailAvailable',json('false'))
+FROM liquidity_events WHERE ts<? GROUP BY asset,dataset,json_extract(payload,'$.side'),json_extract(payload,'$.step'),ts/3600
+ON CONFLICT(dataset,side,step,ts) DO UPDATE SET payload=excluded.payload`, cut)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM liquidity_events WHERE ts<?", cut); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM liquidity_hours WHERE ts<?", now.Add(-time.Duration(days)*24*time.Hour).Unix()); err != nil {
+		return err
+	}
 	// Summaries are replaceable counts, not sums of cumulative fills. Recompute
 	// before deleting detail, and retain their explicit sampled-event semantics.
 	_, err = tx.ExecContext(ctx, `INSERT INTO order_hours SELECT asset,(ts/3600)*3600,json_object('observedEvents',count(*),'kind','sampled_order_events') FROM order_events WHERE ts<? GROUP BY asset,(ts/3600) ON CONFLICT(asset,ts) DO UPDATE SET payload=excluded.payload`, now.Add(-30*24*time.Hour).Truncate(time.Hour).Unix())
@@ -299,7 +322,7 @@ func (w *Warehouse) maintainOrders(ctx context.Context, now time.Time, days int)
 		}
 	}
 	var bytes int64
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT sum(length(payload)+length(k)+length(order_key)+128) FROM order_events),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM tracked_orders),0)+coalesce((SELECT sum(length(payload)+64) FROM order_hours),0)`).Scan(&bytes); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT sum(length(payload)+length(k)+length(order_key)+128) FROM order_events),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM tracked_orders),0)+coalesce((SELECT sum(length(payload)+64) FROM order_hours),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM liquidity_events),0)+coalesce((SELECT sum(length(payload)+length(dataset)+128) FROM liquidity_hours),0)`).Scan(&bytes); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
