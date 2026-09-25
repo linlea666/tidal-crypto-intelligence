@@ -447,7 +447,11 @@ func TestSignalAtomicLifecycleRestartAndExpiry(t *testing.T) {
 	}
 	defer h.Store.Close()
 	ctx := context.Background()
-	end := time.Now().UTC().Truncate(5 * time.Minute)
+	// This lifecycle fixture injects a valid baseline but stores only four hours
+	// of facts. Keep its 15-minute sequence within one baseline hour: crossing an
+	// hour must invalidate that fixture and correctly rebuild an insufficient
+	// baseline, which is not the lifecycle behavior under test here.
+	end := time.Now().UTC().Truncate(time.Hour).Add(-30 * time.Minute)
 	now := end.Add(30 * time.Second)
 	h.boot = end.Add(-time.Hour)
 	base := SignalBaseline{At: now, Valid: true, Coverage: 1, Dates: 30, P95: 100, P05: -100, P90: 100, P10: -100, Median15: 1, Median60: 1}
