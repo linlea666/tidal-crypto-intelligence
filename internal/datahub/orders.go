@@ -289,7 +289,7 @@ json_object('kind','sampled_liquidity_observations','resolutionSeconds',3600,
 'count',count(*),'decreases',sum(json_extract(payload,'$.kind')='decrease'),
 'unreturned',sum(json_extract(payload,'$.kind')='unreturned'),
 'uncomparable',sum(json_extract(payload,'$.kind')='uncomparable'),
-'maxDecreasePercent',max(json_extract(payload,'$.decreasePercent')),
+'maxDecreasePercent',max(CASE WHEN json_extract(payload,'$.decreasePercent')>0 THEN json_extract(payload,'$.decreasePercent') END),
 'firstSourceAt',min(ts),'lastSourceAt',max(ts),'detailAvailable',json('false'))
 FROM liquidity_events WHERE ts<? GROUP BY asset,dataset,json_extract(payload,'$.side'),json_extract(payload,'$.step'),ts/3600
 ON CONFLICT(dataset,side,step,ts) DO UPDATE SET payload=excluded.payload`, cut)
