@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -283,6 +284,9 @@ func TestLiquidityPersistenceRevisionsAndIsolation(t *testing.T) {
 	large.Quantity = "999999"
 	h.Store.Ingest(ld, orderObservation(ld, now, large))
 	wallAfter := h.rawFrame("BTC", 100, now)
+	// Missing-source metadata is built from a map; compare its set in stable order.
+	sort.Slice(wallBefore.Coverage, func(i, j int) bool { return wallBefore.Coverage[i].Venue < wallBefore.Coverage[j].Venue })
+	sort.Slice(wallAfter.Coverage, func(i, j int) bool { return wallAfter.Coverage[i].Venue < wallAfter.Coverage[j].Venue })
 	if !reflect.DeepEqual(wallBefore, wallAfter) {
 		t.Fatal("large order changed ordinary wall")
 	}
