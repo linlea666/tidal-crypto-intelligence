@@ -442,3 +442,55 @@ func TestLiquidityLateFootprintBackupBudgetAndGET(t *testing.T) {
 		t.Fatal("budget gap unreported")
 	}
 }
+
+func TestLiquidityRollupKeepsRecentDetailAndExplicitHourlyCounts(t *testing.T) {
+	h, e := Open(Config{Root: t.TempDir(), Offline: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer h.Store.Close()
+	now := time.Now().UTC()
+	old := now.Add(-3 * time.Hour).Truncate(time.Hour)
+	for i, at := range []time.Time{old, old.Add(time.Minute), now.Add(-20 * time.Minute)} {
+		event := LiquidityEvent{Key: fmt.Sprint(i), Dataset: "book.btc.coinbase.spot", Venue: "Coinbase", Side: "bid", Low: 80000, Step: 100, At: at, KnownAt: at, Kind: "decrease", Before: ptr("10"), After: ptr("5")}
+		b, _ := json.Marshal(event)
+		if _, e = h.Store.db.Exec("INSERT INTO liquidity_events VALUES(?,?,?,?,?)", event.Key, "BTC", event.Dataset, at.Unix(), b); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = h.Store.maintainOrders(context.Background(), now, 30); e != nil {
+		t.Fatal(e)
+	}
+	var n int
+	h.Store.db.QueryRow("SELECT count(*) FROM liquidity_events").Scan(&n)
+	if n != 1 {
+		t.Fatal("recent detail retention", n)
+	}
+	var b []byte
+	if e = h.Store.db.QueryRow("SELECT payload FROM liquidity_hours").Scan(&b); e != nil {
+		t.Fatal(e)
+	}
+	var summary map[string]any
+	json.Unmarshal(b, &summary)
+	if summary["count"] != float64(2) || summary["resolutionSeconds"] != float64(3600) || summary["detailAvailable"] != false {
+		t.Fatal("ambiguous rollup", summary)
+	}
+	if e = h.Store.maintainOrders(context.Background(), now, 30); e != nil {
+		t.Fatal(e)
+	}
+	h.Store.db.QueryRow("SELECT count(*) FROM liquidity_hours").Scan(&n)
+	if n != 1 {
+		t.Fatal("duplicate rollup")
+	}
+	var later []byte
+	h.Store.db.QueryRow("SELECT payload FROM liquidity_hours").Scan(&later)
+	if string(b) != string(later) {
+		t.Fatal("replaced complete counts after detail deletion")
+	}
+	var tracked, actual int64
+	h.Store.db.QueryRow("SELECT bytes FROM order_storage WHERE id=1").Scan(&tracked)
+	h.Store.db.QueryRow(`SELECT (SELECT sum(length(payload)+length(k)+128) FROM liquidity_events)+(SELECT sum(length(payload)+length(dataset)+128) FROM liquidity_hours)`).Scan(&actual)
+	if tracked != actual {
+		t.Fatalf("summary budget mismatch %d %d", tracked, actual)
+	}
+}

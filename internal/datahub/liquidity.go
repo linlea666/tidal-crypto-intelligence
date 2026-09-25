@@ -55,6 +55,10 @@ func (w *Warehouse) initLiquidity() error {
 	_, e := w.db.Exec(`CREATE TABLE IF NOT EXISTS liquidity_events(k TEXT PRIMARY KEY,asset TEXT,dataset TEXT,ts INTEGER,payload BLOB);
 CREATE INDEX IF NOT EXISTS liquidity_window ON liquidity_events(asset,ts);
 CREATE INDEX IF NOT EXISTS liquidity_source ON liquidity_events(dataset,ts);
+CREATE TABLE IF NOT EXISTS liquidity_hours(asset TEXT,dataset TEXT,side TEXT,step REAL,ts INTEGER,payload BLOB,PRIMARY KEY(dataset,side,step,ts));
+CREATE TRIGGER IF NOT EXISTS liquidity_hour_size_i AFTER INSERT ON liquidity_hours BEGIN UPDATE order_storage SET bytes=bytes+length(NEW.payload)+length(NEW.dataset)+128 WHERE id=1; END;
+CREATE TRIGGER IF NOT EXISTS liquidity_hour_size_u AFTER UPDATE ON liquidity_hours BEGIN UPDATE order_storage SET bytes=bytes+length(NEW.payload)-length(OLD.payload) WHERE id=1; END;
+CREATE TRIGGER IF NOT EXISTS liquidity_hour_size_d AFTER DELETE ON liquidity_hours BEGIN UPDATE order_storage SET bytes=bytes-length(OLD.payload)-length(OLD.dataset)-128 WHERE id=1; END;
 CREATE TRIGGER IF NOT EXISTS liquidity_size_i AFTER INSERT ON liquidity_events BEGIN UPDATE order_storage SET bytes=bytes+length(NEW.payload)+length(NEW.k)+128 WHERE id=1; END;
 CREATE TRIGGER IF NOT EXISTS liquidity_size_u AFTER UPDATE ON liquidity_events BEGIN UPDATE order_storage SET bytes=bytes+length(NEW.payload)-length(OLD.payload) WHERE id=1; END;
 CREATE TRIGGER IF NOT EXISTS liquidity_size_d AFTER DELETE ON liquidity_events BEGIN UPDATE order_storage SET bytes=bytes-length(OLD.payload)-length(OLD.k)-128 WHERE id=1; END;`)

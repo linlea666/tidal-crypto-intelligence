@@ -399,7 +399,7 @@ func (h *Hub) Overview(ctx context.Context, asset string, step, span float64, mi
 				z.Reason = "历史P95、持续大额、三家贡献、匹配足迹和随后两根K线共同支持"
 			}
 		}
-		z.NearReference = f.PriceValid && math.Min(math.Abs(z.Price/f.Price-1), math.Abs((z.Price+z.Step)/f.Price-1))*100 <= policy.Near
+		z.NearReference = f.PriceValid && ((z.Price <= f.Price && f.Price < z.Price+z.Step) || math.Min(math.Abs(z.Price/f.Price-1), math.Abs((z.Price+z.Step)/f.Price-1))*100 <= policy.Near)
 		seen := map[string]bool{}
 		for _, e := range events {
 			if e.Side != z.Side || e.DisplayLow >= z.Price+z.Step || e.DisplayHigh <= z.Price || seen[fmt.Sprintf("%s/%.8f", e.Venue, e.Low)] {
