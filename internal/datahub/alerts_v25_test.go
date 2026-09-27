@@ -268,6 +268,7 @@ func TestCandidateMailNeedsHumanReviewAndFreshForwardEvidence(t *testing.T) {
 	defer h.Store.Close()
 	ctx := context.Background()
 	now := time.Now().UTC()
+	h.boot = now.Add(-time.Minute)
 	origin := now.Add(-15 * 24 * time.Hour)
 	h.mail = &MailConfig{DashboardURL: "https://example.com"}
 	report := ForwardReport{Evaluation: EvaluationVersion, CandidateReady: true, CandidateOrigin: &origin, To: now}
@@ -437,5 +438,27 @@ func TestPriceLedgerAnchorSurvivesReportWindowAndRestart(t *testing.T) {
 	after, e := h.loadPriceEvents(ctx, "BTC", end.Add(-30*time.Minute), end.Add(time.Hour))
 	if e != nil || !reflect.DeepEqual(first, after) {
 		t.Fatal("ledger anchor changed", first, after, e)
+	}
+}
+
+func TestNoticeSameSecondRestartNeverSendsBacklog(t *testing.T) {
+	h, e := Open(Config{Root: t.TempDir(), Offline: true, Mail: &MailConfig{}})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer h.Store.Close()
+	now := time.Now().UTC().Truncate(time.Second)
+	h.boot = now.Add(500 * time.Millisecond)
+	sig := Signal{ID: "restart-boundary", Asset: "BTC", Rules: SignalRules, At: now.Add(100 * time.Millisecond), DataThrough: now, Expires: now.Add(4 * time.Hour)}
+	if e = h.queueNotice(sig, "anomaly", sig.At); e != nil {
+		t.Fatal(e)
+	}
+	if e = h.processNotices(context.Background(), now.Add(time.Second)); e != nil {
+		t.Fatal("attempted SMTP for a restart backlog", e)
+	}
+	var state string
+	_ = h.Store.research.QueryRow("SELECT status FROM notices WHERE signal_id=?", sig.ID).Scan(&state)
+	if state != "suppressed_restart" {
+		t.Fatal(state)
 	}
 }

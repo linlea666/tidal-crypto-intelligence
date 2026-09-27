@@ -484,7 +484,11 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 		r.Events = nil // Partial events are not complete strategy statistics.
 		return r, e
 	}
-	r.CandidateComparison, e = evaluateCandidates(ctx, bars, candles, s.From, s.To)
+	futures := newFlowAccumulator(300)
+	if e = h.Store.FactsAsOf(ctx, ID("flow", s.Asset, "", "futures"), s.From, s.To, now, func(o Observation) error { futures.add(o); return nil }); e != nil {
+		return nil, e
+	}
+	r.CandidateComparison, e = evaluateCandidates(ctx, bars, candles, s.From, s.To, CandidateContextSeries{futures.finish(), oi})
 	if e != nil {
 		return nil, e
 	}

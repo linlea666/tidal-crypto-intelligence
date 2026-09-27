@@ -156,10 +156,10 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	}
 	// Crash-after-send is intentionally at-most-once: never repeat an ambiguous
 	// SMTP delivery. Persisted in-flight notices become unknown on restart.
-	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE status='sending' AND attempted<?", h.boot.Unix()); e != nil {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE status='sending' AND attempted<=?", h.boot.Unix()); e != nil {
 		return e
 	}
-	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_restart' WHERE status='pending' AND created<?", h.boot.Unix()); e != nil {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_restart' WHERE status='pending' AND created<=?", h.boot.Unix()); e != nil {
 		return e
 	}
 	var attempts int

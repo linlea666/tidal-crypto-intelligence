@@ -692,7 +692,7 @@ type StudyItem = {
   error?: string;
   jobs: string[];
   result: {
-    candidateComparison?: { commonWindows: number; development: RuleComparison[]; holdout: RuleComparison[]; note: string } | null;
+    candidateComparison?: { commonWindows: number; development: RuleComparison[]; holdout: RuleComparison[]; auxiliary?: RuleComparison[]; auxiliaryWindows?: number; equalBudget?: RuleComparison[]; dailyBudget?: Record<string, number>; note: string } | null;
     strategyState?: string;
     caseState?: string;
     coverage?: {
@@ -894,6 +894,8 @@ export function StudiesPage({ asset }: { asset: Asset }) {
             <h3>固定候选历史对照 · {d.result.candidateComparison.commonWindows}个共同有效窗口</h3>
             <p className="helper">{d.result.candidateComparison.note}</p>
             <h4>独立留出（排除指定案例）</h4><ComparisonTable items={d.result.candidateComparison.holdout} />
+            {!!d.result.candidateComparison.auxiliary?.length && <details><summary>合约背景独立过滤对照 · {d.result.candidateComparison.auxiliaryWindows ?? 0}个共同窗口</summary><ComparisonTable items={d.result.candidateComparison.auxiliary} /></details>}
+            {!!d.result.candidateComparison.equalBudget?.length && <details><summary>相同提醒数量对照 · {Object.keys(d.result.candidateComparison.dailyBudget ?? {}).length}个共同日期</summary><p className="helper">每个UTC日按三规则最小提醒数，各保留最早提醒；仅作事后人工审查辅助，不是已验证的线上策略。</p><ComparisonTable items={d.result.candidateComparison.equalBudget} /></details>}
             <details><summary>开发期与延迟对照</summary><ComparisonTable items={d.result.candidateComparison.development} /></details>
           </section>}
           {!!d.result?.experiments?.length && (

@@ -598,6 +598,7 @@ func TestMailRollingCapBeforeDelivery(t *testing.T) {
 	}
 	defer h.Store.Close()
 	now := time.Now().UTC()
+	h.boot = now.Add(-time.Minute)
 	for i := 0; i < 6; i++ {
 		_, e = h.Store.research.Exec("INSERT INTO notices(id,created,status,attempted,payload) VALUES(?,?,'sent',?,'{}')", fmt.Sprint(i), now.Unix(), now.Add(-time.Duration(i+1)*time.Minute).Unix())
 		if e != nil {
