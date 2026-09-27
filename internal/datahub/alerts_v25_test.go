@@ -540,3 +540,27 @@ func TestStudyValidationImmutableAcrossRetentionAndRevisions(t *testing.T) {
 		t.Fatal("retention status removed original evidence", e)
 	}
 }
+
+func TestForwardVersionMigrationBypassesPriorHourlyDeadline(t *testing.T) {
+	h, e := Open(Config{Root: t.TempDir(), Offline: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer h.Store.Close()
+	now := time.Now().UTC()
+	if e = h.Store.SaveState("signals/forwardAt", now.Add(-time.Minute)); e != nil {
+		t.Fatal(e)
+	}
+	if !h.forwardReportDue(now) {
+		t.Fatal("old matching report blocked migration until its hourly deadline")
+	}
+	if e = h.Store.SaveState("signals/forwardEvaluation", EvaluationVersion); e != nil {
+		t.Fatal(e)
+	}
+	if h.forwardReportDue(now) || !h.forwardReportDue(now.Add(time.Hour)) {
+		t.Fatal("same-version hourly schedule changed")
+	}
+	if e = h.Store.SaveState("signals/forwardEvaluation", "previous-evaluation"); e != nil || !h.forwardReportDue(now) {
+		t.Fatal("another evaluation version was treated as current", e)
+	}
+}
