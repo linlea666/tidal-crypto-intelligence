@@ -1,16 +1,30 @@
 # 实施状态
 
-## 当前开发：V2.5 预警正确性与固定候选验证
+## V2.5.2 预警正确性与固定候选验证：已上线，效果仍在验收
 
-已按确认方案完成本地实现并提交 [PR #6](https://github.com/linlea666/tidal-crypto-intelligence/pull/6)，尚未发布。旧规则不变；新增 BTC 固定候选只在站内观察，候选邮件需历史研究、14天/95%/30个独立事件及人工审查、真实收件验收共同通过后配置。实现边界、根因、复用和启用要求见 [V2.5说明](V2.5-ALERT-VALIDATION.md)。
+主体改进经 [PR #6](https://github.com/linlea666/tidal-crypto-intelligence/pull/6)、评估版本迁移 [PR #7](https://github.com/linlea666/tidal-crypto-intelligence/pull/7) 发布为 [v2.5.0](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.5.0)。生产浏览器发现入口HTML缓存仍可能引用旧脚本，已通过 [PR #8](https://github.com/linlea666/tidal-crypto-intelligence/pull/8) 的v2.5.1要求入口重新校验，哈希资源缓存不变；原有标签需刷新一次。最后验收发现旧事件缺失检测延迟被默认值保存为0，已通过 [PR #9](https://github.com/linlea666/tidal-crypto-intelligence/pull/9) 修正，并于9月27日北京时间13:01切换为 [v2.5.2](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.5.2)。当前固定revision `05b3bb04e79a6bacbaeeee9b63d9f5aac92d1207`，不可变镜像 `sha256:708fee73425c0548a036fec72da1bcfb5ab07287e8c1f55a238ac3d5adbfcc89`。[发布前检查](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/36295224964) 与 [稳定Release构建、Compose/TLS/登录检查及部署](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/36295782192) 均通过。源码仍由本地进入GitHub，服务器没有本地改源码或构建。
 
-本地新增业务回归、Go race/vet、前端类型/构建/基础测试已通过。隔离离线验收环境完成1440px桌面、390px手机的规则筛选、支持/冲突展开、空事件复盘、匹配记录、未尝试补采显示及ETH功能边界；修复后无新增浏览器错误，两种验收尺寸无页面横向溢出。验收夹具仅在忽略目录，未写入生产。首轮本机90秒维护回放不足以完成原有30天盘口基线检查点，测试明确失败（baseline maintenance never completed）；未放宽断言，随后既有6分钟完整回放通过：维护阶段368.24秒、33个本机运行时采样，样本峰值活动堆35.45MiB、HeapSys50.00MiB；包含90天事实、完整研究计算、30天盘口维护和并发本地读取，零上游调用。最终受限Linux结果以GitHub当前提交检查为准。macOS 本机回放不能声称受限Linux或生产内存达标。服务器未重启、旧验收起点未重置。
+已交付独立生命周期跟踪、一对一行情匹配及持久行情账本、闭合窗口/粒度隔离、分段有界补采、固定候选与价格阶段、冻结初始/升级特征、共同样本和0/5/10分钟延迟对照、不可变研究评估快照，以及默认关闭的强候选邮件授权门槛。旧规则继续作为对照；BTC专用预警，ETH日常行情保留。实现边界、根因、复用与启用要求见 [V2.5说明](V2.5-ALERT-VALIDATION.md)。
 
-实现提交 `3df6dcb` 的 [Linux检查](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/36291220791) 已通过 verify、基线参考和受限资源回放，资源回放包含完整候选研究及 signals/studies 并发读取；本轮未启动5小时15分钟长回放。冻结评估快照及 V2.5 独立监控识别的最终补充仍需随当前提交检查。离线验收数据库经在线SQLite备份、独立重新打开，候选规则、冻结特征、升级记录和研究均保留；没有启动采集或SMTP。
+9月27日05:02 UTC最终生产HTTPS复核：升级前8条逾期未闭合事件全部正确到期，记录处理时间及旧状态，12条原记录的发现时间/规则不变；原有3条确认时间保持不变，未追认确认或补发历史邮件。12条历史记录的缺失检测延迟均保持未知，实际浏览器确认没有误显为0秒。旧前向观察起点 `2026-09-24T17:39:44.820195913Z` 保留，新评估版本首轮立即刷新，旧定义报告归档；当前2次提前、6次跟随、1次未提醒与旧重复匹配统计口径不同，不能据此声称效果改善。候选独立起点为 **2026-09-27T04:13:47.93995321Z**（北京时间12:13:47），补丁没有重置它。基线覆盖100%、29个有效日期，当前候选输入完整，但现场候选事件尚无；报告按小时生成，起步阶段显示0.0天不代表已经验证。SMTP未配置，候选邮件关闭。
+
+新90天研究 `study-5f3ebfce9eb38939c34a` 使用 `research-2.5`，旧研究保留只读。初期五分钟成交覆盖从41.2%推进至66.65%（05:02 UTC，105个已排队子任务），价格覆盖100%，仍未达到95%门槛，策略检验保持未完成；队列满时保留游标，其他任务完成后继续，不把未尝试区间标为全段不可用。指定案例与独立留出隔离，原生小时和完整五分钟成交差异并列保留，上游差异根因仍未确认。
+
+已通过业务正确性、Go race/vet、前端类型/构建/4项基础测试；1440px桌面和390px手机完成隔离离线及实际生产的规则筛选、空事件、历史复盘、一对一记录、BTC/ETH边界检查，相关视图无页面横向溢出或浏览器运行错误。生产确认ETH普通行情正常且预警/研究按钮禁用。离线备份通过SQLite在线备份、独立重开核对规则、冻结特征、升级记录和研究；未启动采集或SMTP，夹具不进入生产。
+
+资源证据分开记录：本机首轮90秒回放未完成原有30天盘口维护检查点，明确失败（baseline maintenance never completed）；未放宽断言，随后既有6分钟回放通过，维护阶段368.24秒、33个本机运行时样本、活动堆峰值35.45MiB、HeapSys50.00MiB。v2.5.1主分支受限Linux短回放使用1.7核/768MiB，117个容器样本、峰值94.79MiB、中位68.61MiB，维护361.36秒；v2.5.2最终补丁的 [发布前检查](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/36295224964) 同样通过，122个样本、峰值97.47MiB、中位67.54MiB、维护369.59秒，活动堆峰值37.18MiB，无OOM。回放包含90天事实、完整研究计算、30天盘口维护和并发本地读取，零上游调用；退出后的0值采样不作为资源改善证据。**V2.5的5小时15分钟长回放尚未启动，生产72小时验收未完成**，V2.4长回放不能替代。
+
+合并后的 [最终主分支检查](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/36295749636) 也已通过；独立受限回放124个样本，容器峰值105.9MiB、中位67.93MiB，维护369.90秒、活动堆峰值39.45MiB，无OOM。与发布前结果分别保存，不混用样本。
+
+V2.5.2独立生产起点固定为 **2026-09-27T05:02:00.621950Z**（北京时间13:02:00），预期满72小时为 **2026-09-30T05:02:00.621950Z**。首个合格样本应用105.4MiB，两个容器运行、应用健康、无重启/OOM；BTC/ETH各五家盘口、价格/FX、现货及合约成交当前有效。原始记录为忽略目录的 `soak-v2.5.2-start.json` 和 `soak-v2.5.2-initial-report.json`。V2.5.1原起点 `2026-09-27T04:36:55.400293Z` 保留，在04:57:00最后稳定采样结束：0.335小时、5个样本、峰值196.8MiB，因补丁迁移记为未完成；结束记录另存 `soak-v2.5-end.json`。不覆盖旧起点、不拼接跨版本时间。现场候选14天/95%/30个独立买方行情事件、90天完整历史、人工同等提醒数量效果审查及SMTP真实收件是独立验收；任一缺失都不启用候选邮件。
 
 9月27日03:21–03:26 UTC只读生产复核：V2.4仍健康，无重启/OOM；相邻采样的进程驻留约99.85MiB、Go活动堆64.69MiB、HeapSys186.69MiB，cgroup v1文件缓存493.84MiB（active_file414.20MiB、inactive_file83.44MiB），总计641.98MiB。Docker CLI在Linux扣除 inactive_file，因此其显示值不能直接等同Go堆；口径见 [Docker官方说明](https://docs.docker.com/reference/cli/docker/container/stats/)。这些读取不是同一原子快照，也不能证明历史峰值或泄漏；当前文件页缓存占比较大，后续负载剖析应同时对照I/O、文件缓存与堆。本轮未调GC、未清缓存、未提高上限，600MiB目标与72小时验收仍未达成。完整只读证据和内存摘要保存在忽略的私有目录。
 
-## V2.4.0 正式生产记录：长回放通过，生产长期验收未完成
+**单独未解决事项**：04:22 UTC普通盘口24小时历史查询 `/api/v2/history?asset=BTC&hours=24&price=84400&step=100&range=10` 约9.06秒返回HTTP400及 `context deadline exceeded`。该查询算法本轮未修改，尚不能判断旧问题还是负载回归，未用增加超时或内存上限掩盖；预警/研究接口正常。另有原顶栏1280px宽度约26px溢出，本轮不改无关导航。两项均不能记为已验收。
+
+## V2.4.0 历史记录：长回放通过，生产因迁移结束、未满72小时
+
+V2.5升级前最后稳定采样为 **2026-09-27T04:11:45.507778Z**；从原固定起点累计42.691小时、512个样本。无就绪失败、版本混用、重启或OOM；Docker内存中位522.0MiB、峰值659.2MiB、末值558.2MiB，67个样本超过600MiB。记为 `incomplete_migration`，不认定72小时通过，资源目标也未稳定达到。原起点及校验值保留，结束与完整报告单独保存为 `soak-v2.4-end.json`、`soak-v2.4-final-report.json`；下文为当时上线及初始验收记录。
 
 
 2026-09-25北京时间17:28:49，[v2.4.0](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.4.0) 经 [PR #5](https://github.com/linlea666/tidal-crypto-intelligence/pull/5)、[主分支检查](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/36117356157) 和 [正式发布部署](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/36118355021) 切换服务器。固定revision为 `be1f0c883a0ce16105284b0ed3a0a9f7bdd9b53d`，不可变镜像为 `sha256:23984b61a9f78a847b7ddc3f67b6c6775d161c216201b8b14675d99d82b748a5`。发布流水线的race、镜像构建、生产Compose/TLS/登录检查及部署均成功；升级前在线备份与上一稳定镜像按既有流程保留。
