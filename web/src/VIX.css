@@ -1,0 +1,328 @@
+.vix-source-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 0 0 18px;
+}
+.vix-source-status svg {
+  flex-shrink: 0;
+}
+.vix-source-status strong {
+  color: var(--amber);
+}
+.vix-metrics {
+  display: grid;
+  grid-template-columns: 1.1fr 1fr 1fr 1.3fr;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 28px;
+}
+.vix-metrics > div {
+  min-width: 0;
+  padding: 22px 22px 22px 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 12px;
+}
+.vix-metrics > div + div {
+  border-left: 1px solid var(--line);
+  padding-left: 24px;
+}
+.vix-metrics > div > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+.vix-metrics strong {
+  font-size: 25px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.vix-metrics .vix-value {
+  font-size: 52px;
+  letter-spacing: -1.5px;
+  line-height: 1;
+}
+.vix-metrics .vix-time {
+  font-size: 19px;
+}
+.vix-metrics small {
+  line-height: 1.6;
+}
+.vix-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 30px;
+}
+.vix-chart-panel,
+.vix-alert-panel {
+  min-width: 0;
+}
+.vix-alert-panel {
+  border-left: 1px solid var(--line);
+  padding-left: 28px;
+}
+.vix-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+.vix-section-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.vix-section-heading .segmented {
+  flex-shrink: 0;
+}
+.vix-section-heading .segmented button {
+  padding: 8px 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.vix-page .helper {
+  font-size: 12px;
+  line-height: 1.8;
+}
+.vix-bands {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-top: 24px;
+  border-top: 1px solid var(--line);
+}
+.vix-bands > div {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 17px 0;
+}
+.vix-bands b {
+  font-size: 20px;
+  font-weight: 500;
+}
+.vix-bands span {
+  font-size: 12px;
+}
+.vix-chip {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  padding: 5px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.vix-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 0 12px;
+}
+.vix-toggle span {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 13px;
+}
+.vix-toggle strong {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.vix-toggle input {
+  width: 19px;
+  min-height: 19px;
+  height: 19px;
+  accent-color: var(--green);
+  cursor: pointer;
+}
+.vix-rule {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+}
+.vix-rule b {
+  font-size: 22px;
+  font-weight: 500;
+  display: block;
+  margin-bottom: 9px;
+}
+.vix-rule strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+.vix-rule p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+  margin-top: 6px;
+}
+.vix-cycle {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 12px;
+  font-size: 12px;
+  line-height: 1.8;
+  padding: 9px 0;
+}
+.vix-cycle dt {
+  color: var(--muted);
+}
+.vix-cycle dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.vix-save-message {
+  font-size: 12px;
+  line-height: 1.8;
+  padding-top: 12px;
+  color: var(--amber);
+}
+.vix-empty {
+  min-height: 360px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  text-align: center;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+  font-size: 14px;
+  line-height: 1.8;
+}
+.vix-empty.compact {
+  min-height: 110px;
+  border: 1px dashed var(--line);
+}
+.vix-event {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr 1.2fr;
+  gap: 24px;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+  font-size: 13px;
+  line-height: 1.8;
+}
+.vix-event > div {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.vix-event > span {
+  color: var(--muted);
+}
+.vix-explainer {
+  display: flex;
+  gap: 16px;
+  margin: 30px 0;
+  padding: 24px 0;
+  border-top: 1px solid var(--line);
+}
+.vix-explainer > svg {
+  color: var(--amber);
+  flex-shrink: 0;
+}
+.vix-explainer h2 {
+  font-size: 16px;
+}
+.vix-explainer p {
+  margin-top: 10px;
+  color: var(--muted);
+  line-height: 1.9;
+  font-size: 13px;
+  max-width: 960px;
+}
+.vix-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  margin-top: 14px;
+  font-size: 12px;
+}
+.vix-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+@media (max-width: 1100px) {
+  .vix-layout {
+    grid-template-columns: minmax(0, 1fr) 285px;
+    gap: 20px;
+  }
+  .vix-alert-panel {
+    padding-left: 20px;
+  }
+  .vix-section-heading {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .vix-metrics strong {
+    font-size: 21px;
+  }
+  .vix-metrics .vix-time {
+    font-size: 16px;
+  }
+}
+@media (max-width: 800px) {
+  .vix-layout {
+    grid-template-columns: 1fr;
+  }
+  .vix-alert-panel {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding: 24px 0 0;
+  }
+  .vix-metrics {
+    grid-template-columns: 1fr 1fr;
+  }
+  .vix-metrics > div {
+    padding: 20px 12px 20px 0;
+  }
+  .vix-metrics > div + div {
+    padding-left: 16px;
+  }
+  .vix-metrics > div:nth-child(3) {
+    border-left: 0;
+    padding-left: 0;
+  }
+  .vix-metrics > div:nth-child(n + 3) {
+    border-top: 1px solid var(--line);
+  }
+  .vix-metrics .vix-value {
+    font-size: 44px;
+  }
+  .vix-metrics strong {
+    font-size: 21px;
+  }
+  .vix-event {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+@media (max-width: 450px) {
+  .vix-metrics strong {
+    font-size: 19px;
+  }
+  .vix-metrics .vix-time {
+    font-size: 15px;
+  }
+  .vix-section-heading .segmented {
+    max-width: 100%;
+  }
+  .vix-section-heading .segmented button {
+    padding: 8px 10px;
+  }
+  .vix-bands b {
+    font-size: 17px;
+  }
+  .vix-bands span {
+    font-size: 11px;
+  }
+}

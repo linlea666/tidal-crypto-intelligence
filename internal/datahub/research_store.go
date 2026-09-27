@@ -33,6 +33,10 @@ func (w *Warehouse) initResearch() error {
 		return e
 	}
 	w.research = db
+	if e = w.initVIX(); e != nil {
+		db.Close()
+		return e
+	}
 	return nil
 }
 func researchKind(d Dataset) bool {
@@ -169,7 +173,7 @@ func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days in
 	// Native research facts are retained up to the selected policy (90 days are
 	// necessary for the explicit 30/30/30 study); budget protection takes priority.
 	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour).Unix()
-	for _, q := range []string{"DELETE FROM facts WHERE ts<?", "DELETE FROM documents WHERE at<?", "DELETE FROM notices WHERE created<?", "DELETE FROM gaps WHERE end<?", "DELETE FROM shadow WHERE ts<?"} {
+	for _, q := range []string{"DELETE FROM facts WHERE ts<?", "DELETE FROM documents WHERE at<?", "DELETE FROM notices WHERE created<? AND (kind IS NULL OR kind NOT LIKE 'vix:%')", "DELETE FROM gaps WHERE end<?", "DELETE FROM shadow WHERE ts<?"} {
 		if _, e := w.research.ExecContext(ctx, q, cutoff); e != nil {
 			return e
 		}

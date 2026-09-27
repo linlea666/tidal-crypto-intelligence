@@ -490,11 +490,14 @@ func (h *Hub) CandleView(ctx context.Context, a string, hours int) (any, error) 
 	return map[string]any{"points": points, "resolution": fmt.Sprintf("%ds", res), "quote": "USDT", "source": "Binance"}, e
 }
 func (h *Hub) Status() any {
-	return map[string]any{"bookBaseline": h.baselineProgress(), "datasets": h.Catalog(), "scheduler": h.Scheduler.State(), "storage": h.Store.Status(), "startedAt": h.boot, "at": time.Now().UTC(), "rulesVersion": RulesVersion, "legacyCollectorsRunning": false}
+	return map[string]any{"externalFeeds": map[string]any{"vix": h.vixHealth()}, "bookBaseline": h.baselineProgress(), "datasets": h.Catalog(), "scheduler": h.Scheduler.State(), "storage": h.Store.Status(), "startedAt": h.boot, "at": time.Now().UTC(), "rulesVersion": RulesVersion, "legacyCollectorsRunning": false}
 }
 
 // Read never schedules or fetches. Even a completely empty local query is pure.
 func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMessage, error) {
+	if path == "vix" || strings.HasPrefix(path, "vix/") {
+		return h.vixRead(ctx, path, q)
+	}
 	a := q.Get("asset")
 	if a == "" {
 		a = "BTC"

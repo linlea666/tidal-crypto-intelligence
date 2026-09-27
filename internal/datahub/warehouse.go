@@ -680,6 +680,9 @@ func (w *Warehouse) Maintain(ctx context.Context, registry map[string]Dataset, n
 	if err := w.maintainResearch(ctx, now, days); err != nil {
 		return err
 	}
+	if err := w.maintainVIX(ctx, now); err != nil {
+		return err
+	}
 	var used, whales int64
 	root := filepath.Dir(w.root)
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, e error) error {

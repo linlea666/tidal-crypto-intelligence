@@ -55,6 +55,9 @@ type Entry = {
 };
 const cache = new Map<string, Entry>();
 const pending = new Map<string, Promise<unknown>>();
+// The VIX page has three independent reads; the local API permits two queries
+// in flight. Serialize these lightweight reads without widening that budget.
+let vixReadQueue: Promise<unknown> = Promise.resolve();
 function entry(url: string): Entry {
   let e = cache.get(url);
   if (!e) {
@@ -95,7 +98,7 @@ export function api<T>(url: string, options: RequestInit = {}): Promise<T> {
   const key = version + "/" + url;
   if (method === "GET" && !options.signal && pending.has(key))
     return pending.get(key) as Promise<T>;
-  const promise = (async () => {
+  const request = async () => {
     const r = await fetch("/api/" + version + "/" + url, {
       ...options,
       headers: { "Content-Type": "application/json", ...options.headers },
@@ -112,7 +115,10 @@ export function api<T>(url: string, options: RequestInit = {}): Promise<T> {
     }
     if (url === "logout") clearDataCache();
     return data as T;
-  })();
+  };
+  const serialVIX = method === "GET" && /^vix(?:[/?]|$)/.test(url);
+  const promise = serialVIX ? vixReadQueue.then(request, request) : request();
+  if (serialVIX) vixReadQueue = promise.catch(() => {});
   if (method === "GET" && !options.signal) {
     pending.set(key, promise);
     promise

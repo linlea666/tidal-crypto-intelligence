@@ -25,6 +25,7 @@ const nav = [
   ["liquidations", "清算分布"],
   ["whales", "巨鲸持仓"],
   ["etf", "ETF资金"],
+  ["vix", "VIX指数"],
   ["health", "数据健康"],
 ] as const;
 const fixture =
@@ -36,6 +37,11 @@ export function App() {
   );
   const [asset, setAsset] = useState<Asset>("BTC");
   const [view, setView] = useState(location.hash.slice(1) || "liquidity");
+  const isVIX = view === "vix";
+  const navRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    navRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [view, authenticated]);
   const [step, setStep] = useState(100);
   const [span, setSpan] = useState(10);
   const [liquidityPolicies, setLiquidityPolicies] = useState<
@@ -96,7 +102,7 @@ export function App() {
     15000,
   );
   useEffect(() => {
-    if (!authenticated || fixture) return;
+    if (!authenticated || fixture || isVIX) return;
     let active = true;
     let socket: WebSocket | undefined;
     let reconnect: ReturnType<typeof setTimeout>;
@@ -154,6 +160,7 @@ export function App() {
     };
   }, [
     authenticated,
+    isVIX,
     asset,
     step,
     span,
@@ -249,12 +256,13 @@ export function App() {
         <a className="wordmark" href="#liquidity" aria-label="Tidal 首页">
           TIDAL<span className="brand-caption">潮汐</span>
         </a>
-        <nav aria-label="主导航">
+        <nav aria-label="主导航" ref={navRef}>
           {nav.map(([id, label]) => (
             <button
               key={id}
               onClick={() => go(id)}
               className={view === id ? "active" : ""}
+              aria-current={view === id ? "page" : undefined}
             >
               {label}
             </button>
@@ -262,10 +270,10 @@ export function App() {
         </nav>
         <div className="top-status">
           <span
-            className={`status-dot ${validVenues.size < 5 || stale ? "warn" : ""}`}
+            className={`status-dot ${isVIX || validVenues.size < 5 || stale ? "warn" : ""}`}
           />
-          <span>{stale ? "数据已过期" : `${validVenues.size}/5 家现货`}</span>
-          <span className="desktop-only">USD 实时换算</span>
+          <span>{isVIX ? "VIX · 延时数据" : stale ? "数据已过期" : `${validVenues.size}/5 家现货`}</span>
+          {!isVIX && <span className="desktop-only">USD 实时换算</span>}
           <time>
             {new Date(clockNow).toLocaleDateString("zh-CN", {
               month: "2-digit",
@@ -299,6 +307,7 @@ export function App() {
                     flow: "成交证据",
                     activity: "大资金动向",
                     etf: "ETF资金观察",
+                    vix: "VIX 美股买入观察",
                     derivatives: "合约态势",
                     whales: "公开巨鲸持仓",
                     liquidations: "清算集中在哪里？",
@@ -306,7 +315,7 @@ export function App() {
                   } as Record<string, string>
                 )[view] ?? "现货买卖墙"}
               </h1>
-              <span className="asset-label">{asset} / 美元</span>
+              {!isVIX && <><span className="asset-label">{asset} / 美元</span>
               <strong className="headline-price">
                 {frame?.price ? "$" + price(frame.price) : "等待行情"}
               </strong>
@@ -321,12 +330,13 @@ export function App() {
                   </button>
                 ))}
               </div>
+              </>}
               {fixture && (
                 <span className="demo-badge">演示数据 · 仅本地预览</span>
               )}
             </div>
             <p className="subtitle">
-              {view === "liquidity"
+              {isVIX ? "观察市场恐慌，达到自定阈值时邮件提醒" : view === "liquidity"
                 ? "柱子越长，当前挂单金额越大"
                 : view === "whales"
                   ? "看清已监控大仓位的均价与动态清算位置"
@@ -340,13 +350,13 @@ export function App() {
             </p>
           </div>
         </section>
-        {(error || stale) && (
+        {!isVIX && (error || stale) && (
           <div className="notice danger">
             <WarningCircle size={18} />
             {error || "实时连接已中断，当前数字为最后一次有效观察。"}
           </div>
         )}
-        {!fixture && frame && valid.length < frame.coverage.length && (
+        {!isVIX && !fixture && frame && valid.length < frame.coverage.length && (
           <div className="notice">
             <WarningCircle size={17} />
             {valid.length}/{frame.coverage.length}{" "}
@@ -749,7 +759,7 @@ export function App() {
           />
         )}
         <footer className="page-footer">
-          <span>未覆盖的价格范围显示“未覆盖” · 挂单可能随时撤走</span>
+          <span>{isVIX ? "美股预期波动观察 · 延时数据 · 不自动交易" : "未覆盖的价格范围显示“未覆盖” · 挂单可能随时撤走"}</span>
           <a
             href="https://github.com/linlea666/tidal-crypto-intelligence"
             target="_blank"

@@ -12,6 +12,7 @@ import {
   VisualMapComponent,
   DataZoomComponent,
   LegendComponent,
+  MarkLineComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 echarts.use([
@@ -24,6 +25,7 @@ echarts.use([
   VisualMapComponent,
   DataZoomComponent,
   LegendComponent,
+  MarkLineComponent,
   CanvasRenderer,
 ]);
 export function Chart({
