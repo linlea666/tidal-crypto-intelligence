@@ -19,6 +19,7 @@ func (h *Hub) studyCases(ctx context.Context, s Study, bars map[int64]FlowBar, c
 			continue
 		}
 		hourlyFlow := map[int64]FlowBar{}
+		nativeFacts := map[int64]Observation{}
 		oi := map[int64]float64{}
 		premium := map[int64]float64{}
 		errs := []string{}
@@ -38,6 +39,7 @@ func (h *Hub) studyCases(ctx context.Context, s Study, bars map[int64]FlowBar, c
 				switch kind {
 				case "flow":
 					if o.Payload.Flow != nil {
+						nativeFacts[at] = o
 						hourlyFlow[at] = FlowBar{recordTime(o), money(o.Payload.Flow.Buy), money(o.Payload.Flow.Sell)}
 					}
 				case "oi-history":
@@ -68,10 +70,26 @@ func (h *Hub) studyCases(ctx context.Context, s Study, bars map[int64]FlowBar, c
 		c["wallet"] = changes
 		hourly := []map[string]any{}
 		nf, np, no, nv, fine := 0, 0, 0, 0, 0
+		reconciled, conflicts := 0, 0
+		var maxDifference int64
 		for end := from.Add(time.Hour); !end.After(to); end = end.Add(time.Hour) {
 			start := end.Add(-time.Hour)
 			key := start.Unix()
 			flow, ok := sumBars(bars, end, 12)
+			var reconciliation any
+			if native, present := hourlyFlow[key]; ok && present {
+				diff := native.Net() - flow.Net()
+				abs := diff
+				if abs < 0 {
+					abs = -abs
+				}
+				reconciled++
+				if abs > 100 {
+					conflicts++
+				}
+				maxDifference = max(maxDifference, abs)
+				reconciliation = map[string]any{"nativeRevision": nativeFacts[key].Revision, "nativeFirstFetchedAt": nativeFacts[key].FirstFetchedAt, "dataset": nativeFacts[key].Dataset, "intervalStart": start, "intervalEnd": end, "fineAggregation": "12 closed 300-second intervals", "nativeBuyCents": native.Buy, "nativeSellCents": native.Sell, "fineBuyCents": flow.Buy, "fineSellCents": flow.Sell, "netDifferenceCents": diff, "conflict": abs > 100, "status": "upstream_cause_unverified"}
+			}
 			res := 300
 			if !ok {
 				flow, ok = hourlyFlow[key]
@@ -109,7 +127,7 @@ func (h *Hub) studyCases(ctx context.Context, s Study, bars map[int64]FlowBar, c
 				prem = &v
 				nv++
 			}
-			hourly = append(hourly, map[string]any{"end": end, "netCents": net, "priceChange": change, "priceClose": func() any {
+			hourly = append(hourly, map[string]any{"reconciliation": reconciliation, "end": end, "netCents": net, "priceChange": change, "priceClose": func() any {
 				if complete {
 					return last.Close
 				}
@@ -117,6 +135,7 @@ func (h *Hub) studyCases(ctx context.Context, s Study, bars map[int64]FlowBar, c
 			}(), "flowComplete": ok, "flowResolutionSeconds": res, "oiChange": delta, "premiumUsd": prem})
 		}
 		c["hourly"], c["errors"] = hourly, errs
+		c["reconciliation"] = map[string]any{"comparedHours": reconciled, "conflictHours": conflicts, "maxNetDifferenceCents": maxDifference, "note": "原生小时与完整五分钟聚合并列；差异超过1美元标记冲突，不改写金额。请求交易所、时区边界及各修订需独立核对，上游原因未确认。"}
 		expected := len(hourly)
 		c["coverage"] = map[string]any{"expectedHours": expected, "flowHours": nf, "fineFlowHours": fine, "priceHours": np, "oiHours": no, "premiumHours": nv}
 		if nf == expected && np == expected {

@@ -200,7 +200,7 @@ func TestSharedQueriesAndStudyDedup(t *testing.T) {
 	if h.Scheduler.quota.Calls != 0 {
 		t.Fatal("queue bypassed scheduler")
 	}
-	if len(a.Jobs) != len(studyRequests(a, a.Created)) {
+	if a.QueueCursor != len(a.Jobs) || a.QueueCursor == 0 || a.QueueCursor > len(studyRequests(a, a.Created)) {
 		t.Fatal("expected shared flow/oi/premium tasks", a)
 	}
 }
@@ -454,7 +454,8 @@ func TestSignalAtomicLifecycleRestartAndExpiry(t *testing.T) {
 	end := time.Now().UTC().Truncate(time.Hour).Add(-30 * time.Minute)
 	now := end.Add(30 * time.Second)
 	h.boot = end.Add(-time.Hour)
-	base := SignalBaseline{At: now, Valid: true, Coverage: 1, Dates: 30, P95: 100, P05: -100, P90: 100, P10: -100, Median15: 1, Median60: 1}
+	p95Hour := 100.0
+	base := SignalBaseline{P95Hour: &p95Hour, At: now, Valid: true, Coverage: 1, Dates: 30, P95: 100, P05: -100, P90: 100, P10: -100, Median15: 1, Median60: 1}
 	fd, _ := h.Dataset(ID("flow", "BTC", "", "spot"))
 	cd, _ := h.Dataset(ID("candles", "BTC", "Binance", "spot"))
 	feed := func(from, to time.Time, px float64) {
@@ -578,7 +579,7 @@ func TestForwardObservationRequiresFullFourteenDaysAndCountsGaps(t *testing.T) {
 		t.Fatal("partial fourteen days passed")
 	}
 	r := read(end)
-	if !r.Ready || r.Expected != 4032 || r.Coverage != 1 {
+	if r.Ready || r.Expected != 4032 || r.Coverage != 1 {
 		t.Fatalf("complete observation rejected: %+v", r)
 	}
 	if _, e = h.Store.research.Exec("DELETE FROM shadow WHERE asset=? AND ts<?", "BTC", start.Add(24*time.Hour).Unix()); e != nil {

@@ -99,7 +99,8 @@ func (r *rollingBaseline) advance(to time.Time) {
 	}
 }
 func (r *rollingBaseline) result(now time.Time) SignalBaseline {
-	b := SignalBaseline{At: now, From: r.from, To: r.to, P95: sortedQuantile(r.net15, .95), P05: sortedQuantile(r.net15, .05), P90: sortedQuantile(r.net60, .9), P10: sortedQuantile(r.net60, .1), Median15: sortedQuantile(r.vol15, .5), Median60: sortedQuantile(r.vol60, .5)}
+	p95 := sortedQuantile(r.net60, .95)
+	b := SignalBaseline{P95Hour: &p95, At: now, From: r.from, To: r.to, P95: sortedQuantile(r.net15, .95), P05: sortedQuantile(r.net15, .05), P90: sortedQuantile(r.net60, .9), P10: sortedQuantile(r.net60, .1), Median15: sortedQuantile(r.vol15, .5), Median60: sortedQuantile(r.vol60, .5)}
 	expected := int(r.to.Sub(r.from) / (5 * time.Minute))
 	if expected > 0 {
 		b.Coverage = float64(r.valid) / float64(expected)

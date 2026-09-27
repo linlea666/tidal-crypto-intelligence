@@ -19,23 +19,24 @@ type StudyRequest struct {
 	To    *time.Time `json:"to"`
 }
 type Study struct {
-	Pipeline     string       `json:"pipeline,omitempty"`
-	QueueCursor  int          `json:"queueCursor"`
-	InputVersion string       `json:"inputVersion,omitempty"`
-	ID           string       `json:"id"`
-	Asset        string       `json:"asset"`
-	From         time.Time    `json:"from"`
-	To           time.Time    `json:"to"`
-	Created      time.Time    `json:"createdAt"`
-	Updated      time.Time    `json:"updatedAt"`
-	State        string       `json:"state"`
-	Rules        string       `json:"rulesVersion"`
-	Mode         string       `json:"mode"`
-	Error        string       `json:"error,omitempty"`
-	Jobs         []string     `json:"jobs"`
-	CandleCursor time.Time    `json:"candleCursor"`
-	LastRun      *time.Time   `json:"lastRun"`
-	Result       *StudyResult `json:"result"`
+	UnavailableRequests []DataRequest `json:"unavailableRequests,omitempty"`
+	Pipeline            string        `json:"pipeline,omitempty"`
+	QueueCursor         int           `json:"queueCursor"`
+	InputVersion        string        `json:"inputVersion,omitempty"`
+	ID                  string        `json:"id"`
+	Asset               string        `json:"asset"`
+	From                time.Time     `json:"from"`
+	To                  time.Time     `json:"to"`
+	Created             time.Time     `json:"createdAt"`
+	Updated             time.Time     `json:"updatedAt"`
+	State               string        `json:"state"`
+	Rules               string        `json:"rulesVersion"`
+	Mode                string        `json:"mode"`
+	Error               string        `json:"error,omitempty"`
+	Jobs                []string      `json:"jobs"`
+	CandleCursor        time.Time     `json:"candleCursor"`
+	LastRun             *time.Time    `json:"lastRun"`
+	Result              *StudyResult  `json:"result"`
 }
 type studyCheckpoint struct {
 	Version string                `json:"version"`
@@ -45,6 +46,8 @@ type studyCheckpoint struct {
 	Events  []StudyEvent          `json:"events"`
 }
 type Outcome struct {
+	MFE4H     *float64 `json:"mfe4h"`
+	MAE4H     *float64 `json:"mae4h"`
 	Return1H  *float64 `json:"return1h"`
 	Return4H  *float64 `json:"return4h"`
 	Return24H *float64 `json:"return24h"`
@@ -76,22 +79,24 @@ type Experiment struct {
 	Interval   [2]float64 `json:"interval"`
 }
 type StudyResult struct {
-	Coverage         []map[string]any `json:"coverage"`
-	CaseState        string           `json:"caseState"`
-	StrategyState    string           `json:"strategyState"`
-	FlowCoverage     float64          `json:"flowCoverage"`
-	CandleCoverage   float64          `json:"candleCoverage"`
-	AvailableAtKnown bool             `json:"availableAtKnown"`
-	BaselineDays     int              `json:"baselineDays"`
-	DevelopmentDays  int              `json:"developmentDays"`
-	HoldoutDays      int              `json:"holdoutDays"`
-	CoreCalculated   bool             `json:"coreCalculated"`
-	Events           []StudyEvent     `json:"events"`
-	Experiments      []Experiment     `json:"experiments"`
-	Delays           []Experiment     `json:"delays"`
-	Cases            []map[string]any `json:"cases"`
-	Missing          []string         `json:"missing"`
-	Notes            []string         `json:"notes"`
+	CandidateComparison *CandidateComparison `json:"candidateComparison"`
+	Evaluation          string               `json:"evaluationVersion,omitempty"`
+	Coverage            []map[string]any     `json:"coverage"`
+	CaseState           string               `json:"caseState"`
+	StrategyState       string               `json:"strategyState"`
+	FlowCoverage        float64              `json:"flowCoverage"`
+	CandleCoverage      float64              `json:"candleCoverage"`
+	AvailableAtKnown    bool                 `json:"availableAtKnown"`
+	BaselineDays        int                  `json:"baselineDays"`
+	DevelopmentDays     int                  `json:"developmentDays"`
+	HoldoutDays         int                  `json:"holdoutDays"`
+	CoreCalculated      bool                 `json:"coreCalculated"`
+	Events              []StudyEvent         `json:"events"`
+	Experiments         []Experiment         `json:"experiments"`
+	Delays              []Experiment         `json:"delays"`
+	Cases               []map[string]any     `json:"cases"`
+	Missing             []string             `json:"missing"`
+	Notes               []string             `json:"notes"`
 }
 
 func (h *Hub) CreateStudy(req StudyRequest) (Study, error) {
@@ -231,6 +236,24 @@ func outcomeAt(c map[int64]Candle, at time.Time, side string, price float64, atr
 		r := sign * (v.Close/price - 1) * 100
 		return &r
 	}
+	hi, lo, full := price, price, true
+	for t := at; t.Before(at.Add(4 * time.Hour)); t = t.Add(5 * time.Minute) {
+		v, ok := c[t.Unix()]
+		if !ok {
+			full = false
+			break
+		}
+		hi = max(hi, v.High)
+		lo = min(lo, v.Low)
+	}
+	if full {
+		mf, ma := (hi/price-1)*100, (lo/price-1)*100
+		if sign < 0 {
+			mf, ma = -ma, -mf
+		}
+		o.MFE4H = &mf
+		o.MAE4H = &ma
+	}
 	o.Return1H = ret(1)
 	o.Return4H = ret(4)
 	o.Return24H = ret(24)
@@ -304,7 +327,7 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 	if e != nil {
 		return nil, e
 	}
-	r := &StudyResult{Events: []StudyEvent{}, Experiments: []Experiment{}, Delays: []Experiment{}, Cases: []map[string]any{}, Missing: []string{}, Notes: []string{"历史发布时间不可证明：本结果只描述关联，不能解释为当时可提前预警", "指定案例不计入独立留出成绩；5/10分钟延迟测试只衡量执行延迟敏感性", "辅助过滤器是固定对照实验，不进入线上权重；CVD未重复计分"}}
+	r := &StudyResult{Evaluation: EvaluationVersion, Events: []StudyEvent{}, Experiments: []Experiment{}, Delays: []Experiment{}, Cases: []map[string]any{}, Missing: []string{}, Notes: []string{"历史发布时间不可证明：本结果只描述关联，不能解释为当时可提前预警", "指定案例不计入独立留出成绩；5/10分钟延迟测试只衡量执行延迟敏感性", "辅助过滤器是固定对照实验，不进入线上权重；CVD未重复计分"}}
 	expected := s.To.Sub(s.From).Minutes() / 5
 	if expected > 0 {
 		r.FlowCoverage = float64(len(bars)) / expected
@@ -336,21 +359,13 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 	r.HoldoutDays = 30
 	balances := []Observation{}
 	_ = h.Store.FactsAsOf(ctx, ID("balance-history", s.Asset, "", "chain"), s.From, s.To, now, func(o Observation) error { balances = append(balances, o); return nil })
-	oi := map[int64]float64{}
-	premium := map[int64]float64{}
-	_ = h.Store.FactsAsOf(ctx, ID("oi-history", s.Asset, "", "futures"), s.From, s.To, now, func(o Observation) error {
-		if len(o.Payload.OI) > 0 {
-			oi[recordTime(o).Unix()] = num(o.Payload.OI[0].USD)
-		}
-		return nil
-	})
-	if s.Asset == "BTC" {
-		_ = h.Store.FactsAsOf(ctx, ID("premium", s.Asset, "Coinbase", "spot"), s.From, s.To, now, func(o Observation) error {
-			if o.Payload.Premium != nil {
-				premium[recordTime(o).Unix()] = num(o.Payload.Premium.USD)
-			}
-			return nil
-		})
+	oi, e := h.closedScalars(ctx, ID("oi-history", s.Asset, "", "futures"), s.From, s.To, now)
+	if e != nil {
+		return nil, e
+	}
+	premium, e := h.closedScalars(ctx, ID("premium", s.Asset, "Coinbase", "spot"), s.From, s.To, now)
+	if e != nil {
+		return nil, e
 	}
 	baselineTo := s.From.Add(30 * 24 * time.Hour)
 	baseline := newRollingBaseline(bars, s.From, baselineTo).result(now)
@@ -456,13 +471,8 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 					ev.Wallet = &v
 				}
 			}
-			x, xok := oi[t.Add(-5*time.Minute).Unix()]
-			y, yok := oi[t.Add(-65*time.Minute).Unix()]
-			if xok && yok && y > 0 {
-				v := (x/y - 1) * 100
-				ev.OI = &v
-			}
-			if v, ok := premium[t.Add(-5*time.Minute).Unix()]; ok {
+			ev.OI = scalarChange(oi, t)
+			if v, ok := premium[t.Unix()]; ok {
 				ev.Premium = &v
 			}
 			r.Events = append(r.Events, ev)
@@ -473,6 +483,10 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 		e = h.Store.saveDocument("study-progress", s.ID, s.Asset, s.Created, studyCheckpoint{version, until, active, clear, r.Events})
 		r.Events = nil // Partial events are not complete strategy statistics.
 		return r, e
+	}
+	r.CandidateComparison, e = evaluateCandidates(ctx, bars, candles, s.From, s.To)
+	if e != nil {
+		return nil, e
 	}
 	r.CoreCalculated = true
 	r.StrategyState = "calculated"
@@ -504,8 +518,15 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 	}}, {"加五家已覆盖±1%盘口压力过滤（实验）", func(e StudyEvent) bool {
 		return e.BookPressure != nil && (e.Direction == "buy" && *e.BookPressure > 0 || e.Direction == "sell" && *e.BookPressure < 0)
 	}}}
+	common := []StudyEvent{}
+	for _, ev := range holdout {
+		if ev.Wallet != nil && ev.OI != nil && ev.Premium != nil && ev.BookPressure != nil {
+			common = append(common, ev)
+		}
+	}
+	r.Notes = append(r.Notes, fmt.Sprintf("旧规则辅助消融统一使用全部辅助字段有效的共同样本：%d/%d；不足不评分", len(common), len(holdout)))
 	for _, filter := range filters {
-		r.Experiments = append(r.Experiments, summarizeExperiment(filter.name, holdout, filter.fn))
+		r.Experiments = append(r.Experiments, summarizeExperiment(filter.name, common, filter.fn))
 	}
 	r.Missing = append(r.Missing, "历史盘口同口径证据尚不足：该消融项不评分", "历史发布时点未知，提前量/真实误报漏报须经至少14天前向观察验证")
 	for _, delay := range []int{5, 10} {
@@ -549,7 +570,7 @@ func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
 		if json.Unmarshal(raw, &s) != nil {
 			continue
 		}
-		if !researchAsset(s.Asset) || ((s.State == "complete" || s.State == "incomplete") && s.Pipeline != studyPipeline) {
+		if !researchAsset(s.Asset) || s.Pipeline != studyPipeline {
 			continue
 		}
 		if s.LastRun != nil && now.Sub(*s.LastRun) < time.Minute && s.CandleCursor.After(s.To.Add(-time.Second)) {
@@ -571,7 +592,7 @@ func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
 			}
 			return h.Store.saveDocument("study", s.ID, s.Asset, s.Created, s)
 		}
-		jobsDone, jobFailed := true, false
+		jobsDone, jobFailed := s.Pipeline != studyPipeline || s.QueueCursor >= len(studyRequests(s, s.Created)), false
 		h.Scheduler.mu.Lock()
 		for _, id := range s.Jobs {
 			j, ok := h.Scheduler.historyJobLocked(id)

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-const studyPipeline = "research-2.3"
+const studyPipeline = "research-2.5"
 
 func studyRequests(s Study, now time.Time) []DataRequest {
 	out := []DataRequest{}
@@ -16,7 +16,13 @@ func studyRequests(s Study, now time.Time) []DataRequest {
 		if !from.Before(to) {
 			return
 		}
-		out = append(out, DataRequest{Dataset: ID(kind, "BTC", venue, market), From: &from, To: &to, Resolution: res, Purpose: purpose})
+		// Each task fits one API page. Failure disables only this bounded interval.
+		for end := to; end.After(from); {
+			start := maxTime(from, end.Add(-time.Duration(1000*res)*time.Second))
+			f, t := start, end
+			out = append(out, DataRequest{Dataset: ID(kind, "BTC", venue, market), From: &f, To: &t, Resolution: res, Purpose: purpose})
+			end = start
+		}
 	}
 	last := 0
 	for _, days := range []int{1, 7, 14, 21, 30} {
@@ -43,8 +49,15 @@ func studyRequests(s Study, now time.Time) []DataRequest {
 }
 func (h *Hub) queueStudy(s *Study, now time.Time) {
 	requests := studyRequests(*s, s.Created)
+	s.Error = ""
 	for s.QueueCursor < len(requests) {
-		j, e := h.Request(requests[s.QueueCursor])
+		req := requests[s.QueueCursor]
+		if req.From.Before(now.Add(-90 * 24 * time.Hour)) {
+			s.UnavailableRequests = append(s.UnavailableRequests, req)
+			s.QueueCursor++
+			continue
+		}
+		j, e := h.Request(req)
 		if e != nil {
 			s.Error = e.Error()
 			s.State = "partial_queue"
@@ -58,6 +71,9 @@ func (h *Hub) studyCoverage(s Study) []map[string]any {
 	h.Scheduler.mu.Lock()
 	defer h.Scheduler.mu.Unlock()
 	out := []map[string]any{}
+	for _, r := range s.UnavailableRequests {
+		out = append(out, map[string]any{"dataset": r.Dataset, "resolutionSeconds": r.Resolution, "from": r.From, "to": r.To, "state": "unavailable", "purpose": r.Purpose, "reason": "排队期间超过上游90天查询范围；保留已有事实，不阻塞其他窗口", "errorKind": "retention_range"})
+	}
 	for _, id := range s.Jobs {
 		if j, ok := h.Scheduler.historyJobLocked(id); ok {
 			state := "queued"
@@ -76,8 +92,15 @@ func (h *Hub) studyCoverage(s Study) []map[string]any {
 			out = append(out, map[string]any{"dataset": j.Dataset.ID, "resolutionSeconds": j.Dataset.Resolution, "from": j.RangeStart, "to": j.RangeEnd, "cursor": j.From, "state": state, "reason": j.Error, "errorKind": j.ErrorKind, "covered": append([]OrderRange{}, j.Covered...), "gaps": append([]HistoryGap{}, j.Gaps...), "purpose": j.Purpose})
 		}
 	}
+	requests := studyRequests(s, s.Created)
+	if s.Pipeline == studyPipeline {
+		for i := s.QueueCursor; i < len(requests); i++ {
+			r := requests[i]
+			out = append(out, map[string]any{"dataset": r.Dataset, "resolutionSeconds": r.Resolution, "from": r.From, "to": r.To, "state": "untried", "purpose": r.Purpose})
+		}
+	}
 	return out
 }
 func (h *Hub) studyInputVersion(ctx context.Context, s Study) string {
-	return h.Store.researchVersion(ctx, s.Asset, s.From, s.To)
+	return EvaluationVersion + "/" + h.Store.researchVersion(ctx, s.Asset, s.From, s.To)
 }

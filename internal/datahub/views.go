@@ -540,7 +540,7 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 			activitySpan := parseFloat(q, "range", 5, .1, 1000)
 			return h.ActivityView(ctx, a, hours, activitySpan)
 		case "signals":
-			return h.SignalsView(ctx, a, "")
+			return h.SignalsView(ctx, a, "", q.Get("rules"))
 		case "studies":
 			return h.StudiesView(ctx, a, "")
 		case "wallet-trends":

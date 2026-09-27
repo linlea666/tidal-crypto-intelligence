@@ -10,20 +10,32 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
+type CandidateMailApproval struct {
+	StudyID             string    `json:"studyId"`
+	Rules               string    `json:"rulesVersion"`
+	Evaluation          string    `json:"evaluationVersion"`
+	ReviewedAt          time.Time `json:"reviewedAt"`
+	ReceiptVerifiedAt   time.Time `json:"receiptVerifiedAt"`
+	EqualBudgetReviewed bool      `json:"equalBudgetReviewed"`
+	PerformanceAccepted bool      `json:"performanceAccepted"`
+}
 type MailConfig struct {
-	Host     string `json:"host"`
-	Port     int    `json:"port"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	From     string `json:"from"`
-	To       string `json:"to"`
-	TLS      string `json:"tls"`
+	DashboardURL      string                 `json:"dashboardUrl"`
+	CandidateApproval *CandidateMailApproval `json:"candidateApproval,omitempty"`
+	Host              string                 `json:"host"`
+	Port              int                    `json:"port"`
+	Username          string                 `json:"username"`
+	Password          string                 `json:"password"`
+	From              string                 `json:"from"`
+	To                string                 `json:"to"`
+	TLS               string                 `json:"tls"`
 }
 
 func LoadMailConfig(path string) (*MailConfig, error) {
@@ -52,18 +64,24 @@ func LoadMailConfig(path string) (*MailConfig, error) {
 	if c.TLS != "tls" && c.TLS != "starttls" {
 		return nil, errors.New("邮件仅支持TLS或STARTTLS")
 	}
+	if c.DashboardURL != "" {
+		u, e := url.Parse(c.DashboardURL)
+		if e != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || strings.ContainsAny(c.DashboardURL, "\r\n") {
+			return nil, errors.New("看板入口必须是无认证信息的HTTPS地址")
+		}
+	}
 	return &c, nil
 }
 func (h *Hub) mailStatus() any {
 	var lastError map[string]any
 	_ = h.Store.LoadState("mail/error", &lastError)
-	return map[string]any{"configured": h.mail != nil, "lastError": lastError, "limitPerHour": 6, "note": "站内记录始终可见；未配置邮件时不会补发旧事件。发送结果不确定时不自动重复发送。"}
+	return map[string]any{"candidateEnabled": h.candidateMailAllowed(context.Background(), time.Now().UTC()), "configured": h.mail != nil, "lastError": lastError, "limitPerHour": 6, "note": "站内记录始终可见；未配置邮件时不会补发旧事件。发送结果不确定时不自动重复发送。"}
 }
 func (h *Hub) queueNotice(s Signal, kind string, now time.Time) error {
-	if !researchAsset(s.Asset) {
+	if !researchAsset(s.Asset) || s.Rules == CandidateRules && (!h.candidateMailAllowed(context.Background(), now) || s.Level != "strong" || (kind != "strong" && kind != "confirmed")) {
 		return nil
 	}
-	b, e := json.Marshal(map[string]any{"asset": s.Asset, "direction": s.Direction, "kind": kind, "at": s.At, "dataThrough": s.DataThrough, "id": s.ID})
+	b, e := json.Marshal(noticeSnapshot(s, kind))
 	if e != nil {
 		return e
 	}
@@ -151,10 +169,12 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	if attempts >= 6 {
 		return nil
 	}
+	candidateAllowed := h.candidateMailAllowed(ctx, now)
 	rows, e := h.Store.research.QueryContext(ctx, "SELECT id,payload FROM notices WHERE status='pending' ORDER BY created LIMIT 100")
 	if e != nil {
 		return e
 	}
+	suppressed := []string{}
 	ids := []string{}
 	bodies := []string{}
 	for rows.Next() {
@@ -164,30 +184,30 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 			rows.Close()
 			return e
 		}
-		var v struct {
-			Asset     string
-			Direction string
-			Kind      string
-			At        time.Time
-		}
+		var v noticePayload
 		if json.Unmarshal(b, &v) != nil || !researchAsset(v.Asset) {
 			continue
 		}
-		side := "买方"
-		if v.Direction == "sell" {
-			side = "卖方"
+		expires := v.Expires
+		if expires.IsZero() {
+			expires = v.At.Add(4 * time.Hour)
 		}
-		phase := "资金异动"
-		if v.Kind == "confirmed" {
-			phase = "价格确认"
+		if !now.Before(expires) || now.Sub(v.DataThrough) > 12*time.Minute || v.Rules == CandidateRules && !candidateAllowed {
+			suppressed = append(suppressed, id)
+			continue
 		}
 		ids = append(ids, id)
-		bodies = append(bodies, fmt.Sprintf("%s %s%s · %s", v.Asset, side, phase, v.At.In(time.FixedZone("CST", 8*3600)).Format("01-02 15:04")))
+		bodies = append(bodies, noticeBody(v, h.mail.DashboardURL))
 	}
 	e = rows.Err()
 	rows.Close()
 	if e != nil {
 		return e
+	}
+	for _, id := range suppressed {
+		if _, e = h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_expired_or_validation' WHERE id=? AND status='pending'", id); e != nil {
+			return e
+		}
 	}
 	if len(ids) == 0 {
 		return nil
@@ -220,4 +240,79 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 		}
 	}
 	return e
+}
+
+type noticePayload struct {
+	Asset       string    `json:"asset"`
+	Direction   string    `json:"direction"`
+	Kind        string    `json:"kind"`
+	At          time.Time `json:"at"`
+	DataThrough time.Time `json:"dataThrough"`
+	Expires     time.Time `json:"expiresAt"`
+	ID          string    `json:"id"`
+	Rules       string    `json:"rulesVersion"`
+	Signal      *Signal   `json:"signal,omitempty"`
+}
+
+func noticeSnapshot(s Signal, kind string) noticePayload {
+	through := s.DataThrough
+	if kind == "strong" && s.Upgrade != nil {
+		through = s.Upgrade.DataThrough
+	}
+	if kind == "confirmed" && s.ConfirmedThrough != nil {
+		through = *s.ConfirmedThrough
+	}
+	return noticePayload{s.Asset, s.Direction, kind, s.At, through, s.Expires, s.ID, s.Rules, &s}
+}
+func (h *Hub) candidateMailAllowed(ctx context.Context, now time.Time) bool {
+	if h.mail == nil || h.mail.CandidateApproval == nil || h.mail.DashboardURL == "" {
+		return false
+	}
+	a := h.mail.CandidateApproval
+	var study Study
+	if a.StudyID == "" || h.Store.document(ctx, "study", a.StudyID, &study) != nil || study.Pipeline != studyPipeline || study.Result == nil || !study.Result.CoreCalculated || study.Result.CandidateComparison == nil || study.Result.CandidateComparison.Rules != CandidateRules || study.Result.Evaluation != EvaluationVersion {
+		return false
+	}
+	if a.Rules != CandidateRules || a.Evaluation != EvaluationVersion || !a.EqualBudgetReviewed || !a.PerformanceAccepted || a.ReviewedAt.IsZero() || a.ReceiptVerifiedAt.IsZero() || a.ReviewedAt.After(now) || a.ReceiptVerifiedAt.After(now) {
+		return false
+	}
+	var r ForwardReport
+	if h.Store.document(ctx, "forward-report", "BTC", &r) != nil || r.Evaluation != EvaluationVersion || !r.CandidateReady || r.CandidateOrigin == nil || now.Sub(r.To) > 2*time.Hour || r.To.After(now) {
+		return false
+	}
+	return !a.ReviewedAt.Before(r.CandidateOrigin.Add(14 * 24 * time.Hour))
+}
+func noticeBody(v noticePayload, dashboard string) string {
+	body := fmt.Sprintf("%s %s · %s\r\n发现：%s\r\n数据截止：%s", v.Asset, v.Direction, v.Kind, v.At.Format(time.RFC3339), v.DataThrough.Format(time.RFC3339))
+	if s := v.Signal; s != nil {
+		f := s.Features
+		if v.Kind == "strong" && s.Upgrade != nil {
+			f = &s.Upgrade.Features
+		}
+		if f != nil {
+			body += fmt.Sprintf("\r\n主动净买入：1小时 %.2f USD / 4小时 %.2f USD\r\n量比 %.2f / 买入占比 %.1f%% / 价格阶段 %s / 位移偏大 %t", float64(f.Net1H)/100, float64(f.Net4H)/100, f.VolumeRatio, f.BuyShare, f.Stage, f.Extended)
+			if f.FuturesNet1H != nil {
+				body += fmt.Sprintf("\r\n合约1小时净主动买入 %.2f USD", float64(*f.FuturesNet1H)/100)
+			}
+			if f.FundingAt != nil {
+				body += "\r\n资金费率（各自结算周期，采样 " + f.FundingAt.Format(time.RFC3339) + "）："
+				for _, rate := range f.Funding {
+					body += fmt.Sprintf(" %s %s%%", rate.Venue, rate.RatePercent)
+				}
+			}
+			if f.Liquidation != nil {
+				body += fmt.Sprintf("\r\n已发生清算（最近已闭合1分钟）：多单 %s USD / 空单 %s USD；截止 %s", f.Liquidation.Long, f.Liquidation.Short, f.LiquidationAt.Add(time.Minute).Format(time.RFC3339))
+			}
+			if f.OIChange != nil {
+				body += fmt.Sprintf("\r\n美元OI变化 %.2f%%（含价格影响，不等同新增资金）", *f.OIChange)
+			}
+		} else {
+			body += fmt.Sprintf("\r\n15分钟主动净买卖 %.2f USD", float64(s.Net15)/100)
+		}
+		body += "\r\n支持：" + strings.Join(s.Evidence, "；") + "\r\n冲突：" + strings.Join(s.Conflicts, "；") + "\r\n限制：" + strings.Join(s.Missing, "；")
+	}
+	if dashboard != "" {
+		body += "\r\n看板：" + dashboard
+	}
+	return body
 }
