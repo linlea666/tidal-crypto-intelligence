@@ -19,6 +19,7 @@ type StudyRequest struct {
 	To    *time.Time `json:"to"`
 }
 type Study struct {
+	ValidationID        string        `json:"validationId,omitempty"`
 	UnavailableRequests []DataRequest `json:"unavailableRequests,omitempty"`
 	Pipeline            string        `json:"pipeline,omitempty"`
 	QueueCursor         int           `json:"queueCursor"`
@@ -617,6 +618,12 @@ func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
 		version := h.studyInputVersion(ctx, s)
 		if s.InputVersion == version && s.Result != nil && s.Result.StrategyState != "calculating" {
 			s.Result.Coverage = h.studyCoverage(s)
+			if s.Result.CoreCalculated && s.ValidationID == "" {
+				s.ValidationID, e = h.freezeStudyValidation(ctx, s, now)
+				if e != nil {
+					return e
+				}
+			}
 			if !jobsDone {
 				s.State = "collecting"
 			} else if s.Result.CoreCalculated && !jobFailed {
@@ -632,6 +639,9 @@ func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
 		s.Result, e = h.evaluateStudy(ctx, s, now)
 		if e == nil {
 			s.InputVersion = version
+			if s.Result != nil && s.Result.CoreCalculated {
+				s.ValidationID, e = h.freezeStudyValidation(ctx, s, now)
+			}
 		}
 		if e != nil {
 			s.Error = e.Error()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"reflect"
 	"testing"
 	"time"
@@ -278,12 +279,32 @@ func TestCandidateMailNeedsHumanReviewAndFreshForwardEvidence(t *testing.T) {
 	if h.candidateMailAllowed(ctx, now) {
 		t.Fatal("sample size auto-enabled mail")
 	}
-	if e = h.Store.saveDocument("study", "reviewed-study", "BTC", now, Study{Pipeline: studyPipeline, Result: &StudyResult{CoreCalculated: true, Evaluation: EvaluationVersion, CandidateComparison: &CandidateComparison{Rules: CandidateRules}}}); e != nil {
+	reviewed := Study{ID: "reviewed-study", Asset: "BTC", Pipeline: studyPipeline, From: now.Add(-90 * 24 * time.Hour), To: now, InputVersion: "facts-1", Result: &StudyResult{CoreCalculated: true, Evaluation: EvaluationVersion, FlowCoverage: 1, CandleCoverage: 1, BaselineDays: 30, DevelopmentDays: 30, HoldoutDays: 30, CandidateComparison: &CandidateComparison{Rules: CandidateRules, Evaluation: EvaluationVersion}}}
+	reviewed.ValidationID, e = h.freezeStudyValidation(ctx, reviewed, now)
+	if e != nil {
 		t.Fatal(e)
 	}
-	h.mail.CandidateApproval = &CandidateMailApproval{StudyID: "reviewed-study", Rules: CandidateRules, Evaluation: EvaluationVersion, ReviewedAt: now, ReceiptVerifiedAt: now, EqualBudgetReviewed: true, PerformanceAccepted: true}
+	if e = h.Store.saveDocument("study", reviewed.ID, "BTC", now, reviewed); e != nil {
+		t.Fatal(e)
+	}
+	h.mail.CandidateApproval = &CandidateMailApproval{StudyID: reviewed.ID, ValidationID: reviewed.ValidationID, Rules: CandidateRules, Evaluation: EvaluationVersion, ReviewedAt: now, ReceiptVerifiedAt: now, EqualBudgetReviewed: true, PerformanceAccepted: true}
 	if !h.candidateMailAllowed(ctx, now) {
 		t.Fatal("reviewed gate not usable")
+	}
+	// Retention can make the mutable study incomplete without changing the
+	// completed evidence actually reviewed. A new completed revision cannot.
+	reviewed.Result.CoreCalculated = false
+	if e = h.Store.saveDocument("study", reviewed.ID, "BTC", now, reviewed); e != nil || !h.candidateMailAllowed(ctx, now) {
+		t.Fatal("retention invalidated frozen reviewed evidence", e)
+	}
+	approvedID := reviewed.ValidationID
+	reviewed.ValidationID = "new-completed-revision"
+	if e = h.Store.saveDocument("study", reviewed.ID, "BTC", now, reviewed); e != nil || h.candidateMailAllowed(ctx, now) {
+		t.Fatal("approval silently followed a new revision", e)
+	}
+	reviewed.ValidationID = approvedID
+	if e = h.Store.saveDocument("study", reviewed.ID, "BTC", now, reviewed); e != nil {
+		t.Fatal(e)
 	}
 	if h.candidateMailAllowed(ctx, now.Add(3*time.Hour)) {
 		t.Fatal("stale report authorized mail")
@@ -475,5 +496,47 @@ func TestNoticeSameSecondRestartNeverSendsBacklog(t *testing.T) {
 	_ = h.Store.research.QueryRow("SELECT status FROM notices WHERE signal_id=?", sig.ID).Scan(&state)
 	if state != "suppressed_restart" {
 		t.Fatal(state)
+	}
+}
+
+func TestStudyValidationImmutableAcrossRetentionAndRevisions(t *testing.T) {
+	h, e := Open(Config{Root: t.TempDir(), Offline: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer h.Store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	s := Study{ID: "frozen", Asset: "BTC", InputVersion: "one", Pipeline: studyPipeline, From: now.Add(-90 * 24 * time.Hour), To: now, Result: &StudyResult{CoreCalculated: true, Evaluation: EvaluationVersion, FlowCoverage: 1, CandleCoverage: 1, BaselineDays: 30, DevelopmentDays: 30, HoldoutDays: 30, CandidateComparison: &CandidateComparison{Rules: CandidateRules, Evaluation: EvaluationVersion, CommonWindows: 123}}}
+	id, e := h.freezeStudyValidation(ctx, s, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	s.Result.CandidateComparison.CommonWindows = 999
+	same, e := h.freezeStudyValidation(ctx, s, now.Add(time.Hour))
+	if e != nil || id != same {
+		t.Fatal("same input version duplicated snapshot", e)
+	}
+	var snapshot StudyValidation
+	if e = h.Store.document(ctx, "study-validation", id, &snapshot); e != nil || snapshot.Comparison.CommonWindows != 123 || !snapshot.CalculatedAt.Equal(now) {
+		t.Fatal("snapshot overwritten", snapshot, e)
+	}
+	if raw, e := h.Read(ctx, "study-validations/"+id, url.Values{"asset": {"BTC"}}); e != nil || json.Unmarshal(raw, &snapshot) != nil || snapshot.InputVersion != "one" {
+		t.Fatal("review evidence not readable through the local API", e)
+	}
+	if _, e := h.Read(ctx, "study-validations/"+id, url.Values{"asset": {"ETH"}}); e == nil {
+		t.Fatal("BTC evidence returned as ETH")
+	}
+	s.InputVersion = "two"
+	revised, e := h.freezeStudyValidation(ctx, s, now.Add(time.Hour))
+	if e != nil || revised == id {
+		t.Fatal("revision reused reviewed identity")
+	}
+	s.Result.CoreCalculated = false
+	if _, e = h.freezeStudyValidation(ctx, s, now); e == nil {
+		t.Fatal("incomplete study gained validation")
+	}
+	if e = h.Store.document(ctx, "study-validation", id, &snapshot); e != nil {
+		t.Fatal("retention status removed original evidence", e)
 	}
 }

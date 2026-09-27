@@ -682,6 +682,7 @@ function ComparisonTable({items}: {items: RuleComparison[]}) {
   </tbody></table></div>;
 }
 type StudyItem = {
+  validationId?: string;
   id: string;
   asset: Asset;
   from: string;
@@ -753,6 +754,30 @@ type StudyItem = {
     }[];
   } | null;
 };
+function FrozenValidation({id, asset}: {id: string; asset: Asset}) {
+  const [open, setOpen] = useState(false);
+  return <details onToggle={(e) => setOpen(e.currentTarget.open)}>
+    <summary>查看冻结评估快照</summary>
+    <p className="helper">{id}。后续事实保留期变化不改写此证据；新完成的修订需重新审查。</p>
+    {open && <FrozenValidationResult id={id} asset={asset} />}
+  </details>;
+}
+function FrozenValidationResult({id, asset}: {id: string; asset: Asset}) {
+  const q = useAPI<{calculatedAt: string; from: string; to: string; inputVersion: string; comparison: NonNullable<NonNullable<StudyItem["result"]>["candidateComparison"]>}>(`study-validations/${encodeURIComponent(id)}?asset=${asset}`, 60000);
+  const c = q.data?.comparison;
+  return <div className="data-section">
+    <LoadError error={q.error} />
+    {!q.data && !q.error && <p>正在读取冻结评估…</p>}
+    {q.data && <p className="helper">{stamp(q.data.from)} → {stamp(q.data.to)} · 计算于 {stamp(q.data.calculatedAt)} · 输入版本 {q.data.inputVersion}</p>}
+    {c && <>
+      <p className="helper">{c.note}</p>
+      <h4>冻结的独立留出</h4><ComparisonTable items={c.holdout} />
+      {!!c.auxiliary?.length && <><h4>合约背景对照</h4><ComparisonTable items={c.auxiliary} /></>}
+      {!!c.equalBudget?.length && <><h4>相同提醒数量对照</h4><ComparisonTable items={c.equalBudget} /></>}
+      <details><summary>冻结的开发期与延迟对照</summary><ComparisonTable items={c.development} /></details>
+    </>}
+  </div>;
+}
 export function StudiesPage({ asset }: { asset: Asset }) {
   const q = useAPI<{
     items: StudyItem[];
@@ -865,6 +890,7 @@ export function StudiesPage({ asset }: { asset: Asset }) {
               {stamp(d.from)} → {stamp(d.to)} · {d.jobs.length}个共享采集任务
             </p>
             {d.error && <p className="amber">{d.error}</p>}
+            {d.validationId && <FrozenValidation key={d.validationId} id={d.validationId} asset={d.asset} />}
           </div>
           <h3>
             完整策略检验 ·{" "}

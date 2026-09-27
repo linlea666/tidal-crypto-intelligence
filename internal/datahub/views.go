@@ -567,6 +567,9 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 		case "data-status":
 			return h.Status(), nil
 		default:
+			if strings.HasPrefix(path, "study-validations/") {
+				return h.StudyValidationView(ctx, a, strings.TrimPrefix(path, "study-validations/"))
+			}
 			if strings.HasPrefix(path, "signals/") {
 				return h.SignalsView(ctx, a, strings.TrimPrefix(path, "signals/"))
 			}

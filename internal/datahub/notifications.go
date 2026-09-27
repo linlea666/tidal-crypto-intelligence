@@ -18,6 +18,7 @@ import (
 )
 
 type CandidateMailApproval struct {
+	ValidationID        string    `json:"validationId"`
 	StudyID             string    `json:"studyId"`
 	Rules               string    `json:"rulesVersion"`
 	Evaluation          string    `json:"evaluationVersion"`
@@ -270,7 +271,8 @@ func (h *Hub) candidateMailAllowed(ctx context.Context, now time.Time) bool {
 	}
 	a := h.mail.CandidateApproval
 	var study Study
-	if a.StudyID == "" || h.Store.document(ctx, "study", a.StudyID, &study) != nil || study.Pipeline != studyPipeline || study.Result == nil || !study.Result.CoreCalculated || study.Result.CandidateComparison == nil || study.Result.CandidateComparison.Rules != CandidateRules || study.Result.Evaluation != EvaluationVersion {
+	var snapshot StudyValidation
+	if a.StudyID == "" || a.ValidationID == "" || h.Store.document(ctx, "study", a.StudyID, &study) != nil || study.Pipeline != studyPipeline || study.ValidationID != a.ValidationID || h.Store.document(ctx, "study-validation", a.ValidationID, &snapshot) != nil || snapshot.StudyID != a.StudyID || snapshot.Rules != CandidateRules || snapshot.Evaluation != EvaluationVersion || snapshot.CalculatedAt.After(a.ReviewedAt) {
 		return false
 	}
 	if a.Rules != CandidateRules || a.Evaluation != EvaluationVersion || !a.EqualBudgetReviewed || !a.PerformanceAccepted || a.ReviewedAt.IsZero() || a.ReceiptVerifiedAt.IsZero() || a.ReviewedAt.After(now) || a.ReceiptVerifiedAt.After(now) {
