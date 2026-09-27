@@ -319,7 +319,7 @@ func (h *Hub) SetVIXSettings(ctx context.Context, settings VIXSettings, now time
 		first := settings.EmailEnabled && !s.EverEnabled
 		s.EmailEnabled = settings.EmailEnabled
 		if first {
-			s.EverEnabled, s.FirstObservation = true, true
+			s.EverEnabled, s.FirstObservation = true, false
 			// First opt-in is a new explicit observation boundary, not a replay.
 			s.CycleID, s.CycleStartedAt, s.LowSince, s.LastPoint, s.Watch, s.Priority = "", nil, nil, nil, false, false
 			f := VIXFeed{Source: "sina"}
@@ -327,6 +327,9 @@ func (h *Hub) SetVIXSettings(ctx context.Context, settings VIXSettings, now time
 				return err
 			}
 			if status, _ := vixQuality(f, now); status == "delayed" {
+				// This label describes a condition known at the moment of opt-in,
+				// never a new observation collected after a closed/stale period.
+				s.FirstObservation = true
 				if err = h.evaluateVIX(ctx, tx, &s, *f.Latest, now); err != nil {
 					return err
 				}

@@ -277,6 +277,38 @@ func TestVIXRecoveryGapsErrorsAndSameTimestamp(t *testing.T) {
 		t.Fatal("stale point counted")
 	}
 }
+
+func TestVIXInitialLabelRequiresFreshConditionAtOptIn(t *testing.T) {
+	for _, condition := range []string{"fresh", "stale", "missing"} {
+		t.Run(condition, func(t *testing.T) {
+			h := vixTestHub(t)
+			at := vixTestAt()
+			if condition != "missing" {
+				vixPush(t, h, at, "41")
+			}
+			enabled := at.Add(15 * time.Minute)
+			if condition == "stale" {
+				enabled = at.Add(40 * time.Minute)
+			}
+			vixEnable(t, h, enabled)
+			if condition != "fresh" {
+				vixPush(t, h, enabled.Add(time.Minute), "41")
+			}
+			var raw []byte
+			cycle := vixStateForTest(t, h).CycleID
+			if err := h.Store.research.QueryRow("SELECT payload FROM vix_events WHERE id=?", cycle+"/priority").Scan(&raw); err != nil {
+				t.Fatal(err)
+			}
+			var event VIXEvent
+			if err := json.Unmarshal(raw, &event); err != nil {
+				t.Fatal(err)
+			}
+			if event.Initial != (condition == "fresh") {
+				t.Fatalf("%s opt-in mislabeled: %+v", condition, event)
+			}
+		})
+	}
+}
 func TestVIXEventStateOutboxAtomic(t *testing.T) {
 	h := vixTestHub(t)
 	ctx := context.Background()
