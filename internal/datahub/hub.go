@@ -36,6 +36,11 @@ type viewFlight struct {
 }
 type Hub struct {
 	mail       *MailConfig
+	mailSend   func(context.Context, MailConfig, string, string) error
+	noticeMu   sync.Mutex
+	vixMu      sync.Mutex
+	vixWake    chan struct{}
+	vixFetch   func(context.Context, string) ([]byte, error)
 	Store      *Warehouse
 	Scheduler  *Scheduler
 	registry   map[string]Dataset
@@ -68,6 +73,7 @@ func Open(cfg Config) (*Hub, error) {
 		return nil, errors.New("CoinGlass base URL must use HTTPS")
 	}
 	h := &Hub{Store: w, registry: map[string]Dataset{}, views: map[string]cachedView{}, flights: map[string]*viewFlight{}, baselines: map[string]Baseline{}, boot: time.Now().UTC(), offline: cfg.Offline, mail: cfg.Mail}
+	h.mailSend, h.vixFetch, h.vixWake = sendMail, fetchVIX, make(chan struct{}, 1)
 	w.LoadState("baselines", &h.baselines)
 	w.LoadState("wallHistory", &h.walls)
 	w.LoadState("wallContinuity", &h.continuity)
@@ -156,6 +162,9 @@ func (h *Hub) Run(ctx context.Context) {
 	start(h.Scheduler.Run)
 	start(h.researchWorker)
 	if !h.offline {
+		start(h.vixCollector)
+		start(h.vixDailyCollector)
+		start(h.vixMailWorker)
 		start(h.prices)
 		start(h.fx)
 		start(h.candles)

@@ -1510,6 +1510,12 @@ meter::-webkit-meter-bar {
 
 .topbar nav {
   scrollbar-width: none;
+  min-width: 0;
+  overflow-x: auto;
+}
+@media (min-width: 901px) {
+  .topbar nav { flex: 1 1 0; }
+  .topbar > .wordmark, .topbar > .top-status { flex-shrink: 0; }
 }
 .topbar nav::-webkit-scrollbar {
   display: none;

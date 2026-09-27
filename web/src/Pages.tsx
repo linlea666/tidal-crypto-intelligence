@@ -1,6 +1,7 @@
 import { LargeOrderBoard } from "./LargeOrders";
 import { ActivityPage } from "./Activity";
 import { ETFPage } from "./Research";
+import { VIXPage, vixStatuses } from "./VIX";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, Copy, WarningCircle } from "@phosphor-icons/react";
 import { api, amount, price, clock, venue, useAPI } from "./data";
@@ -91,6 +92,7 @@ type Job = {
   calls: number;
 };
 type DataStatus = {
+  externalFeeds?: { vix: { status: string; reason: string; daily?: { lastDate?: string; error: string } } };
   datasets: {
     dataset: Dataset;
     status: string;
@@ -283,6 +285,7 @@ function Backfill({
   );
 }
 export function MarketPages(p: Props) {
+  if (p.view === "vix") return <VIXPage />;
   if(p.view==="large-orders")return <LargeOrderBoard key={p.asset} asset={p.asset}/>;
   if (p.view === "etf") return <ETFPage key={p.asset} asset={p.asset}/>;
   if (p.view === "activity")
@@ -1130,6 +1133,12 @@ function HealthPage({ health, frame }: Props) {
           上游认证失败，采集已暂停。请检查代理密钥和订阅期限。
         </div>
       )}
+      {data?.externalFeeds?.vix && <section className="data-section">
+        <h2>VIX独立数据源 · {vixStatuses[data.externalFeeds.vix.status] ?? "未知"}</h2>
+        <p className="helper">{data.externalFeeds.vix.reason} · Cboe日线截至 {data.externalFeeds.vix.daily?.lastDate || "暂无"}。独立于CoinGlass额度和BTC/ETH就绪检查。</p>
+        {data.externalFeeds.vix.daily?.error && <p className="sell">{data.externalFeeds.vix.daily.error}</p>}
+        <a href="#vix" className="text-button">查看VIX页面 →</a>
+      </section>}
       <p className="helper">
         大单历史约{" "}
         {((data?.storage.orderHistoryBytes ?? 0) / 1048576).toFixed(1)} / 512

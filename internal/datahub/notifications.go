@@ -149,6 +149,8 @@ func sendMail(ctx context.Context, c MailConfig, subject, body string) error {
 	return nil
 }
 func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
+	h.noticeMu.Lock()
+	defer h.noticeMu.Unlock()
 	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_scope' WHERE status='pending' AND signal_id LIKE 'ETH-%'"); e != nil {
 		return e
 	}
@@ -157,21 +159,21 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	}
 	// Crash-after-send is intentionally at-most-once: never repeat an ambiguous
 	// SMTP delivery. Persisted in-flight notices become unknown on restart.
-	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE status='sending' AND attempted<=?", h.boot.Unix()); e != nil {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE (kind IS NULL OR kind NOT LIKE 'vix:%') AND status='sending' AND attempted<=?", h.boot.Unix()); e != nil {
 		return e
 	}
-	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_restart' WHERE status='pending' AND created<=?", h.boot.Unix()); e != nil {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_restart' WHERE (kind IS NULL OR kind NOT LIKE 'vix:%') AND status='pending' AND created<=?", h.boot.Unix()); e != nil {
 		return e
 	}
-	var attempts int
-	if e := h.Store.research.QueryRowContext(ctx, "SELECT count(DISTINCT attempted) FROM notices WHERE attempted>?", now.Add(-time.Hour).Unix()).Scan(&attempts); e != nil {
+	attempts, e := h.mailAttempts(ctx, now)
+	if e != nil {
 		return e
 	}
 	if attempts >= 6 {
 		return nil
 	}
 	candidateAllowed := h.candidateMailAllowed(ctx, now)
-	rows, e := h.Store.research.QueryContext(ctx, "SELECT id,payload FROM notices WHERE status='pending' ORDER BY created LIMIT 100")
+	rows, e := h.Store.research.QueryContext(ctx, "SELECT id,payload FROM notices WHERE status='pending' AND (kind IS NULL OR kind NOT LIKE 'vix:%') ORDER BY created LIMIT 100")
 	if e != nil {
 		return e
 	}
@@ -213,37 +215,17 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	tx, e := h.Store.research.BeginTx(ctx, nil)
-	if e != nil {
-		return e
-	}
-	for _, id := range ids {
-		if _, e = tx.ExecContext(ctx, "UPDATE notices SET status='sending',attempted=? WHERE id=? AND status='pending'", now.Unix(), id); e != nil {
-			tx.Rollback()
-			return e
-		}
-	}
-	if e = tx.Commit(); e != nil {
-		return e
-	}
 	title := "TIDAL 资金异动提醒"
 	if len(ids) > 1 {
 		title = fmt.Sprintf("TIDAL 异动摘要（%d项）", len(ids))
 	}
-	e = sendMail(ctx, *h.mail, title, strings.Join(bodies, "\r\n")+"\r\n\r\n实验性成交描述，不是交易建议或胜率。请查看看板中的支持、冲突和缺失证据。")
-	status := "sent"
-	if e != nil {
-		status = "delivery_unknown"
-	}
-	for _, id := range ids {
-		if _, err := h.Store.research.ExecContext(ctx, "UPDATE notices SET status=? WHERE id=?", status, id); err != nil {
-			return err
-		}
-	}
+	_, e = h.deliverNoticeBatch(ctx, now, ids, title, strings.Join(bodies, "\r\n")+"\r\n\r\n实验性成交描述，不是交易建议或胜率。请查看看板中的支持、冲突和缺失证据。")
 	return e
 }
 
 type noticePayload struct {
+	Topic       string    `json:"topic,omitempty"`
+	VIX         *VIXEvent `json:"vix,omitempty"`
 	Asset       string    `json:"asset"`
 	Direction   string    `json:"direction"`
 	Kind        string    `json:"kind"`
@@ -263,7 +245,7 @@ func noticeSnapshot(s Signal, kind string) noticePayload {
 	if kind == "confirmed" && s.ConfirmedThrough != nil {
 		through = *s.ConfirmedThrough
 	}
-	return noticePayload{s.Asset, s.Direction, kind, s.At, through, s.Expires, s.ID, s.Rules, &s}
+	return noticePayload{Asset: s.Asset, Direction: s.Direction, Kind: kind, At: s.At, DataThrough: through, Expires: s.Expires, ID: s.ID, Rules: s.Rules, Signal: &s}
 }
 func (h *Hub) candidateMailAllowed(ctx context.Context, now time.Time) bool {
 	if h.mail == nil || h.mail.CandidateApproval == nil || h.mail.DashboardURL == "" {

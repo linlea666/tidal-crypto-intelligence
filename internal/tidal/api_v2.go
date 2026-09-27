@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime"
 	"strings"
@@ -37,6 +38,26 @@ func (s *Server) apiV2(w http.ResponseWriter, r *http.Request, a string) bool {
 	}
 	if path == "watchlist" {
 		problem(w, 410, "旧地址轮询已下线，请通过V2钱包详情队列查询")
+		return true
+	}
+	if path == "vix/settings" && r.Method == "PUT" {
+		var body struct {
+			EmailEnabled *bool `json:"emailEnabled"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&body) != nil || body.EmailEnabled == nil || dec.Decode(&struct{}{}) != io.EOF {
+			problem(w, 400, "仅接受emailEnabled布尔开关")
+			return true
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		result, err := s.Hub.SetVIXSettings(ctx, datahub.VIXSettings{EmailEnabled: *body.EmailEnabled}, time.Now().UTC())
+		if err != nil {
+			problem(w, 500, "VIX设置保存失败")
+			return true
+		}
+		jsonOut(w, result)
 		return true
 	}
 	if path == "data-requests" {
