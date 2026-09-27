@@ -65,13 +65,82 @@ func TestOrphanLifecycleConfirmsWithoutRearmAndExpiresWithoutData(t *testing.T) 
 	if e = h.Store.document(ctx, "signal", expired.ID, &got); e != nil {
 		t.Fatal(e)
 	}
-	if got.State != "expired" || got.Repair == nil || got.ConfirmedAt != nil || !got.At.Equal(expired.At) {
+	if got.State != "expired" || got.Repair == nil || got.ConfirmedAt != nil || !got.At.Equal(expired.At) || got.DetectionDelaySeconds != nil {
 		t.Fatalf("incorrect retrospective repair: %+v", got)
 	}
 	var n int
 	_ = h.Store.research.QueryRow("SELECT count(*) FROM notices WHERE signal_id='overdue'").Scan(&n)
 	if n != 0 {
 		t.Fatal("historical repair mailed")
+	}
+}
+
+func TestSignalDelayUnknownSurvivesLegacyRewriteAndAPI(t *testing.T) {
+	for _, tc := range []struct {
+		name, extra string
+		known       bool
+		want        float64
+	}{
+		{"absent", "", false, 0},
+		{"legacy-rewritten-zero", `,"detectionDelaySeconds":0`, false, 0},
+		{"explicit-null", `,"detectionDelaySeconds":null`, false, 0},
+		{"measured-zero", `,"evaluationVersion":"events-2.5.0","detectionDelaySeconds":0`, true, 0},
+		{"measured-delay", `,"evaluationVersion":"events-2.5.0","detectionDelaySeconds":37.5`, true, 37.5},
+		{"versioned-absent", `,"evaluationVersion":"events-2.5.0"`, false, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := []byte(`{"id":"original","at":"2026-09-26T01:00:00Z","rulesVersion":"flow-experiment-2.2.0"` + tc.extra + `}`)
+			var s Signal
+			if e := json.Unmarshal(b, &s); e != nil {
+				t.Fatal(e)
+			}
+			s.State = "expired"
+			out, e := json.Marshal(s)
+			if e != nil {
+				t.Fatal(e)
+			}
+			var fields map[string]any
+			if e = json.Unmarshal(out, &fields); e != nil {
+				t.Fatal(e)
+			}
+			if tc.known && fields["detectionDelaySeconds"] != tc.want || !tc.known && fields["detectionDelaySeconds"] != nil {
+				t.Fatalf("delay knowledge changed: %s", out)
+			}
+			if fields["at"] != "2026-09-26T01:00:00Z" || fields["rulesVersion"] != SignalRules {
+				t.Fatal("original evidence changed")
+			}
+		})
+	}
+	h, e := Open(Config{Root: t.TempDir(), Offline: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer h.Store.Close()
+	ctx := context.Background()
+	for _, a := range []string{"BTC", "ETH"} {
+		b := json.RawMessage(fmt.Sprintf(`{"id":%q,"asset":%q,"rulesVersion":%q,"detectionDelaySeconds":0,"preservedExtension":{"value":17}}`, a, a, SignalRules))
+		if e = h.Store.saveDocument("signal", a, a, time.Now(), b); e != nil {
+			t.Fatal(e)
+		}
+		for _, rule := range []string{"", SignalRules} {
+			v, err := h.SignalsView(ctx, a, "", rule)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows := v.(map[string]any)["items"].([]json.RawMessage)
+			var fields map[string]json.RawMessage
+			if len(rows) != 1 || json.Unmarshal(rows[0], &fields) != nil || string(fields["detectionDelaySeconds"]) != "null" || string(fields["preservedExtension"]) != `{"value":17}` {
+				t.Fatalf("raw API compatibility failed: %s", rows)
+			}
+		}
+		var stored json.RawMessage
+		if e = h.Store.document(ctx, "signal", a, &stored); e != nil || string(stored) != string(b) {
+			t.Fatal("read normalized persisted evidence")
+		}
+	}
+	v, e := h.SignalsView(ctx, "BTC", "BTC")
+	if e != nil || v.(Signal).DetectionDelaySeconds != nil {
+		t.Fatal("detail endpoint reports synthetic zero", v, e)
 	}
 }
 

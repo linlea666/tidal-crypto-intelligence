@@ -196,7 +196,8 @@ func (h *Hub) processCandidate(ctx context.Context, a string, state *signalState
 	}
 	hi, lo, price, _ := candleBounds(candles, end)
 	v, _ := sumBars(bars, end, 3)
-	s := Signal{ID: fmt.Sprintf("%s-candidate-buy-%d", a, end.Unix()), Asset: a, Direction: "buy", Rules: CandidateRules, Pattern: "candidate", State: "anomaly", Level: level, At: now, Updated: now, DataThrough: end, Expires: now.Add(4 * time.Hour), FrozenHigh: hi, FrozenLow: lo, ReferencePrice: price, ATR: &f.PriorATR, Net15: v.Net(), BuyShare: f.BuyShare, Baseline: baseline, Features: f, DetectionDelaySeconds: now.Sub(end).Seconds(), Evaluation: EvaluationVersion, Evidence: []string{"美元主动净买入、历史分位、量比、四段持续性同时满足固定候选规则"}, Conflicts: []string{"站内观察；尚未证明能够预测未来1–4小时持续拉升"}, Missing: []string{"合约成交与美元OI仅作背景；美元OI变化包含价格影响，不能单独解释为开多", "资金费率、已发生清算见独立合约背景；不重复计分"}}
+	delay := now.Sub(end).Seconds()
+	s := Signal{ID: fmt.Sprintf("%s-candidate-buy-%d", a, end.Unix()), Asset: a, Direction: "buy", Rules: CandidateRules, Pattern: "candidate", State: "anomaly", Level: level, At: now, Updated: now, DataThrough: end, Expires: now.Add(4 * time.Hour), FrozenHigh: hi, FrozenLow: lo, ReferencePrice: price, ATR: &f.PriorATR, Net15: v.Net(), BuyShare: f.BuyShare, Baseline: baseline, Features: f, DetectionDelaySeconds: &delay, Evaluation: EvaluationVersion, Evidence: []string{"美元主动净买入、历史分位、量比、四段持续性同时满足固定候选规则"}, Conflicts: []string{"站内观察；尚未证明能够预测未来1–4小时持续拉升"}, Missing: []string{"合约成交与美元OI仅作背景；美元OI变化包含价格影响，不能单独解释为开多", "资金费率、已发生清算见独立合约背景；不重复计分"}}
 	if f.Stage == "following" {
 		s.Conflicts = append(s.Conflicts, "已发生区间突破，属于跟随，不能称启动前预警")
 	}
