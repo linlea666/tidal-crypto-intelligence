@@ -662,6 +662,12 @@ func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
 	}
 	return nil
 }
+func (h *Hub) forwardReportDue(now time.Time) bool {
+	var last time.Time
+	var evaluation string
+	return !h.Store.LoadState("signals/forwardEvaluation", &evaluation) || evaluation != EvaluationVersion || !h.Store.LoadState("signals/forwardAt", &last) || now.Sub(last) >= time.Hour
+}
+
 func (h *Hub) researchWorker(ctx context.Context) {
 	tick := time.NewTicker(time.Minute)
 	defer tick.Stop()
@@ -682,8 +688,7 @@ func (h *Hub) researchWorker(ctx context.Context) {
 				_ = h.Store.SaveState("signals/error", map[string]any{"at": now, "error": err.Error()})
 			}
 			if !h.Store.Status().ResearchPaused && !h.Store.Status().Paused {
-				var last time.Time
-				if !h.Store.LoadState("signals/forwardAt", &last) || now.Sub(last) >= time.Hour {
+				if h.forwardReportDue(now) {
 					for _, a := range ResearchAssets() {
 						if e := h.buildForwardReport(step, a, now); e != nil {
 							err = e
@@ -692,6 +697,7 @@ func (h *Hub) researchWorker(ctx context.Context) {
 					}
 					if err == nil {
 						_ = h.Store.SaveState("signals/forwardAt", now)
+						_ = h.Store.SaveState("signals/forwardEvaluation", EvaluationVersion)
 					}
 				}
 				if e := h.processStudies(step, now); e != nil {
