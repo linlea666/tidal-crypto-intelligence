@@ -89,4 +89,4 @@ GET只读取本地，不触发上游。上游任意滚动60秒最多12次、最�
 
 验收状态见 [STATUS](docs/STATUS.md)。持续运行 72 小时的资源验收与短测分开记录。
 
-当前已发布v2.0.0，V1连续验收按迁移计划中止；V2从2026-09-24 12:14:41 UTC单独开始72小时验收，尚未得出完整结论。
+当前稳定版本为 [v2.6.0](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.6.0)。各版本验收起止、资源限制及尚未完成的实盘项目见 [STATUS](docs/STATUS.md)，短测通过不表示72小时验收完成。
