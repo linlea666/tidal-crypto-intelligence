@@ -37,33 +37,41 @@ type SignalBaseline struct {
 	P95          float64   `json:"p95Cents"`
 	P05          float64   `json:"p05Cents"`
 	P90          float64   `json:"p90HourCents"`
+	P95Hour      *float64  `json:"p95HourCents"`
 	P10          float64   `json:"p10HourCents"`
 	Median15     float64   `json:"median15VolumeCents"`
 	Median60     float64   `json:"median60VolumeCents"`
 }
 type Signal struct {
-	ID             string         `json:"id"`
-	Asset          string         `json:"asset"`
-	Direction      string         `json:"direction"`
-	Pattern        string         `json:"pattern"`
-	State          string         `json:"state"`
-	Rules          string         `json:"rulesVersion"`
-	At             time.Time      `json:"at"`
-	DataThrough    time.Time      `json:"dataThrough"`
-	Updated        time.Time      `json:"updatedAt"`
-	ConfirmedAt    *time.Time     `json:"confirmedAt"`
-	Expires        time.Time      `json:"expiresAt"`
-	FrozenHigh     float64        `json:"frozenHigh"`
-	FrozenLow      float64        `json:"frozenLow"`
-	ReferencePrice float64        `json:"referencePrice"`
-	DetectionPrice *float64       `json:"detectionPriceUsdt"`
-	ATR            *float64       `json:"atr1h"`
-	Net15          int64          `json:"net15Cents"`
-	BuyShare       float64        `json:"buyShare"`
-	Baseline       SignalBaseline `json:"baseline"`
-	Evidence       []string       `json:"evidence"`
-	Conflicts      []string       `json:"conflicts"`
-	Missing        []string       `json:"missing"`
+	ConfirmedThrough      *time.Time       `json:"confirmedDataThrough,omitempty"`
+	Level                 string           `json:"level,omitempty"`
+	Features              *SignalFeatures  `json:"features,omitempty"`
+	Upgrade               *SignalUpgrade   `json:"strongUpgrade,omitempty"`
+	Repair                *LifecycleRepair `json:"lifecycleRepair,omitempty"`
+	DetectionDelaySeconds float64          `json:"detectionDelaySeconds"`
+	Evaluation            string           `json:"evaluationVersion,omitempty"`
+	ID                    string           `json:"id"`
+	Asset                 string           `json:"asset"`
+	Direction             string           `json:"direction"`
+	Pattern               string           `json:"pattern"`
+	State                 string           `json:"state"`
+	Rules                 string           `json:"rulesVersion"`
+	At                    time.Time        `json:"at"`
+	DataThrough           time.Time        `json:"dataThrough"`
+	Updated               time.Time        `json:"updatedAt"`
+	ConfirmedAt           *time.Time       `json:"confirmedAt"`
+	Expires               time.Time        `json:"expiresAt"`
+	FrozenHigh            float64          `json:"frozenHigh"`
+	FrozenLow             float64          `json:"frozenLow"`
+	ReferencePrice        float64          `json:"referencePrice"`
+	DetectionPrice        *float64         `json:"detectionPriceUsdt"`
+	ATR                   *float64         `json:"atr1h"`
+	Net15                 int64            `json:"net15Cents"`
+	BuyShare              float64          `json:"buyShare"`
+	Baseline              SignalBaseline   `json:"baseline"`
+	Evidence              []string         `json:"evidence"`
+	Conflicts             []string         `json:"conflicts"`
+	Missing               []string         `json:"missing"`
 }
 type signalState struct {
 	InputVersion string                `json:"inputVersion"`
@@ -191,6 +199,8 @@ func baselineFromBars(bars map[int64]FlowBar, from, to, now time.Time) SignalBas
 	b.P95 = percentile(net15, .95)
 	b.P05 = percentile(net15, .05)
 	b.P90 = percentile(net60, .9)
+	p95 := percentile(net60, .95)
+	b.P95Hour = &p95
 	b.P10 = percentile(net60, .1)
 	b.Median15 = percentile(vol15, .5)
 	b.Median60 = percentile(vol60, .5)
@@ -292,7 +302,7 @@ func (h *Hub) signalInput(ctx context.Context, a string, from, to, asOf time.Tim
 		return nil, nil, e
 	}
 	e = h.Store.FactsAsOf(ctx, ID("candles", a, "Binance", "spot"), from, to, asOf, func(o Observation) error {
-		if o.Payload.Candle != nil && o.Quality == "valid" && o.Resolution == 300 {
+		if o.Payload.Candle != nil && o.Quality == "valid" && o.Resolution == 300 && recordTime(o).Unix()%300 == 0 && !recordTime(o).Add(5*time.Minute).After(to) && !recordTime(o).Add(5*time.Minute).After(asOf) {
 			candles[recordTime(o).Unix()] = *o.Payload.Candle
 		}
 		return nil
@@ -372,7 +382,7 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 		to := end.Truncate(time.Hour).Add(-time.Hour)
 		from := to.Add(-30 * 24 * time.Hour)
 		baseVersion := h.Store.datasetRangeVersion(ctx, fd.ID, from, to)
-		if baseline.At.IsZero() || !baseline.To.Equal(to) || baseline.InputVersion != baseVersion {
+		if baseline.At.IsZero() || !baseline.To.Equal(to) || baseline.InputVersion != baseVersion || baseline.P95Hour == nil {
 			acc := newFlowAccumulator(300)
 			if e := h.Store.FactsAsOf(ctx, fd.ID, from, to, now, func(o Observation) error { acc.add(o); return nil }); e != nil {
 				return e
@@ -392,22 +402,6 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 			reason = "数据不足 / 当前成交或价格过期"
 		}
 		version := h.Store.factVersion(ctx, a)
-		hasActive := false
-		for _, id := range state.Active {
-			hasActive = hasActive || id != ""
-		}
-		if state.InputVersion == version && end.Equal(state.Last) && !hasActive {
-			var quality map[string]any
-			if h.Store.LoadState("signals/quality/"+a, &quality) {
-				quality["at"] = now
-				quality["fresh"] = fresh
-				if !fresh {
-					quality["reason"] = reason
-				}
-				_ = h.Store.SaveState("signals/quality/"+a, quality)
-			}
-			continue
-		}
 		state.InputVersion = version
 		bars, candles, e := h.signalInput(ctx, a, end.Add(-16*time.Hour), end, now)
 		if e != nil {
@@ -418,10 +412,20 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 		if !windowComplete || !priceComplete {
 			reason = "数据不足 / 成交或价格窗口有缺口"
 		}
-		if e := h.Store.SaveState("signals/quality/"+a, map[string]any{"at": now, "fresh": fresh, "windowComplete": windowComplete && priceComplete, "reason": reason, "baseline": baseline}); e != nil {
+		_, candidateComplete := candidateFeatures(bars, candles, end, baseline)
+		if e := h.Store.SaveState("signals/quality/"+a, map[string]any{"at": now, "fresh": fresh, "windowComplete": windowComplete && priceComplete, "candidateWindowComplete": candidateComplete, "reason": reason, "baseline": baseline}); e != nil {
 			return e
 		}
-		if e := h.recordShadow(ctx, a, now, end, fresh && windowComplete && priceComplete, baseline.Valid); e != nil {
+		var candidateOrigin time.Time
+		if !h.Store.LoadState("forward/candidate-origin/"+a+"/"+CandidateRules, &candidateOrigin) {
+			if e := h.Store.SaveState("forward/candidate-origin/"+a+"/"+CandidateRules, now); e != nil {
+				return e
+			}
+		}
+		if e := h.recordShadow(ctx, a, now, end, fresh && windowComplete && priceComplete, baseline.Valid, fresh && candidateComplete); e != nil {
+			return e
+		}
+		if e := h.priceEventLedger(ctx, a, now, candles, end, co && c.Fresh(cd, now) && now.Sub(end) <= 12*time.Minute); e != nil {
 			return e
 		}
 		// Startup establishes a cursor; historical backfill never emits old mail.
@@ -431,6 +435,35 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 			state.Last = end
 			newBar = false
 		}
+		// Dedupe state never determines which existing events receive lifecycle updates.
+		tracked, err := h.openSignals(ctx, a)
+		if err != nil {
+			return err
+		}
+		for _, sig := range tracked {
+			old := sig.State
+			if !now.Before(sig.Expires) {
+				sig.State = "expired"
+				if initialized || now.Sub(sig.Expires) > 5*time.Minute {
+					sig.Repair = &LifecycleRepair{now, old, "逾期状态闭合；原始发现时间保留，不追认历史确认或补发邮件"}
+				}
+			} else if fresh && newBar && !initialized {
+				if confirms(sig, bars, candles, end) {
+					sig.State = "confirmed"
+					sig.ConfirmedAt = &now
+					sig.ConfirmedThrough = &end
+				} else if reverseBars(bars, end, sig.Direction) {
+					sig.State = "weakened"
+				}
+			}
+			if old != sig.State {
+				sig.Updated = now
+				updates = append(updates, sig)
+				if sig.State == "confirmed" {
+					notices[sig.ID] = "confirmed"
+				}
+			}
+		}
 		for _, side := range []string{"buy", "sell"} {
 			pattern, complete := signalCondition(bars, end, baseline, side)
 			valid := fresh && complete
@@ -439,32 +472,6 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 			}
 			id := state.Active[side]
 			if id != "" {
-				var sig Signal
-				if e := h.Store.document(ctx, "signal", id, &sig); e != nil {
-					return e
-				}
-				old := sig.State
-				if sig.ConfirmedAt == nil && !now.Before(sig.Expires) {
-					sig.State = "expired"
-				} else if valid && newBar && sig.ConfirmedAt == nil {
-					if confirms(sig, bars, candles, end) {
-						sig.State = "confirmed"
-						sig.ConfirmedAt = &now
-					} else if reverseBars(bars, end, side) {
-						sig.State = "weakened"
-					}
-				}
-				if old != sig.State {
-					sig.Updated = now
-					if sig.State == "confirmed" {
-						sig.Conflicts = []string{"价格确认只是后续证据，不代表行情必然持续"}
-						sig.Evidence = append(sig.Evidence, "两根完成5分钟K线突破冻结区间，成交方向仍一致")
-					}
-					updates = append(updates, sig)
-					if sig.State == "confirmed" && !initialized {
-						notices[sig.ID] = "confirmed"
-					}
-				}
 				if valid && pattern == "" {
 					if state.Clear[side] == nil {
 						v := now
@@ -487,7 +494,7 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 				continue
 			}
 			v, _ := sumBars(bars, end, 3)
-			sig := Signal{ID: fmt.Sprintf("%s-%s-%d", a, side, end.Unix()), Asset: a, Direction: side, Pattern: pattern, State: "anomaly", Rules: SignalRules, At: now, DataThrough: end, Updated: now, Expires: now.Add(4 * time.Hour), FrozenHigh: high, FrozenLow: low, ReferencePrice: reference, ATR: hourlyATR(candles, end), Net15: v.Net(), BuyShare: v.Share() * 100, Baseline: baseline, Evidence: []string{"同口径成交分位、连续性与成交量满足实验规则", "CVD与净买卖属于同一类证据"}, Conflicts: []string{"价格尚未突破触发前冻结的4小时区间"}, Missing: []string{"辅助指标尚未通过权重准入；不提升告警等级"}}
+			sig := Signal{ID: fmt.Sprintf("%s-%s-%d", a, side, end.Unix()), Asset: a, Direction: side, Pattern: pattern, State: "anomaly", Rules: SignalRules, At: now, DataThrough: end, Updated: now, Expires: now.Add(4 * time.Hour), FrozenHigh: high, FrozenLow: low, ReferencePrice: reference, ATR: hourlyATR(candles, end), Net15: v.Net(), BuyShare: v.Share() * 100, Baseline: baseline, DetectionDelaySeconds: now.Sub(end).Seconds(), Evaluation: EvaluationVersion, Evidence: []string{"同口径成交分位、连续性与成交量满足实验规则", "CVD与净买卖属于同一类证据"}, Conflicts: []string{"价格尚未突破触发前冻结的4小时区间"}, Missing: []string{"辅助指标尚未通过权重准入；不提升告警等级"}}
 			updates = append(updates, sig)
 			pd, _ := h.Dataset(ID("price", a, "Binance", "spot"))
 			if p, ok := h.Store.Latest(pd.ID); ok && p.Fresh(pd, now) && p.Payload.Price != nil {
@@ -496,6 +503,16 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 			}
 			state.Active[side] = sig.ID
 			notices[sig.ID] = "anomaly"
+		}
+		if fresh && newBar && !initialized {
+			if e := h.processCandidate(ctx, a, &state, bars, candles, baseline, end, now, &updates); e != nil {
+				return e
+			}
+		}
+		for _, sig := range updates {
+			if sig.Rules == CandidateRules && sig.Upgrade != nil && sig.Upgrade.At.Equal(now) {
+				notices[sig.ID] = "strong"
+			}
 		}
 		if newBar {
 			state.Last = end
@@ -507,6 +524,7 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 	return nil
 }
 func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, updates []Signal, notices map[string]string, now time.Time) error {
+	candidateAllowed := h.candidateMailAllowed(ctx, now)
 	tx, e := h.Store.research.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -524,8 +542,8 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 		if e = put("signal", s.ID, s.At, s); e != nil {
 			return e
 		}
-		if kind := notices[s.ID]; kind != "" {
-			b, e := json.Marshal(map[string]any{"asset": a, "direction": s.Direction, "kind": kind, "at": s.At, "dataThrough": s.DataThrough, "id": s.ID})
+		if kind := notices[s.ID]; kind != "" && (s.Rules != CandidateRules || candidateAllowed && s.Level == "strong" && (kind == "strong" || kind == "confirmed")) {
+			b, e := json.Marshal(noticeSnapshot(s, kind))
 			if e != nil {
 				return e
 			}
@@ -543,7 +561,7 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 	}
 	return tx.Commit()
 }
-func (h *Hub) SignalsView(ctx context.Context, a, id string) (any, error) {
+func (h *Hub) SignalsView(ctx context.Context, a, id string, rules ...string) (any, error) {
 	if !researchAsset(a) {
 		rows, e := h.Store.documents(ctx, "signal", a, 100)
 		return map[string]any{"items": rows, "enabled": false, "enabledAssets": ResearchAssets(), "note": "仅BTC启用预警；ETH旧记录只读，不再发送通知"}, e
@@ -557,6 +575,12 @@ func (h *Hub) SignalsView(ctx context.Context, a, id string) (any, error) {
 	if e != nil {
 		return nil, e
 	}
+	if len(rules) > 0 && rules[0] != "" {
+		rows, e = h.Store.signalDocuments(ctx, a, rules[0])
+		if e != nil {
+			return nil, e
+		}
+	}
 	var quality map[string]any
 	_ = h.Store.LoadState("signals/quality/"+a, &quality)
 	observers := []map[string]any{}
@@ -566,7 +590,7 @@ func (h *Hub) SignalsView(ctx context.Context, a, id string) (any, error) {
 			observers = append(observers, map[string]any{"kind": d.Kind, "meta": metadata(d, o, exists), "data": o.Payload, "weight": 0})
 		}
 	}
-	return map[string]any{"enabled": true, "enabledAssets": ResearchAssets(), "items": rows, "quality": quality, "observers": observers, "rulesVersion": SignalRules, "auxiliaryWeight": 0, "mail": h.mailStatus(), "note": "实验性资金异动：不识别交易者身份，不承诺提前量或胜率。数据缺失时停发。"}, nil
+	return map[string]any{"enabled": true, "enabledAssets": ResearchAssets(), "items": rows, "quality": quality, "observers": observers, "rulesVersion": SignalRules, "candidateRulesVersion": CandidateRules, "evaluationVersion": EvaluationVersion, "candidateMailEnabled": h.candidateMailAllowed(ctx, time.Now().UTC()), "auxiliaryWeight": 0, "mail": h.mailStatus(), "note": "实验性资金异动：不识别交易者身份，不承诺提前量或胜率。数据缺失时停发。"}, nil
 }
 func nextETF(now time.Time) time.Time {
 	loc := time.FixedZone("CST", 8*3600)
@@ -580,3 +604,42 @@ func nextETF(now time.Time) time.Time {
 
 // Unmarshal helper keeps study and live signal rules on identical inputs.
 func decodeSignal(b json.RawMessage) Signal { var s Signal; _ = json.Unmarshal(b, &s); return s }
+
+// Bounded recovery includes orphaned v2.2 events, even after the rearm cursor was cleared.
+func (h *Hub) openSignals(ctx context.Context, a string) ([]Signal, error) {
+	rows, e := h.Store.research.QueryContext(ctx, `SELECT payload FROM documents WHERE kind='signal' AND asset=? AND json_extract(payload,'$.state') IN ('anomaly','weakened') AND json_extract(payload,'$.confirmedAt') IS NULL ORDER BY at LIMIT 512`, a)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := []Signal{}
+	for rows.Next() {
+		var b []byte
+		if e = rows.Scan(&b); e != nil {
+			return nil, e
+		}
+		var s Signal
+		if e = json.Unmarshal(b, &s); e != nil {
+			return nil, e
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func (w *Warehouse) signalDocuments(ctx context.Context, a, rule string) ([]json.RawMessage, error) {
+	rows, e := w.research.QueryContext(ctx, "SELECT payload FROM documents WHERE kind='signal' AND asset=? AND json_extract(payload,'$.rulesVersion')=? ORDER BY at DESC LIMIT 100", a, rule)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := []json.RawMessage{}
+	for rows.Next() {
+		var b []byte
+		if e = rows.Scan(&b); e != nil {
+			return nil, e
+		}
+		out = append(out, json.RawMessage(b))
+	}
+	return out, rows.Err()
+}

@@ -82,6 +82,11 @@ func TestResourceReplay(t *testing.T) {
 			t.Fatal(e)
 		}
 		if r.CoreCalculated {
+			s.Result = r
+			s.State = "complete"
+			if e = h.Store.saveDocument("study", s.ID, s.Asset, s.Created, s); e != nil {
+				t.Fatal(e)
+			}
 			t.Log("full strategy calculation complete")
 			break
 		}
@@ -156,7 +161,7 @@ func TestResourceReplay(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for _, path := range []string{"activity", "levels", "large-orders"} {
+				for _, path := range []string{"activity", "levels", "large-orders", "signals", "studies"} {
 					for n := 0; n < 4; n++ {
 						if _, err := h.Read(ctx, path, url.Values{"asset": {"BTC"}, "hours": {"1"}, "layout": {"split"}}); err != nil {
 							t.Error(err)
