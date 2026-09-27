@@ -436,7 +436,7 @@ type SignalItem = {
   rulesVersion: string; level?: string; features?: SignalFeature;
   strongUpgrade?: { at: string; dataThrough: string; features: SignalFeature };
   lifecycleRepair?: { at: string; previousState: string; reason: string };
-  detectionDelaySeconds?: number;
+  detectionDelaySeconds?: number | null;
   id: string;
   asset: string;
   direction: string;

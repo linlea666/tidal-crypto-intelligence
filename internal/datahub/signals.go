@@ -48,7 +48,7 @@ type Signal struct {
 	Features              *SignalFeatures  `json:"features,omitempty"`
 	Upgrade               *SignalUpgrade   `json:"strongUpgrade,omitempty"`
 	Repair                *LifecycleRepair `json:"lifecycleRepair,omitempty"`
-	DetectionDelaySeconds float64          `json:"detectionDelaySeconds"`
+	DetectionDelaySeconds *float64         `json:"detectionDelaySeconds"`
 	Evaluation            string           `json:"evaluationVersion,omitempty"`
 	ID                    string           `json:"id"`
 	Asset                 string           `json:"asset"`
@@ -78,6 +78,53 @@ type signalState struct {
 	Last         time.Time             `json:"last"`
 	Active       map[string]string     `json:"active"`
 	Clear        map[string]*time.Time `json:"clear"`
+}
+
+// V2.5.0/1 rewrote legacy lifecycle records with a numeric zero for the absent
+// delay. Those records have no evaluation version; preserve unknown as null.
+// New versioned records may legitimately have a measured zero-second delay.
+func normalizeLegacySignalDelay(b json.RawMessage) (json.RawMessage, error) {
+	var fields struct {
+		Evaluation string   `json:"evaluationVersion"`
+		Delay      *float64 `json:"detectionDelaySeconds"`
+	}
+	if err := json.Unmarshal(b, &fields); err != nil {
+		return nil, err
+	}
+	if fields.Evaluation != "" || fields.Delay == nil || *fields.Delay != 0 {
+		return b, nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil, err
+	}
+	raw["detectionDelaySeconds"] = json.RawMessage("null")
+	return json.Marshal(raw)
+}
+
+func (s *Signal) UnmarshalJSON(b []byte) error {
+	normalized, err := normalizeLegacySignalDelay(b)
+	if err != nil {
+		return err
+	}
+	type signalValue Signal
+	var value signalValue
+	if err = json.Unmarshal(normalized, &value); err != nil {
+		return err
+	}
+	*s = Signal(value)
+	return nil
+}
+
+func normalizeSignalDocuments(rows []json.RawMessage) ([]json.RawMessage, error) {
+	for i := range rows {
+		b, err := normalizeLegacySignalDelay(rows[i])
+		if err != nil {
+			return nil, err
+		}
+		rows[i] = b
+	}
+	return rows, nil
 }
 
 func percentile(a []float64, p float64) float64 {
@@ -494,7 +541,8 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 				continue
 			}
 			v, _ := sumBars(bars, end, 3)
-			sig := Signal{ID: fmt.Sprintf("%s-%s-%d", a, side, end.Unix()), Asset: a, Direction: side, Pattern: pattern, State: "anomaly", Rules: SignalRules, At: now, DataThrough: end, Updated: now, Expires: now.Add(4 * time.Hour), FrozenHigh: high, FrozenLow: low, ReferencePrice: reference, ATR: hourlyATR(candles, end), Net15: v.Net(), BuyShare: v.Share() * 100, Baseline: baseline, DetectionDelaySeconds: now.Sub(end).Seconds(), Evaluation: EvaluationVersion, Evidence: []string{"同口径成交分位、连续性与成交量满足实验规则", "CVD与净买卖属于同一类证据"}, Conflicts: []string{"价格尚未突破触发前冻结的4小时区间"}, Missing: []string{"辅助指标尚未通过权重准入；不提升告警等级"}}
+			delay := now.Sub(end).Seconds()
+			sig := Signal{ID: fmt.Sprintf("%s-%s-%d", a, side, end.Unix()), Asset: a, Direction: side, Pattern: pattern, State: "anomaly", Rules: SignalRules, At: now, DataThrough: end, Updated: now, Expires: now.Add(4 * time.Hour), FrozenHigh: high, FrozenLow: low, ReferencePrice: reference, ATR: hourlyATR(candles, end), Net15: v.Net(), BuyShare: v.Share() * 100, Baseline: baseline, DetectionDelaySeconds: &delay, Evaluation: EvaluationVersion, Evidence: []string{"同口径成交分位、连续性与成交量满足实验规则", "CVD与净买卖属于同一类证据"}, Conflicts: []string{"价格尚未突破触发前冻结的4小时区间"}, Missing: []string{"辅助指标尚未通过权重准入；不提升告警等级"}}
 			updates = append(updates, sig)
 			pd, _ := h.Dataset(ID("price", a, "Binance", "spot"))
 			if p, ok := h.Store.Latest(pd.ID); ok && p.Fresh(pd, now) && p.Payload.Price != nil {
@@ -564,6 +612,9 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 func (h *Hub) SignalsView(ctx context.Context, a, id string, rules ...string) (any, error) {
 	if !researchAsset(a) {
 		rows, e := h.Store.documents(ctx, "signal", a, 100)
+		if e == nil {
+			rows, e = normalizeSignalDocuments(rows)
+		}
 		return map[string]any{"items": rows, "enabled": false, "enabledAssets": ResearchAssets(), "note": "仅BTC启用预警；ETH旧记录只读，不再发送通知"}, e
 	}
 	if id != "" {
@@ -580,6 +631,10 @@ func (h *Hub) SignalsView(ctx context.Context, a, id string, rules ...string) (a
 		if e != nil {
 			return nil, e
 		}
+	}
+	rows, e = normalizeSignalDocuments(rows)
+	if e != nil {
+		return nil, e
 	}
 	var quality map[string]any
 	_ = h.Store.LoadState("signals/quality/"+a, &quality)
