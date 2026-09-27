@@ -1,5 +1,15 @@
 # 实施状态
 
+## 9月27日 SMTP 配置与计划重启
+
+按用户请求在服务器专用邮件文件中完成SMTP配置，使用465端口直接TLS；认证已通过TLS1.3连接。配置文件仅root及应用组可读（0640），目录0750，容器只读挂载；凭据、邮箱地址和运行证据未提交仓库。没有新增候选授权，也没有修改源码、镜像或规则。
+
+北京时间13:45:34仅重启应用容器，13:46健康检查通过；网关未重启，固定v2.5.2版本与镜像未变。应用已加载邮件配置、错误状态为空，BTC/ETH各五家盘口及当前价格正常。HTTPS复核12条原信号的发现时间/规则、3条确认时间、8条到期修复及候选独立观察起点均保留。页面显示“站内＋邮件”，候选强信号邮件仍关闭；原有规则的新提醒按既有队列发送，旧积压不补发。
+
+北京时间13:47:17从服务器使用该配置、TLS/AUTH PLAIN及应用同口径MIME格式发送**一封手动通道测试**，13:47:18收到SMTP 250接受响应。没有构造市场信号或修改通知账本。当前仅确认SMTP已接受，收件人实际收到尚待用户确认；这不能替代真实信号触发链路与候选有效性验收。发送审计保存在服务器专用备份目录。
+
+原生产连续验收因本次授权维护中断，05:02 UTC原始起点及校验值不变，不拼接重启前后时间，也未另立新起点。最后重启前样本05:42:25 UTC，累计0.674小时、9次采样，容器内存峰值240.4MiB；其中05:27:23的存活检查成功、就绪检查返回HTTP503，当时容器健康且无OOM/重启。该次就绪失败发生在邮件配置前，随后恢复，原因需单独核对，不能把该区间判为全部就绪或72小时通过。结束记录为忽略目录的 `soak-v2.5.2-end.json`（`incomplete_planned_maintenance`），前后完整报告分别保留。下文为此次维护前的发布及验收记录。
+
 ## V2.5.2 预警正确性与固定候选验证：已上线，效果仍在验收
 
 主体改进经 [PR #6](https://github.com/linlea666/tidal-crypto-intelligence/pull/6)、评估版本迁移 [PR #7](https://github.com/linlea666/tidal-crypto-intelligence/pull/7) 发布为 [v2.5.0](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.5.0)。生产浏览器发现入口HTML缓存仍可能引用旧脚本，已通过 [PR #8](https://github.com/linlea666/tidal-crypto-intelligence/pull/8) 的v2.5.1要求入口重新校验，哈希资源缓存不变；原有标签需刷新一次。最后验收发现旧事件缺失检测延迟被默认值保存为0，已通过 [PR #9](https://github.com/linlea666/tidal-crypto-intelligence/pull/9) 修正，并于9月27日北京时间13:01切换为 [v2.5.2](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.5.2)。当前固定revision `05b3bb04e79a6bacbaeeee9b63d9f5aac92d1207`，不可变镜像 `sha256:708fee73425c0548a036fec72da1bcfb5ab07287e8c1f55a238ac3d5adbfcc89`。[发布前检查](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/36295224964) 与 [稳定Release构建、Compose/TLS/登录检查及部署](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/36295782192) 均通过。源码仍由本地进入GitHub，服务器没有本地改源码或构建。
