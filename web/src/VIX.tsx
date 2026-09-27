@@ -166,8 +166,23 @@ export function VIXPage() {
       tooltip: {
         trigger: "axis",
         renderMode: "richText",
-        valueFormatter: (v: unknown) =>
-          typeof v === "number" ? v.toFixed(2) : "未覆盖",
+        formatter: (
+          items: {
+            axisValue: string | number;
+            value: number | [number, number | null];
+            seriesName: string;
+          }[],
+        ) => {
+          const point = items[0];
+          if (!point) return "未覆盖";
+          const value = Array.isArray(point.value)
+            ? point.value[1]
+            : point.value;
+          const date = daily
+            ? `${point.axisValue} · 美东交易日`
+            : `${stamp(new Date(Number(point.axisValue)).toISOString())} · 北京时间`;
+          return `${date}\n${point.seriesName}  ${typeof value === "number" ? price(value) : "未覆盖"}`;
+        },
       },
       xAxis: daily
         ? {
@@ -452,6 +467,18 @@ export function VIXPage() {
             <dd>
               {settings?.cycle.cycleId ? "恐慌观察中" : "等待进入观察区间"}
             </dd>
+            {settings?.cycle.cycleStartedAt && (
+              <>
+                <dt>本轮行情起点</dt>
+                <dd>{stamp(settings.cycle.cycleStartedAt)}</dd>
+                <dt>本轮已覆盖</dt>
+                <dd>
+                  {settings.cycle.priorityRecorded
+                    ? "普通档与重点档"
+                    : "普通档"}
+                </dd>
+              </>
+            )}
             <dt>恢复条件</dt>
             <dd>低于 30 连续观察 30 分钟</dd>
             {settings?.cycle.lowSince && (
