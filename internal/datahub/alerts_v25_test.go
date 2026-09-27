@@ -384,12 +384,27 @@ func TestCandidateHistoricalCommonUniverseAndDelays(t *testing.T) {
 	for at := end.Add(-3 * 24 * time.Hour); at.Before(end.Add(-3*24*time.Hour + time.Hour)); at = at.Add(5 * time.Minute) {
 		bars[at.Unix()] = FlowBar{at, 2_000_000_000, 300_000_000}
 	}
-	r, e := evaluateCandidates(context.Background(), bars, c, from, end)
+	oi := map[int64]float64{}
+	for at := from; at.Before(end); at = at.Add(5 * time.Minute) {
+		oi[at.Add(5*time.Minute).Unix()] = 1000
+	}
+	r, e := evaluateCandidates(context.Background(), bars, c, from, end, CandidateContextSeries{bars, oi})
 	if e != nil {
 		t.Fatal(e)
 	}
 	if r.CommonWindows == 0 || len(r.Development) != 21 || len(r.Holdout) != 21 {
 		t.Fatalf("incomplete comparisons: %+v", r)
+	}
+	if r.AuxiliaryWindows == 0 || len(r.Auxiliary) != 4 || len(r.EqualBudget) != 3 {
+		t.Fatal("context or equal-budget comparison missing")
+	}
+	for _, trial := range r.EqualBudget {
+		if trial.Signals != r.EqualBudget[0].Signals {
+			t.Fatal("unequal reminder budget")
+		}
+	}
+	if r.Auxiliary[0].Signals == 0 || r.Auxiliary[2].Signals != 0 || r.Auxiliary[3].Signals != 0 {
+		t.Fatal("flat OI treated as missing or directional", r.Auxiliary)
 	}
 	strong := -1
 	for _, v := range r.Holdout {
