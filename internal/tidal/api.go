@@ -177,6 +177,11 @@ func (s *Server) static(w http.ResponseWriter, r *http.Request) {
 	if st, err := os.Stat(p); err != nil || st.IsDir() {
 		p = filepath.Join(s.WebDir, "index.html")
 	}
+	if filepath.Base(p) == "index.html" {
+		// The entry selects the release's hashed assets; heuristic caching can
+		// otherwise keep an old UI while APIs already serve the new version.
+		w.Header().Set("Cache-Control", "no-cache")
+	}
 	http.ServeFile(w, r, p)
 }
 func (s *Server) api(w http.ResponseWriter, r *http.Request) {
