@@ -381,9 +381,9 @@ func (s *FlowSnapshot) explain(side string) {
 	}
 	if v15, v4 := s.Spot["15"], s.Spot["240"]; v15.Net != nil && v4.Net != nil && *v15.Net != 0 && *v4.Net != 0 && (*v15.Net > 0) != (*v4.Net > 0) {
 		if *v15.Net > 0 {
-			s.Headline = "短线买盘回升，较长窗口仍有卖压"
+			s.Headline = "15分钟净买入，四小时仍为净卖出"
 		} else {
-			s.Headline = "短线卖压增加，较长窗口仍为净买入"
+			s.Headline = "15分钟净卖出，四小时仍为净买入"
 		}
 	}
 	if side == "" {
