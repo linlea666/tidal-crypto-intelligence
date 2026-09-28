@@ -10,14 +10,16 @@ import (
 // Forward samples are first-write-only. Later backfill/revisions cannot make a
 // formerly missing live decision window look as though it had been available.
 type ShadowSample struct {
-	CandidateRules    string     `json:"candidateRulesVersion,omitempty"`
-	CandidateEligible bool       `json:"candidateEligible"`
-	At                time.Time  `json:"at"`
-	Through           time.Time  `json:"dataThrough"`
-	Eligible          bool       `json:"eligible"`
-	BaselineValid     bool       `json:"baselineValid"`
-	BookPressure      *float64   `json:"bookPressure"`
-	BookCoverage      []Coverage `json:"bookCoverage"`
+	MultifactorRules    string     `json:"multifactorRulesVersion,omitempty"`
+	MultifactorEligible bool       `json:"multifactorEligible"`
+	CandidateRules      string     `json:"candidateRulesVersion,omitempty"`
+	CandidateEligible   bool       `json:"candidateEligible"`
+	At                  time.Time  `json:"at"`
+	Through             time.Time  `json:"dataThrough"`
+	Eligible            bool       `json:"eligible"`
+	BaselineValid       bool       `json:"baselineValid"`
+	BookPressure        *float64   `json:"bookPressure"`
+	BookCoverage        []Coverage `json:"bookCoverage"`
 }
 
 func (h *Hub) recordShadow(ctx context.Context, a string, now, through time.Time, eligible, baseline bool, candidate ...bool) error {
@@ -31,6 +33,10 @@ func (h *Hub) recordShadow(ctx context.Context, a string, now, through time.Time
 	if len(candidate) > 0 {
 		s.CandidateRules = CandidateRules
 		s.CandidateEligible = candidate[0]
+	}
+	if len(candidate) > 1 {
+		s.MultifactorRules = MultifactorRules
+		s.MultifactorEligible = candidate[1]
 	}
 	complete := f.PriceValid && len(f.Coverage) == 5
 	for _, c := range f.Coverage {
@@ -81,15 +87,16 @@ func (w *Warehouse) shadowSamples(ctx context.Context, a string, from, to time.T
 }
 
 type ForwardReport struct {
-	Evaluation        string           `json:"evaluationVersion,omitempty"`
-	Comparisons       []RuleEvaluation `json:"comparisons"`
-	CandidateDays     float64          `json:"candidateDays"`
-	CandidateCoverage float64          `json:"candidateCoverage"`
-	CandidateReady    bool             `json:"candidateReady"`
-	CandidateOrigin   *time.Time       `json:"candidateOrigin"`
-	CandidateEpisodes int              `json:"candidateEpisodes"`
-	Unmatched         int              `json:"unmatchedSignals"`
-	Matches           []EventMatch     `json:"matches"`
+	Multifactor       *MultifactorForward `json:"multifactor,omitempty"`
+	Evaluation        string              `json:"evaluationVersion,omitempty"`
+	Comparisons       []RuleEvaluation    `json:"comparisons"`
+	CandidateDays     float64             `json:"candidateDays"`
+	CandidateCoverage float64             `json:"candidateCoverage"`
+	CandidateReady    bool                `json:"candidateReady"`
+	CandidateOrigin   *time.Time          `json:"candidateOrigin"`
+	CandidateEpisodes int                 `json:"candidateEpisodes"`
+	Unmatched         int                 `json:"unmatchedSignals"`
+	Matches           []EventMatch        `json:"matches"`
 
 	From          *time.Time `json:"from"`
 	WindowFrom    time.Time  `json:"windowFrom"`
@@ -183,7 +190,7 @@ func (h *Hub) buildForwardReport(ctx context.Context, a string, now time.Time) e
 	}
 	events := []StudyEvent{}
 	for _, s := range signals {
-		if s.Rules == CandidateRules {
+		if s.Rules != "" && s.Rules != SignalRules {
 			continue
 		}
 		r.Signals++
@@ -213,7 +220,7 @@ func (h *Hub) buildForwardReport(ctx context.Context, a string, now time.Time) e
 	}
 	legacy := []Signal{}
 	for _, sig := range signals {
-		if sig.Rules != CandidateRules {
+		if sig.Rules == "" || sig.Rules == SignalRules {
 			legacy = append(legacy, sig)
 		}
 	}
@@ -312,6 +319,7 @@ func (h *Hub) buildForwardReport(ctx context.Context, a string, now time.Time) e
 		}
 	}
 
+	r.Multifactor = h.multifactorForward(ctx, samples, signals, allEpisodes, candles, now)
 	return h.Store.saveDocument("forward-report", a, a, now, r)
 }
 

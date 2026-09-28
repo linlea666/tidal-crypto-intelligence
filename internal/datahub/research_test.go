@@ -440,7 +440,7 @@ func TestResearchFullDoesNotStopLiveAndShadowNotRewritten(t *testing.T) {
 	}
 }
 
-func TestSignalAtomicLifecycleRestartAndExpiry(t *testing.T) {
+func TestMultifactorAtomicLifecycleRestartAndExpiry(t *testing.T) {
 	h, e := Open(Config{Root: t.TempDir(), Offline: true})
 	if e != nil {
 		t.Fatal(e)
@@ -455,14 +455,14 @@ func TestSignalAtomicLifecycleRestartAndExpiry(t *testing.T) {
 	now := end.Add(30 * time.Second)
 	h.boot = end.Add(-time.Hour)
 	p95Hour := 100.0
-	base := SignalBaseline{P95Hour: &p95Hour, At: now, Valid: true, Coverage: 1, Dates: 30, P95: 100, P05: -100, P90: 100, P10: -100, Median15: 1, Median60: 1}
+	base := SignalBaseline{Directional: directionalBaseline([]float64{100, -100}, []float64{100, -100}), P95Hour: &p95Hour, At: now, Valid: true, Coverage: 1, Dates: 30, P95: 100, P05: -100, P90: 100, P10: -100, Median15: 1, Median60: 1}
 	fd, _ := h.Dataset(ID("flow", "BTC", "", "spot"))
 	cd, _ := h.Dataset(ID("candles", "BTC", "Binance", "spot"))
 	feed := func(from, to time.Time, px float64) {
 		t.Helper()
 		for at := from; at.Before(to); at = at.Add(time.Minute) {
 			v := at
-			o := Observation{Dataset: fd.ID, Source: fd.Source, ObservedAt: &v, FetchedAt: to.Add(30 * time.Second), Resolution: 60, Quality: "valid", Payload: Payload{Flow: &Flow{"100", "10"}}}
+			o := Observation{Dataset: fd.ID, Source: fd.Source, ObservedAt: &v, FetchedAt: to.Add(30 * time.Second), Resolution: 60, Quality: "valid", Payload: Payload{Flow: &Flow{"2000000", "200000"}}}
 			if _, e = h.Store.Ingest(fd, o); e != nil {
 				t.Fatal(e)
 			}
@@ -506,7 +506,7 @@ func TestSignalAtomicLifecycleRestartAndExpiry(t *testing.T) {
 		t.Fatalf("confirmation not deduped: %d", count)
 	}
 	var sig Signal
-	id := fmt.Sprintf("BTC-buy-%d", end.Unix())
+	id := fmt.Sprintf("BTC-mf1-buy-%d", end.Unix())
 	if e = h.Store.document(ctx, "signal", id, &sig); e != nil || sig.State != "confirmed" || sig.FrozenHigh != 101 {
 		t.Fatalf("incorrect freeze/state %+v %v", sig, e)
 	}

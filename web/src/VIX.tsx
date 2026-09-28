@@ -84,6 +84,8 @@ const delivery: Record<string, string> = {
   sending: "发送中",
   sent: "邮件服务器已接受",
   delivery_unknown: "发送结果不确定 · 不自动重发",
+  failed_before_submission: "提交前失败",
+  rejected: "邮件服务器明确拒绝",
   unknown_after_restart: "重启前结果不确定 · 不重发",
   disabled: "邮件关闭 · 不补发",
   unconfigured: "邮箱未配置 · 不补发",

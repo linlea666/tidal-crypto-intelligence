@@ -30,6 +30,10 @@ func TestResourceReplay(t *testing.T) {
 	from := now.Add(-90 * 24 * time.Hour).Add(time.Hour)
 	flow, _ := FindDataset("flow.btc..spot")
 	cd, _ := FindDataset("candles.btc.binance.spot")
+	perp, _ := FindDataset(ID("flow", "BTC", "", "futures"))
+	coinOI, _ := FindDataset(ID("oi-coin-history", "BTC", "", "futures"))
+	liquidations, _ := FindDataset(ID("liquidations", "BTC", "", "futures"))
+	funding, _ := FindDataset(ID("funding", "ALL", "", "futures"))
 	ingest := func(d Dataset, o Observation) {
 		t.Helper()
 		if _, e := h.Store.Ingest(d, o); e != nil {
@@ -44,6 +48,25 @@ func TestResourceReplay(t *testing.T) {
 		o.Source = cd.Source
 		o.Payload = Payload{Candle: &Candle{Open: 80000, High: 80100, Low: 79900, Close: 80000, Volume: 10}}
 		ingest(cd, o)
+		o.Dataset, o.Source = perp.ID, perp.Source
+		o.Payload = Payload{Flow: &Flow{"5000000", "4000000"}}
+		ingest(perp, o)
+		o.Dataset, o.Source = coinOI.ID, coinOI.Source
+		o.Payload = Payload{OI: []Interest{{Base: "500000"}}}
+		ingest(coinOI, o)
+		o.Dataset, o.Source = liquidations.ID, liquidations.Source
+		o.Payload = Payload{Liquidation: &Liquidation{Long: "100000", Short: "120000"}}
+		ingest(liquidations, o)
+		if at.Minute()%10 == 0 {
+			o.Dataset, o.Source, o.FetchedAt = funding.ID, funding.Source, at
+			o.Payload = Payload{Funding: []Funding{}}
+			for _, venue := range []string{"Binance", "OKX", "Bybit"} {
+				for _, margin := range []string{"stablecoin", "coin"} {
+					o.Payload.Funding = append(o.Payload.Funding, Funding{Asset: "BTC", Venue: venue, Margin: margin, RatePercent: "0.01", RateKind: "predicted", Hours: flowPtr(8.0)})
+				}
+			}
+			ingest(funding, o)
+		}
 		if at.Hour() == 0 && at.Minute() == 0 {
 			t.Logf("backfill through %s", at.Format("2006-01-02"))
 		}
@@ -76,12 +99,12 @@ func TestResourceReplay(t *testing.T) {
 	}
 	t.Log("phase: checkpointed full strategy computation")
 	s := Study{ID: "resource-replay", Asset: "BTC", From: now.Add(-90 * 24 * time.Hour), To: now, Created: now, Pipeline: studyPipeline}
-	for i := 0; i < 24; i++ {
+	for i := 0; i < 40; i++ {
 		r, e := h.evaluateStudy(ctx, s, time.Now())
 		if e != nil {
 			t.Fatal(e)
 		}
-		if r.CoreCalculated {
+		if r.CoreCalculated && r.MultifactorComparison != nil && r.MultifactorComparison.State == "association_calculated" {
 			s.Result = r
 			s.State = "complete"
 			if e = h.Store.saveDocument("study", s.ID, s.Asset, s.Created, s); e != nil {
@@ -90,10 +113,10 @@ func TestResourceReplay(t *testing.T) {
 			t.Log("full strategy calculation complete")
 			break
 		}
-		if r.StrategyState != "calculating" {
+		if !r.CoreCalculated && r.StrategyState != "calculating" {
 			t.Fatalf("unexpected data gap: %+v", r.Missing)
 		}
-		if i == 23 {
+		if i == 39 {
 			t.Fatal("checkpoint did not finish")
 		}
 	}

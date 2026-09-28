@@ -80,24 +80,25 @@ type Experiment struct {
 	Interval   [2]float64 `json:"interval"`
 }
 type StudyResult struct {
-	CandidateComparison *CandidateComparison `json:"candidateComparison"`
-	Evaluation          string               `json:"evaluationVersion,omitempty"`
-	Coverage            []map[string]any     `json:"coverage"`
-	CaseState           string               `json:"caseState"`
-	StrategyState       string               `json:"strategyState"`
-	FlowCoverage        float64              `json:"flowCoverage"`
-	CandleCoverage      float64              `json:"candleCoverage"`
-	AvailableAtKnown    bool                 `json:"availableAtKnown"`
-	BaselineDays        int                  `json:"baselineDays"`
-	DevelopmentDays     int                  `json:"developmentDays"`
-	HoldoutDays         int                  `json:"holdoutDays"`
-	CoreCalculated      bool                 `json:"coreCalculated"`
-	Events              []StudyEvent         `json:"events"`
-	Experiments         []Experiment         `json:"experiments"`
-	Delays              []Experiment         `json:"delays"`
-	Cases               []map[string]any     `json:"cases"`
-	Missing             []string             `json:"missing"`
-	Notes               []string             `json:"notes"`
+	MultifactorComparison *MultifactorStudy    `json:"multifactorComparison,omitempty"`
+	CandidateComparison   *CandidateComparison `json:"candidateComparison"`
+	Evaluation            string               `json:"evaluationVersion,omitempty"`
+	Coverage              []map[string]any     `json:"coverage"`
+	CaseState             string               `json:"caseState"`
+	StrategyState         string               `json:"strategyState"`
+	FlowCoverage          float64              `json:"flowCoverage"`
+	CandleCoverage        float64              `json:"candleCoverage"`
+	AvailableAtKnown      bool                 `json:"availableAtKnown"`
+	BaselineDays          int                  `json:"baselineDays"`
+	DevelopmentDays       int                  `json:"developmentDays"`
+	HoldoutDays           int                  `json:"holdoutDays"`
+	CoreCalculated        bool                 `json:"coreCalculated"`
+	Events                []StudyEvent         `json:"events"`
+	Experiments           []Experiment         `json:"experiments"`
+	Delays                []Experiment         `json:"delays"`
+	Cases                 []map[string]any     `json:"cases"`
+	Missing               []string             `json:"missing"`
+	Notes                 []string             `json:"notes"`
 }
 
 func (h *Hub) CreateStudy(req StudyRequest) (Study, error) {
@@ -352,6 +353,10 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 		}
 	}
 	r.StrategyState = "incomplete"
+	r.MultifactorComparison, e = h.evaluateMultifactor(ctx, s, bars, candles, now)
+	if e != nil {
+		return nil, e
+	}
 	if len(r.Missing) > 0 {
 		return r, nil
 	}
@@ -616,7 +621,7 @@ func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
 		}
 		h.Scheduler.mu.Unlock()
 		version := h.studyInputVersion(ctx, s)
-		if s.InputVersion == version && s.Result != nil && s.Result.StrategyState != "calculating" {
+		if s.InputVersion == version && s.Result != nil && s.Result.StrategyState != "calculating" && s.Result.MultifactorComparison != nil && s.Result.MultifactorComparison.State != "calculating" {
 			s.Result.Coverage = h.studyCoverage(s)
 			if s.Result.CoreCalculated && s.ValidationID == "" {
 				s.ValidationID, e = h.freezeStudyValidation(ctx, s, now)
@@ -639,7 +644,7 @@ func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
 		s.Result, e = h.evaluateStudy(ctx, s, now)
 		if e == nil {
 			s.InputVersion = version
-			if s.Result != nil && s.Result.CoreCalculated {
+			if s.Result != nil && s.Result.CoreCalculated && (s.Result.MultifactorComparison == nil || s.Result.MultifactorComparison.State != "calculating") {
 				s.ValidationID, e = h.freezeStudyValidation(ctx, s, now)
 			}
 		}
@@ -649,7 +654,7 @@ func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
 			s.Error = ""
 		}
 		s.LastRun = &now
-		if s.Result != nil && s.Result.StrategyState == "calculating" {
+		if s.Result != nil && (s.Result.StrategyState == "calculating" || (s.Result.MultifactorComparison != nil && s.Result.MultifactorComparison.State == "calculating")) {
 			s.State = "calculating"
 		}
 		if jobsDone && s.State != "calculating" {

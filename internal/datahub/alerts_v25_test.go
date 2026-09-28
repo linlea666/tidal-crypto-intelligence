@@ -293,7 +293,7 @@ func TestStudySubrangesBoundedAndUnavailableDoesNotBlock(t *testing.T) {
 			seen[r.Dataset]++
 		}
 	}
-	if len(seen) != 4 {
+	if len(seen) != 6 {
 		t.Fatal(seen)
 	}
 	for _, n := range seen {

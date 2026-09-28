@@ -262,7 +262,13 @@ func Normalize(d Dataset, raw []byte, fetched time.Time) ([]Observation, error) 
 					if h := num(m["funding_rate_interval"]); h > 0 {
 						hours = &h
 					}
-					p.Funding = append(p.Funding, Funding{a, str(m["exchange"]), rate, hours, margin})
+					// This endpoint does not guarantee settled versus predicted semantics.
+					// Unknown is deliberately not comparable for crowding classification.
+					kind := "unknown"
+					if k := str(m["funding_rate_type"]); k == "settled" || k == "predicted" {
+						kind = k
+					}
+					p.Funding = append(p.Funding, Funding{Asset: a, Venue: str(m["exchange"]), RatePercent: rate, Hours: hours, Margin: margin, RateKind: kind})
 				}
 			}
 		}

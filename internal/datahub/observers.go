@@ -188,7 +188,7 @@ func normalizeObservers(d Dataset, data any, fetched time.Time) ([]Observation, 
 			r.Reconciled = complete && len(r.Funds) > 0 && n != nil && sum.Sub(dec(*n)).Abs().LessThanOrEqual(decimal.NewFromInt(1))
 			out = append(out, obs(at, Payload{ETF: &r}))
 		}
-	case "oi-history":
+	case "oi-history", "oi-coin-history":
 		for _, v := range array(data) {
 			m := object(v)
 			at := timestamp(m["time"])
@@ -199,7 +199,14 @@ func normalizeObservers(d Dataset, data any, fetched time.Time) ([]Observation, 
 			if at.Add(time.Duration(d.Resolution) * time.Second).After(fetched) {
 				continue
 			}
-			out = append(out, obs(at, Payload{OI: []Interest{{Venue: "CoinGlass aggregate", USD: n, Base: ""}}}))
+			interest := Interest{Venue: "CoinGlass aggregate", USD: n}
+			if d.Kind == "oi-coin-history" {
+				if d.Params["unit"] != "coin" || d.Unit != d.Asset {
+					return nil, errors.New("币计价OI契约单位不一致")
+				}
+				interest.USD, interest.Base = "", n
+			}
+			out = append(out, obs(at, Payload{OI: []Interest{interest}}))
 		}
 	case "premium":
 		for _, v := range array(data) {

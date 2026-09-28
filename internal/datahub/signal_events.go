@@ -96,7 +96,7 @@ func matchEpisodes(episodes []PriceEpisode, signals []Signal, observedThrough ..
 			used[s.ID] = true
 			m.SignalID = s.ID
 			m.Timing = "following"
-			if s.At.Before(e.Start) && (s.Features == nil || s.Features.Stage != "following") {
+			if s.At.Before(e.Start) && (s.Features == nil || s.Features.Stage != "following") && (s.Multifactor == nil || !s.Multifactor.Price.Following[s.Direction]) {
 				m.Timing = "early"
 				v := e.Start.Sub(s.At).Minutes()
 				m.LeadMinutes = &v

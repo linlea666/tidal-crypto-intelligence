@@ -45,6 +45,9 @@ func studyRequests(s Study, now time.Time) []DataRequest {
 	add("flow", "futures", "", s.From, s.To, 300, "research")
 	add("oi-history", "futures", "", s.From, s.To, 300, "research")
 	add("premium", "spot", "Coinbase", s.From, s.To, 300, "research")
+	// Append rather than reorder: saved queue cursors continue the original jobs.
+	add("oi-coin-history", "futures", "", s.From, s.To, 300, "research")
+	add("liquidations", "futures", "", s.From, s.To, 300, "research")
 	return out
 }
 func (h *Hub) queueStudy(s *Study, now time.Time) {
@@ -102,5 +105,5 @@ func (h *Hub) studyCoverage(s Study) []map[string]any {
 	return out
 }
 func (h *Hub) studyInputVersion(ctx context.Context, s Study) string {
-	return EvaluationVersion + "/" + h.Store.researchVersion(ctx, s.Asset, s.From, s.To)
+	return EvaluationVersion + "/" + MultifactorRules + "/" + h.Store.researchVersion(ctx, s.Asset, s.From, s.To) + "/" + h.Store.datasetRangeVersion(ctx, ID("funding", "ALL", "", "futures"), s.From, s.To)
 }
