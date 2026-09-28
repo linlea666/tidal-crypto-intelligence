@@ -9,7 +9,7 @@
 .flow-dashboard :focus-visible { outline:2px solid var(--flow-buy); outline-offset:4px; }
 .flow-head { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }
 .flow-kicker { font-size:13px; letter-spacing:.06em; color:var(--flow-muted); }
-.flow-kicker span { color:#e9c988; margin-left:10px; border:1px solid #5b5136; border-radius:4px; padding:3px 7px; font-size:11px; }
+.flow-kicker span { display:inline-block; margin-bottom:4px; color:#e9c988; margin-left:10px; border:1px solid #5b5136; border-radius:4px; padding:3px 7px; font-size:11px; }
 .flow-mail-badge { flex-shrink:0; border:1px solid var(--flow-line); color:#c1dccd; font-size:12px; border-radius:6px; padding:9px 12px; }
 .flow-numbers { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; }
 .flow-number { padding:22px; border:1px solid var(--flow-line); border-radius:10px; background:#16211c; }

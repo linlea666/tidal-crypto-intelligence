@@ -85,6 +85,10 @@ func (h *Hub) processMultifactor(ctx context.Context, a string, state *signalSta
 				s.Missing = append(s.Missing, e.Text)
 			}
 		}
+		s.Progress = flowPtr(priceProgress(s, nil, candles, current.DataThrough, now, current.Fresh))
+		if v.Net != nil {
+			s.Progress.FlowSame = flowPtr(*v.Net*sideSign(side) > 0)
+		}
 		*updates = append(*updates, s)
 		state.Active[key] = s.ID
 		notices[s.ID] = "anomaly"

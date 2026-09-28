@@ -356,7 +356,7 @@ func TestMultifactorSustainedWithZeroLastQuarterAndGapBreaksRearm(t *testing.T) 
 		}
 	}
 	step(end)
-	if len(updates) != 1 || updates[0].BuyShare != nil || updates[0].Multifactor.Spot["15"].BuyShare != nil {
+	if len(updates) != 1 || updates[0].Progress == nil || updates[0].Progress.Status != "waiting" || updates[0].BuyShare != nil || updates[0].Multifactor.Spot["15"].BuyShare != nil {
 		t.Fatal("zero turnover manufactured a share", updates)
 	}
 	if err := h.Store.saveDocument("signal", updates[0].ID, "BTC", end, updates[0]); err != nil {
