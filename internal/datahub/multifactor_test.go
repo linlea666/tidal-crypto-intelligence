@@ -106,7 +106,7 @@ func TestMultifactorReversalNotBlockedAndPerpConflict(t *testing.T) {
 	perp.SellShare = flowPtr(75.0)
 	s.Context.Futures = map[string]FlowWindow{"60": perp}
 	s.explain("buy")
-	if !s.Assessments[0].Fast || s.Assessments[0].Supported || !strings.Contains(s.Headline, "较长窗口仍有卖压") || s.Evidence[1].State != "conflict" {
+	if !s.Assessments[0].Fast || s.Assessments[0].Supported || !strings.Contains(s.Headline, "四小时仍为净卖出") || s.Evidence[1].State != "conflict" {
 		t.Fatal(s.Headline, s.Assessments, s.Evidence)
 	}
 }

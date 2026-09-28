@@ -9,13 +9,27 @@ mode=${TIDAL_REPLAY_MODE:-replay}
 run='^TestResourceReplay$'
 if [[ "$mode" == reference ]]; then run='^TestBaselineResource$'; fi
 cid=$(docker create --memory=768m --cpus=1.7 -e GOMEMLIMIT=512MiB -e TIDAL_RESOURCE_REPLAY=1 -e TIDAL_RESOURCE_OUTPUT=/out -e TIDAL_REPLAY_DURATION="${TIDAL_REPLAY_DURATION:-6m}" -e TIDAL_BASELINE_REPLAY=1 -e TIDAL_BASELINE_REFERENCE="${TIDAL_BASELINE_REFERENCE:-0}" -v "$PWD/tmp/resource-v24:/out" alpine:3.22 /out/replay.test -test.run="$run" -test.v -test.timeout=335m -test.cpuprofile=/out/cpu.pprof)
-trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+log_pid=
+cleanup() {
+  # Preserve partial evidence when CI cancels a replay before the test exits.
+  docker inspect "$cid" > tmp/resource-v24/container.json 2>/dev/null || true
+  if [[ -n "$log_pid" ]]; then
+    kill "$log_pid" 2>/dev/null || true
+    wait "$log_pid" 2>/dev/null || true
+  fi
+  docker rm -f "$cid" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 docker start "$cid" >/dev/null
+docker logs --follow "$cid" > tmp/resource-v24/replay.log 2>&1 &
+log_pid=$!
 while [[ $(docker inspect -f '{{.State.Running}}' "$cid") == true ]]; do
   docker stats --no-stream --format '{{json .}}' "$cid" >> tmp/resource-v24/samples.jsonl
   sleep 3
 done
-docker logs "$cid" > tmp/resource-v24/replay.log 2>&1
+wait "$log_pid" || true
 docker inspect "$cid" > tmp/resource-v24/container.json
 cat tmp/resource-v24/replay.log
 python3 - <<'PY'
