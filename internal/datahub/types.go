@@ -80,6 +80,7 @@ type Funding struct {
 	RatePercent string   `json:"ratePercent"`
 	Hours       *float64 `json:"intervalHours"`
 	Margin      string   `json:"margin"`
+	RateKind    string   `json:"rateKind"`
 }
 type Liquidation struct {
 	Long  string `json:"longUsd"`
@@ -262,6 +263,11 @@ func Registry() []Dataset {
 		out[len(out)-1].Contract = true
 		if a == "ETH" {
 			out[len(out)-1].Disabled = true
+		}
+		if a == "BTC" {
+			// The upstream coin contract has its own identity; USD history is never converted.
+			add("oi-coin-history", a, "futures", "", a, "futures/open-interest/aggregated-history", a, 300, 300, 720, 2, map[string]string{"symbol": a, "unit": "coin", "interval": "5m", "limit": "12"})
+			out[len(out)-1].Contract = true
 		}
 		add("balance-list", a, "chain", "", a, "exchange/balance/list", a, 0, 3600, 9000, 3, map[string]string{"symbol": a})
 		out[len(out)-1].Contract = true

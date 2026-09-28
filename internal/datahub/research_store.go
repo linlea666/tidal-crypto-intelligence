@@ -27,7 +27,8 @@ func (w *Warehouse) initResearch() error {
  CREATE INDEX IF NOT EXISTS documents_time ON documents(kind,asset,at);
  CREATE TABLE IF NOT EXISTS gaps(start INTEGER PRIMARY KEY,end INTEGER,reason TEXT);
  CREATE TABLE IF NOT EXISTS shadow(asset TEXT,ts INTEGER,payload BLOB,PRIMARY KEY(asset,ts)) WITHOUT ROWID;
- CREATE TABLE IF NOT EXISTS notices(id TEXT PRIMARY KEY,signal_id TEXT,kind TEXT,created INTEGER,status TEXT,attempted INTEGER DEFAULT 0,payload BLOB);`)
+ CREATE TABLE IF NOT EXISTS notices(id TEXT PRIMARY KEY,signal_id TEXT,kind TEXT,created INTEGER,status TEXT,attempted INTEGER DEFAULT 0,payload BLOB);
+ CREATE TABLE IF NOT EXISTS mail_results(batch_id TEXT PRIMARY KEY,completed INTEGER,status TEXT,error TEXT);`)
 	if e != nil {
 		db.Close()
 		return e
@@ -41,6 +42,10 @@ func (w *Warehouse) initResearch() error {
 }
 func researchKind(d Dataset) bool {
 	switch d.Kind {
+	case "funding":
+		return d.Asset == "ALL"
+	case "liquidations", "oi-coin-history":
+		return d.Asset == "BTC"
 	case "flow", "candles", "oi-history", "premium", "balance-list", "balance-history", "etf":
 		return true
 	}

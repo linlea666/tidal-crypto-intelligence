@@ -111,5 +111,6 @@ func (r *rollingBaseline) result(now time.Time) SignalBaseline {
 		}
 	}
 	b.Valid = b.Dates >= 21 && b.Coverage >= .95 && len(r.net15) > 0 && len(r.net60) > 0
+	b.Directional = directionalBaseline(r.net15, r.net60)
 	return b
 }

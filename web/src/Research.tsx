@@ -427,235 +427,7 @@ export function ETFPage({ asset }: { asset: Asset }) {
     </section>
   );
 }
-type SignalFeature = {
-  net1hCents: number; net4hCents: number; volumeRatio: number; buyShare: number;
-  positiveQuarters: number; return1h: number; stage: string; extended: boolean;
-  futuresNet1hCents: number | null; oiChangeUsdPercent: number | null;
-};
-type SignalItem = {
-  rulesVersion: string; level?: string; features?: SignalFeature;
-  strongUpgrade?: { at: string; dataThrough: string; features: SignalFeature };
-  lifecycleRepair?: { at: string; previousState: string; reason: string };
-  detectionDelaySeconds?: number | null;
-  id: string;
-  asset: string;
-  direction: string;
-  pattern: string;
-  state: string;
-  at: string;
-  dataThrough: string;
-  expiresAt: string;
-  confirmedAt: string | null;
-  frozenHigh: number;
-  frozenLow: number;
-  net15Cents: number;
-  buyShare: number;
-  evidence: string[];
-  conflicts: string[];
-  missing: string[];
-};
-type Signals = {
-  items: SignalItem[];
-  quality: {
-    reason: string;
-    candidateWindowComplete?: boolean;
-    fresh: boolean;
-    baseline: { valid: boolean; coverage: number; validDates: number };
-  } | null;
-  observers: {
-    kind: string;
-    meta: Meta;
-    data: {
-      premium?: { premiumUsd: string; rawRate: string; rateUnit: string };
-      openInterest?: { usd: string }[];
-    };
-  }[];
-  candidateRulesVersion?: string;
-  candidateMailEnabled?: boolean;
-  rulesVersion: string;
-  mail: {
-    configured: boolean;
-    note: string;
-    lastError?: { error: string } | null;
-  };
-  note: string;
-};
-export function SignalsPage({ asset }: { asset: Asset }) {
-  const [rules, setRules] = useState("");
-  const q = useAPI<Signals>(`signals?asset=${asset}&rules=${encodeURIComponent(rules)}`, 15000);
-  const d = q.data;
-  const [selected, setSelected] = useState("");
-  const items = d?.items ?? [];
-  return (
-    <section className="research-page">
-      <div className="research-heading">
-        <div>
-          <span className="eyebrow">BTC 实验预警 · 旧规则与候选并行</span>
-          <h2>先发现资金变化，再等价格确认</h2>
-          <p>目标为未来1–4小时持续拉升；候选阈值固定，效果仍待验证。主动净买入不等同充值或新增资金。</p>
-        </div>
-        <span className="research-badge">
-          {d?.mail?.configured ? "站内＋邮件" : "站内记录 · 邮件待配置"}
-        </span>
-      </div>
-      <LoadError error={q.error} />
-      <label>规则筛选 <select aria-label="规则筛选" value={rules} onChange={e => { setRules(e.target.value); setSelected(""); }}>
-        <option value="">全部规则</option>
-        <option value={d?.candidateRulesVersion ?? "flow-candidate-2.5.0"}>固定候选 · 买方</option>
-        <option value={d?.rulesVersion ?? "flow-experiment-2.2.0"}>原有规则 · 买卖对照</option>
-      </select></label>
-      <p className="helper">候选邮件：{d?.candidateMailEnabled ? "已通过人工门槛并启用" : "关闭 · 等待验证、人工审查和收件验收"}</p>
-      <div className="signal-quality">
-        <strong>{d?.quality?.reason ?? "等待首轮数据检查"}</strong>
-        <p>
-          30天基线：
-          {d?.quality
-            ? `${(d.quality.baseline.coverage * 100).toFixed(1)}%样本 · ${d.quality.baseline.validDates}个有效日期`
-            : "正在检查"}
-          。达到95%样本、21个有效日期且当前窗口完整才触发。
-        </p>
-      </div>
-      <p className="helper">候选当前输入：{d?.quality?.candidateWindowComplete ? "四小时成交、价格与此前小时ATR完整" : "需完整四小时成交、价格和此前小时ATR；不足时停止产生候选"}</p>
-      <div className="signal-stages">
-        <div>
-          <b>01 资金异动</b>
-          <p>异常净买卖＋持续性＋成交量</p>
-        </div>
-        <div>
-          <b>02 价格确认</b>
-          <p>两根完成K线突破冻结的4小时区间</p>
-        </div>
-        <div>
-          <b>03 减弱或到期</b>
-          <p>方向反转或4小时未确认</p>
-        </div>
-      </div>
-      {!items.length && (
-        <p className="empty">
-          暂无符合条件的异动记录。没有提醒并不代表没有行情；数据不足时不会补造信号。
-        </p>
-      )}
-      <div className="signal-list">
-        {items.map((s) => (
-          <article className="signal-card" key={s.id}>
-            <div className="signal-title">
-              <strong className={s.direction === "buy" ? "buy" : "sell"}>
-                {s.features ? (s.level === "strong" ? "买方强候选" : "买方观察") : `${s.direction === "buy" ? "买方" : "卖方"}资金异动`}
-              </strong>
-              <span>
-                {labels[s.state] ?? s.state} ·{" "}
-                {s.features ? (s.features.stage === "following" ? "已突破 · 跟随" : "区间内买盘增强") : s.pattern === "burst" ? "15分钟突增" : "连续三小时"}
-              </span>
-            </div>
-            <p>
-              发现 {stamp(s.at)} · 成交窗口截止 {stamp(s.dataThrough)} · 检测延迟 {s.detectionDelaySeconds == null ? "未知" : `${Math.round(s.detectionDelaySeconds)}秒`}
-            </p>
-            <div className="range-summary compact">
-              <div>
-                <span>15分钟主动净买卖</span>
-                <strong>{amount(s.net15Cents, true)}</strong>
-              </div>
-              <div>
-                <span>主动买入占比</span>
-                <strong>{s.buyShare.toFixed(1)}%</strong>
-              </div>
-            </div>
-            {s.features && <div className="range-summary compact">
-              <div><span>1小时 / 4小时主动净买入</span><strong>{amount(s.features.net1hCents, true)} / {amount(s.features.net4hCents, true)}</strong></div>
-              <div><span>量比 / 同向15分钟段</span><strong>{s.features.volumeRatio.toFixed(2)}倍 / {s.features.positiveQuarters}/4</strong></div>
-            </div>}
-            {s.features?.extended && <p className="amber">位移偏大：一小时涨幅超过此前小时ATR的1.5倍，不升为强候选。</p>}
-            {s.strongUpgrade && <p className="helper">强候选时点 {stamp(s.strongUpgrade.at)} · 净买入 {amount(s.strongUpgrade.features.net1hCents, true)} · {s.strongUpgrade.features.stage === "following" ? "已突破 · 跟随" : "区间内观察"}。初次发现特征保持冻结。</p>}
-            {s.lifecycleRepair && <p className="amber">{s.lifecycleRepair.reason}（处理于 {stamp(s.lifecycleRepair.at)}）</p>}
-            <p>
-              冻结确认价：
-              {price(s.direction === "buy" ? s.frozenHigh : s.frozenLow)} USDT ·{" "}
-              {s.confirmedAt
-                ? `确认 ${stamp(s.confirmedAt)}`
-                : `到期 ${stamp(s.expiresAt)}`}
-            </p>
-            <button
-              className="text-button"
-              onClick={() => setSelected(selected === s.id ? "" : s.id)}
-            >
-              {selected === s.id ? "收起" : "查看"}支持、冲突与缺失证据
-            </button>
-            {selected === s.id && (
-              <div className="signal-evidence">
-                <div>
-                  <h4>支持</h4>
-                  {s.evidence.map((v, i) => (
-                    <p key={i}>{v}</p>
-                  ))}
-                </div>
-                <div>
-                  <h4>冲突 / 待确认</h4>
-                  {s.features && <p>合约1小时净额 {s.features.futuresNet1hCents == null ? "缺失" : amount(s.features.futuresNet1hCents, true)}；美元OI变化 {s.features.oiChangeUsdPercent == null ? "缺失" : `${s.features.oiChangeUsdPercent.toFixed(2)}%`}，包含价格影响，不等同开多。</p>}
-                  {s.conflicts.map((v, i) => (
-                    <p key={i}>{v}</p>
-                  ))}
-                </div>
-                <div>
-                  <h4>缺失与限制</h4>
-                  {s.missing.map((v, i) => (
-                    <p key={i}>{v}</p>
-                  ))}
-                </div>
-              </div>
-            )}
-          </article>
-        ))}
-      </div>
-      <section className="data-section">
-        <h3>辅助观察 · 权重为零</h3>
-        <div className="activity-columns">
-          {d?.observers?.map((o) => (
-            <div key={o.kind}>
-              <h4>
-                {o.kind === "premium"
-                  ? "Coinbase 相对币安溢价"
-                  : "全市场聚合OI历史末值"}
-              </h4>
-              <strong>
-                {o.kind === "premium"
-                  ? o.data.premium
-                    ? `${o.data.premium.premiumUsd} USD`
-                    : "等待数据"
-                  : o.data.openInterest?.[0]
-                    ? amount(+o.data.openInterest[0].usd * 100)
-                    : "等待数据"}
-              </strong>
-              <Provenance meta={o.meta} />
-              <p className="helper">
-                {o.kind === "premium"
-                  ? "价差可反映跨交易所压力，不代表全部美国或亚洲买盘。原始比率单位尚未独立核实，不转换为百分比。"
-                  : "与三家合约主动成交的覆盖口径不同；不可由OI增加单独推断开多或开空。"}
-              </p>
-            </div>
-          ))}
-        </div>
-      </section>
-      <details className="data-section">
-        <summary>查看固定规则与提醒边界</summary>
-        <p>候选观察：1小时净主动买入≥3000万美元且≥此前30天P90；强候选≥5000万美元且≥P95。共同要求买入占比≥55%、小时量比≥1.5、四段15分钟至少三段为正、4小时净额为正。6000万、8000万、1亿仅作固定敏感性对照。</p>
-        <p>候选同方向4小时合并，升档保留独立时点。已突破标记跟随；位移偏大不自动升级。至少14天、95%覆盖、30个独立行情事件后仍需人工审查同等提醒数量下的效果；观察级仅在站内显示。</p>
-        <p>
-          15分钟型：净买卖达到同口径P95/P05，主动方向占比≥55%，连续三根5分钟同向，60分钟净额同向，成交量不低于中位数。持续型：连续三小时同向，一小时净额达到P90/P10，三小时主动方向占比≥55%。
-        </p>
-        <p>
-          价格确认必须在4小时内完成；CVD不重复计分。解除条件30分钟后才能重发。每小时最多6次发送尝试，多余合并摘要；重启、历史补采不补发旧邮件。
-        </p>
-        <p>{d?.mail?.note}</p>
-        {d?.mail?.lastError && (
-          <p className="amber">邮件状态：{d.mail.lastError.error}</p>
-        )}
-        <small>
-          {d?.rulesVersion} · {d?.note}
-        </small>
-      </details>
-    </section>
-  );
-}
+export { SignalsPage } from "./Signals";
 type Experiment = {
   name: string;
   samples: number;
@@ -669,6 +441,7 @@ type Experiment = {
   interval: [number, number];
 };
 type RuleComparison = {
+	  direction?: string;
   rulesVersion: string; signals: number; priceEpisodes: number; early: number;
   following: number; missed: number; unmatchedSignals: number; pendingSignals?: number;
   matches: { eventId: string; signalId?: string; timing: string; leadMinutes: number | null }[];
@@ -678,7 +451,7 @@ type RuleComparison = {
 function ComparisonTable({items}: {items: RuleComparison[]}) {
   const pct = (n?: number | null) => n == null ? "—" : `${n.toFixed(2)}%`;
   return <div className="table-scroll"><table><thead><tr><th>规则 / 延迟</th><th>提醒 / 行情</th><th>提前 / 跟随 / 漏报</th><th>未匹配 / 待完成</th><th>1h / 4h中位</th><th>4h有利 / 不利波动</th></tr></thead><tbody>
-    {items.map((r,i)=><tr key={i}><td>{r.rulesVersion} / {r.delayMinutes ?? 0}分钟</td><td>{r.signals} / {r.priceEpisodes}</td><td>{r.early} / {r.following} / {r.missed}</td><td>{r.unmatchedSignals} / {r.pendingSignals ?? 0}</td><td>{pct(r.return1hMedian)} / {pct(r.return4hMedian)}</td><td>{pct(r.mfe4hMedian)} / {pct(r.mae4hMedian)}</td></tr>)}
+    {items.map((r,i)=><tr key={i}><td>{r.direction ? `${r.direction === "sell" ? "卖方" : "买方"} · ` : ""}{r.rulesVersion} / {r.delayMinutes ?? 0}分钟</td><td>{r.signals} / {r.priceEpisodes}</td><td>{r.early} / {r.following} / {r.missed}</td><td>{r.unmatchedSignals} / {r.pendingSignals ?? 0}</td><td>{pct(r.return1hMedian)} / {pct(r.return4hMedian)}</td><td>{pct(r.mfe4hMedian)} / {pct(r.mae4hMedian)}</td></tr>)}
   </tbody></table></div>;
 }
 type StudyItem = {
@@ -693,6 +466,7 @@ type StudyItem = {
   error?: string;
   jobs: string[];
   result: {
+	  multifactorComparison?: { state: string; calculatedThrough: string; note: string; groups: { name: string; phase: string; commonWindows: number; trials: RuleComparison[]; equalBudget: RuleComparison[] }[] };
     candidateComparison?: { commonWindows: number; development: RuleComparison[]; holdout: RuleComparison[]; auxiliary?: RuleComparison[]; auxiliaryWindows?: number; equalBudget?: RuleComparison[]; dailyBudget?: Record<string, number>; note: string } | null;
     strategyState?: string;
     caseState?: string;
@@ -782,6 +556,7 @@ export function StudiesPage({ asset }: { asset: Asset }) {
   const q = useAPI<{
     items: StudyItem[];
     forward?: {
+	  multifactor?: { days: number; coverage: number; episodes: number; reviewReady: boolean; comparisons: RuleComparison[]; equalBudget: RuleComparison[]; note: string };
       candidateDays?: number; candidateCoverage?: number; candidateEpisodes?: number;
       candidateReady?: boolean; comparisons?: RuleComparison[];
       evaluationVersion?: string; matches?: RuleComparison["matches"];
@@ -836,6 +611,7 @@ export function StudiesPage({ asset }: { asset: Asset }) {
         </button>
       </div>
       <LoadError error={error || q.error} />
+	  {q.data?.forward?.multifactor && <section className="data-section"><h3>新双向规则 · {q.data.forward.multifactor.reviewReady ? "达到阶段审查样本门槛" : "效果验证中"}</h3><p>{q.data.forward.multifactor.days.toFixed(1)} 天 / {(q.data.forward.multifactor.coverage*100).toFixed(1)}%覆盖 / {q.data.forward.multifactor.episodes}个独立行情事件</p><p className="helper">{q.data.forward.multifactor.note}</p><details><summary>分买卖方向查看前向与延迟对照</summary><ComparisonTable items={q.data.forward.multifactor.comparisons}/><h4>相同提醒数量对照</h4><ComparisonTable items={q.data.forward.multifactor.equalBudget ?? []}/></details></section>}
       <section className="data-section">
         <h3>
           实时旁路观察 ·{" "}
@@ -916,6 +692,7 @@ export function StudiesPage({ asset }: { asset: Asset }) {
               {s}
             </p>
           ))}
+		  {d.result?.multifactorComparison && <section className="data-section"><h3>双向多因素历史对照 · {d.result.multifactorComparison.state === "calculating" ? "分批计算中" : "关联结果"}</h3><p className="helper">{d.result.multifactorComparison.note}</p><p>已计算至 {stamp(d.result.multifactorComparison.calculatedThrough)}</p>{d.result.multifactorComparison.groups.map(g => <details key={g.name+g.phase}><summary>{g.name} · {g.phase === "holdout" ? "独立留出" : "开发期"} · {g.commonWindows}个共同有效窗口</summary>{g.commonWindows ? <><ComparisonTable items={g.trials}/><h4>相同提醒数量</h4><ComparisonTable items={g.equalBudget}/></> : <p>无完整可比数据，未计算效果，不视为零收益。</p>}</details>)}</section>}
           {d.result?.candidateComparison && <section className="data-section">
             <h3>固定候选历史对照 · {d.result.candidateComparison.commonWindows}个共同有效窗口</h3>
             <p className="helper">{d.result.candidateComparison.note}</p>

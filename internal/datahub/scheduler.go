@@ -355,7 +355,7 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 	}
 	d.Params = params
 	pageSize := 100
-	if j.Mode == "history" && (d.Kind == "flow" || d.Kind == "oi-history" || d.Kind == "premium") {
+	if j.Mode == "history" && (d.Kind == "flow" || d.Kind == "oi-history" || d.Kind == "oi-coin-history" || d.Kind == "premium" || d.Kind == "liquidations") {
 		pageSize = 1000
 	}
 	if j.From != nil {
@@ -601,7 +601,7 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 		if req.From == nil || req.To == nil || !req.From.Before(*req.To) || req.To.After(now) || req.From.Before(now.Add(-90*24*time.Hour)) {
 			return Job{}, errors.New("历史范围必须在过去90天内")
 		}
-		if d.Kind != "book" && d.Kind != "footprint" && d.Kind != "flow" && d.Kind != "liquidations" && d.Kind != "oi-history" && d.Kind != "premium" {
+		if d.Kind != "book" && d.Kind != "footprint" && d.Kind != "flow" && d.Kind != "liquidations" && d.Kind != "oi-history" && d.Kind != "oi-coin-history" && d.Kind != "premium" {
 			return Job{}, errors.New("该数据无已验证的历史补采接口")
 		}
 		interval := map[int]string{60: "1m", 300: "5m", 900: "15m", 3600: "1h"}[req.Resolution]

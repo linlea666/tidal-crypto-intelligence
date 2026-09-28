@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/mail"
 	"net/smtp"
+	"net/textproto"
 	"net/url"
 	"os"
 	"strconv"
@@ -76,7 +77,29 @@ func LoadMailConfig(path string) (*MailConfig, error) {
 func (h *Hub) mailStatus() any {
 	var lastError map[string]any
 	_ = h.Store.LoadState("mail/error", &lastError)
-	return map[string]any{"candidateEnabled": h.candidateMailAllowed(context.Background(), time.Now().UTC()), "configured": h.mail != nil, "lastError": lastError, "limitPerHour": 6, "note": "站内记录始终可见；未配置邮件时不会补发旧事件。发送结果不确定时不自动重复发送。"}
+	var status string
+	var attempted int64
+	_ = h.Store.research.QueryRow("SELECT status,attempted FROM notices WHERE attempted>0 ORDER BY attempted DESC,rowid DESC LIMIT 1").Scan(&status, &attempted)
+	var activeError any = lastError
+	var errorAt time.Time
+	if raw, ok := lastError["at"].(string); ok {
+		errorAt, _ = time.Parse(time.RFC3339Nano, raw)
+	}
+	// A later successful submission resolves an old SMTP failure, but must
+	// not hide a newer worker/persistence error or one with unknown timing.
+	if status == "sent" && !errorAt.IsZero() && errorAt.Before(time.Unix(attempted, 0)) {
+		activeError = nil
+	}
+	return map[string]any{"candidateEnabled": h.candidateMailAllowed(context.Background(), time.Now().UTC()), "multifactorEnabled": h.mail != nil, "configured": h.mail != nil, "lastError": activeError, "historicalError": lastError, "latestStatus": status, "lastAttemptAt": unixTimeOrNil(attempted), "limitPerHour": 6, "note": "新双向规则采用早期异动、价格确认两阶段邮件，效果验证中。SMTP已接受不等于用户已收到；不补发过期或重启积压，发送结果不确定时不自动重发。"}
+}
+
+// A failure before DATA cannot have submitted the message. Errors after DATA
+// remain ambiguous unless SMTP explicitly rejects its final response.
+type mailSubmissionError struct{ message, status string }
+
+func (e *mailSubmissionError) Error() string { return e.message }
+func mailRejected(message string) error {
+	return &mailSubmissionError{message, "failed_before_submission"}
 }
 func (h *Hub) queueNotice(s Signal, kind string, now time.Time) error {
 	if !researchAsset(s.Asset) || s.Rules == CandidateRules && (!h.candidateMailAllowed(context.Background(), now) || s.Level != "strong" || (kind != "strong" && kind != "confirmed")) {
@@ -106,43 +129,47 @@ func sendMail(ctx context.Context, c MailConfig, subject, body string) error {
 		conn, e = dialer.DialContext(ctx, "tcp", addr)
 	}
 	if e != nil {
-		return errors.New("SMTP连接失败")
+		return mailRejected("SMTP连接失败")
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(25 * time.Second))
 	client, e := smtp.NewClient(conn, c.Host)
 	if e != nil {
-		return errors.New("SMTP握手失败")
+		return mailRejected("SMTP握手失败")
 	}
 	defer client.Close()
 	if c.TLS == "starttls" {
 		if ok, _ := client.Extension("STARTTLS"); !ok {
-			return errors.New("SMTP不支持STARTTLS")
+			return mailRejected("SMTP不支持STARTTLS")
 		}
 		if e = client.StartTLS(tlsConfig); e != nil {
-			return errors.New("SMTP TLS握手失败")
+			return mailRejected("SMTP TLS握手失败")
 		}
 	}
 	if e = client.Auth(smtp.PlainAuth("", c.Username, c.Password, c.Host)); e != nil {
-		return errors.New("SMTP认证失败")
+		return mailRejected("SMTP认证失败")
 	}
 	from, _ := mail.ParseAddress(c.From)
 	to, _ := mail.ParseAddress(c.To)
 	if e = client.Mail(from.Address); e != nil {
-		return errors.New("SMTP发件人被拒绝")
+		return mailRejected("SMTP发件人被拒绝")
 	}
 	if e = client.Rcpt(to.Address); e != nil {
-		return errors.New("SMTP收件人被拒绝")
+		return mailRejected("SMTP收件人被拒绝")
 	}
 	w, e := client.Data()
 	if e != nil {
-		return errors.New("SMTP DATA失败")
+		return mailRejected("SMTP DATA失败")
 	}
 	message := "From: " + from.String() + "\r\nTo: " + to.String() + "\r\nSubject: " + mime.QEncoding.Encode("UTF-8", subject) + "\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n" + body
 	if _, e = w.Write([]byte(message)); e != nil {
 		return errors.New("SMTP发送结果不确定")
 	}
 	if e = w.Close(); e != nil {
+		var rejection *textproto.Error
+		if errors.As(e, &rejection) && rejection.Code >= 400 && rejection.Code < 600 {
+			return &mailSubmissionError{"SMTP明确拒绝邮件", "rejected"}
+		}
 		return errors.New("SMTP发送结果不确定")
 	}
 	_ = client.Quit()
@@ -173,6 +200,8 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 		return nil
 	}
 	candidateAllowed := h.candidateMailAllowed(ctx, now)
+	var cutover time.Time
+	cutoverActive := h.Store.LoadState("signals/multifactor-cutover", &cutover)
 	rows, e := h.Store.research.QueryContext(ctx, "SELECT id,payload FROM notices WHERE status='pending' AND (kind IS NULL OR kind NOT LIKE 'vix:%') ORDER BY created LIMIT 100")
 	if e != nil {
 		return e
@@ -180,6 +209,7 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	suppressed := []string{}
 	ids := []string{}
 	bodies := []string{}
+	titles := []string{}
 	for rows.Next() {
 		var id string
 		var b []byte
@@ -195,12 +225,14 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 		if expires.IsZero() {
 			expires = v.At.Add(4 * time.Hour)
 		}
-		if !now.Before(expires) || now.Sub(v.DataThrough) > 12*time.Minute || v.Rules == CandidateRules && !candidateAllowed {
+		legacyTail := cutoverActive && v.Rules != MultifactorRules && v.Kind == "confirmed" && !v.At.After(cutover)
+		if !now.Before(expires) || now.Sub(v.DataThrough) > 12*time.Minute || v.Rules == CandidateRules && !candidateAllowed && !legacyTail || cutoverActive && v.Rules != MultifactorRules && !legacyTail {
 			suppressed = append(suppressed, id)
 			continue
 		}
 		ids = append(ids, id)
 		bodies = append(bodies, noticeBody(v, h.mail.DashboardURL))
+		titles = append(titles, flowNoticeTitle(v))
 	}
 	e = rows.Err()
 	rows.Close()
@@ -215,7 +247,7 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	title := "TIDAL 资金异动提醒"
+	title := titles[0]
 	if len(ids) > 1 {
 		title = fmt.Sprintf("TIDAL 异动摘要（%d项）", len(ids))
 	}
@@ -267,6 +299,9 @@ func (h *Hub) candidateMailAllowed(ctx context.Context, now time.Time) bool {
 	return !a.ReviewedAt.Before(r.CandidateOrigin.Add(14 * 24 * time.Hour))
 }
 func noticeBody(v noticePayload, dashboard string) string {
+	if v.Signal != nil && v.Signal.Multifactor != nil {
+		return multifactorNoticeBody(v, dashboard)
+	}
 	body := fmt.Sprintf("%s %s · %s\r\n发现：%s\r\n数据截止：%s", v.Asset, v.Direction, v.Kind, v.At.Format(time.RFC3339), v.DataThrough.Format(time.RFC3339))
 	if s := v.Signal; s != nil {
 		f := s.Features

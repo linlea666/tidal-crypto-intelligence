@@ -222,7 +222,8 @@ func TestWhalePolicyAndRegistryBudget(t *testing.T) {
 			t.Fatal("policy mismatch")
 		}
 	}
-	if budget > 10.95 || budget < 10.93 {
+	// BTC coin-denominated OI adds one request every five minutes.
+	if budget > 11.15 || budget < 11.13 || budget >= 12 {
 		t.Fatalf("budget %.3f", budget)
 	}
 }

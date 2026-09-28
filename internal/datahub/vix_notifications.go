@@ -3,6 +3,7 @@ package datahub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"time"
@@ -62,14 +63,33 @@ func (h *Hub) deliverNoticeBatch(ctx context.Context, now time.Time, ids []strin
 	status := "sent"
 	if err != nil {
 		status = "delivery_unknown"
+		var rejected *mailSubmissionError
+		if errors.As(err, &rejected) {
+			status = rejected.status
+		}
 	}
 	// The SMTP deadline must not prevent recording its outcome.
 	persist, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	resultTx, e := h.Store.research.BeginTx(persist, nil)
+	if e != nil {
+		return true, e
+	}
+	defer resultTx.Rollback()
 	for _, id := range ids {
-		if _, e := h.Store.research.ExecContext(persist, "UPDATE notices SET status=? WHERE id=? AND status='sending'", status, id); e != nil {
+		if _, e := resultTx.ExecContext(persist, "UPDATE notices SET status=? WHERE id=? AND status='sending'", status, id); e != nil {
 			return true, e
 		}
+	}
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	if _, e = resultTx.ExecContext(persist, "INSERT INTO mail_results VALUES(?,?,?,?)", batch, time.Now().UTC().UnixNano(), status, message); e != nil {
+		return true, e
+	}
+	if e = resultTx.Commit(); e != nil {
+		return true, e
 	}
 	return true, err
 }
