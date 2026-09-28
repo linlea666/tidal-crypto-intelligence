@@ -464,3 +464,34 @@ func TestMultifactorCheckpointAndFrozenSnapshotBackup(t *testing.T) {
 		t.Fatal("mail ledger backup", n, err)
 	}
 }
+
+func TestMultifactorFullTraceFitsDocumentCapAndRecovers(t *testing.T) {
+	start := testTime("2026-07-01T00:00:00Z")
+	p := multiCheckpoint{Version: "fixed-input", Cursor: start, Active: map[string]bool{"core/buy": true}, Clear: map[string]*time.Time{}}
+	for i := 0; i < 60*24*12; i++ {
+		p.Ticks = append(p.Ticks, multiResearchTick{start.Add(time.Duration(i) * 5 * time.Minute), 31})
+	}
+	for i := 0; i < 5000; i++ {
+		p.Signals = append(p.Signals, multiResearchSignal{ID: fmt.Sprint(i), Rules: MultifactorRules, Direction: "sell", At: start.Add(time.Duration(i) * 20 * time.Minute), ATR: flowPtr(100.0), Following: i%2 == 0, Mask: 31})
+	}
+	raw, _ := json.Marshal(multiCheckpointRecords{p.Ticks, p.Signals})
+	if len(raw) <= 1<<20 {
+		t.Fatal("fixture does not exercise the original document limit", len(raw))
+	}
+	encoded, err := json.Marshal(p)
+	if err != nil || len(encoded) > 1<<20 {
+		t.Fatal("checkpoint still exceeds unchanged limit", len(encoded), err)
+	}
+	var restored multiCheckpoint
+	if err = json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Version != p.Version || !restored.Active["core/buy"] || len(restored.Ticks) != len(p.Ticks) || len(restored.Signals) != len(p.Signals) || !restored.Signals[22].asSignal().Multifactor.Price.Following["sell"] {
+		t.Fatal("checkpoint lost decision or matching evidence")
+	}
+	broken, _ := json.Marshal(multiCheckpointWire{Records: []byte("not-gzip")})
+	if json.Unmarshal(broken, &restored) == nil {
+		t.Fatal("corrupt checkpoint accepted")
+	}
+	t.Logf("complete trace JSON %d bytes; stored checkpoint %d bytes", len(raw), len(encoded))
+}

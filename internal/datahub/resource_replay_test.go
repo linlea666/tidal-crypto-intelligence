@@ -104,6 +104,10 @@ func TestResourceReplay(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		if s.Result != nil && s.Result.CoreCalculated && !r.CoreCalculated {
+			t.Fatal("finished control restarted while multifactor checkpoint advanced")
+		}
+		s.Result, s.InputVersion = r, h.studyInputVersion(ctx, s)
 		if r.CoreCalculated && r.MultifactorComparison != nil && r.MultifactorComparison.State == "association_calculated" {
 			s.Result = r
 			s.State = "complete"

@@ -357,6 +357,15 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 	if e != nil {
 		return nil, e
 	}
+	// The new comparison takes smaller steps than the legacy control. Once
+	// that control has completed on this exact fact version, preserve it while
+	// advancing the new checkpoint instead of restarting the old calculation.
+	if s.Result != nil && s.Result.CoreCalculated && s.InputVersion == h.studyInputVersion(ctx, s) {
+		previous := *s.Result
+		previous.MultifactorComparison = r.MultifactorComparison
+		previous.Coverage = r.Coverage
+		return &previous, nil
+	}
 	if len(r.Missing) > 0 {
 		return r, nil
 	}

@@ -1,8 +1,13 @@
 package datahub
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"sort"
 	"time"
@@ -119,16 +124,94 @@ type multiResearchTick struct {
 	Mask int       `json:"mask"`
 }
 type multiResearchSignal struct {
-	Signal
-	Mask int `json:"mask"`
+	ID        string    `json:"i"`
+	Rules     string    `json:"r"`
+	At        time.Time `json:"t"`
+	Direction string    `json:"d"`
+	ATR       *float64  `json:"a,omitempty"`
+	Following bool      `json:"f,omitempty"`
+	Mask      int       `json:"m"`
 }
+
+func (s multiResearchSignal) asSignal() Signal {
+	return Signal{ID: s.ID, Rules: s.Rules, At: s.At, Direction: s.Direction, ATR: s.ATR, Multifactor: &FlowSnapshot{Price: PriceContext{Following: map[string]bool{s.Direction: s.Following}}}}
+}
+
 type multiCheckpoint struct {
 	Version string                `json:"version"`
 	Cursor  time.Time             `json:"cursor"`
 	Active  map[string]bool       `json:"active"`
 	Clear   map[string]*time.Time `json:"clear"`
+	Ticks   []multiResearchTick   `json:"ticks,omitempty"`
+	Signals []multiResearchSignal `json:"signals,omitempty"`
+}
+
+// A complete 60-day decision trace plus all rule variants exceeds the 1 MiB
+// document cap as plain JSON. Keep only required features and compress this
+// internal checkpoint; decoding is capped independently of compressed size.
+type multiCheckpointAlias multiCheckpoint
+type multiCheckpointWire struct {
+	multiCheckpointAlias
+	Records []byte `json:"records"`
+}
+type multiCheckpointRecords struct {
 	Ticks   []multiResearchTick   `json:"ticks"`
 	Signals []multiResearchSignal `json:"signals"`
+}
+
+const maxMultifactorCheckpointBytes = 16 << 20
+
+func (p multiCheckpoint) MarshalJSON() ([]byte, error) {
+	raw, err := json.Marshal(multiCheckpointRecords{p.Ticks, p.Signals})
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) > maxMultifactorCheckpointBytes {
+		return nil, errors.New("多因素检查点超过解码预算")
+	}
+	var buf bytes.Buffer
+	z, err := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = z.Write(raw); err != nil {
+		return nil, err
+	}
+	if err = z.Close(); err != nil {
+		return nil, err
+	}
+	v := multiCheckpointAlias(p)
+	v.Ticks = nil
+	v.Signals = nil
+	return json.Marshal(multiCheckpointWire{v, buf.Bytes()})
+}
+func (p *multiCheckpoint) UnmarshalJSON(b []byte) error {
+	var v multiCheckpointWire
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*p = multiCheckpoint(v.multiCheckpointAlias)
+	if len(v.Records) == 0 {
+		return nil
+	}
+	z, err := gzip.NewReader(bytes.NewReader(v.Records))
+	if err != nil {
+		return err
+	}
+	defer z.Close()
+	raw, err := io.ReadAll(io.LimitReader(z, maxMultifactorCheckpointBytes+1))
+	if err != nil {
+		return err
+	}
+	if len(raw) > maxMultifactorCheckpointBytes {
+		return errors.New("多因素检查点超过解码预算")
+	}
+	var records multiCheckpointRecords
+	if err = json.Unmarshal(raw, &records); err != nil {
+		return err
+	}
+	p.Ticks, p.Signals = records.Ticks, records.Signals
+	return nil
 }
 
 func multifactorCase(t time.Time) bool {
@@ -263,7 +346,7 @@ func (h *Hub) evaluateMultifactor(ctx context.Context, study Study, bars map[int
 				}
 				if on {
 					p.Active[key] = true
-					p.Signals = append(p.Signals, multiResearchSignal{Signal: Signal{ID: fmt.Sprintf("%s-%s-%d", rule, side, at.Unix()), Rules: rule, At: at, Direction: side, ATR: s.Price.PriorATR, Multifactor: &FlowSnapshot{Price: PriceContext{Following: s.Price.Following}}}, Mask: mask})
+					p.Signals = append(p.Signals, multiResearchSignal{ID: fmt.Sprintf("%s-%s-%d", rule, side, at.Unix()), Rules: rule, At: at, Direction: side, ATR: s.Price.PriorATR, Following: s.Price.Following[side], Mask: mask})
 				}
 			}
 		}
@@ -322,7 +405,7 @@ func finishMultifactorStudy(r *MultifactorStudy, p multiCheckpoint, c map[int64]
 				series := map[string][]Signal{}
 				for _, s := range p.Signals {
 					if s.Direction == side && valid[s.At.Unix()] {
-						series[s.Rules] = append(series[s.Rules], s.Signal)
+						series[s.Rules] = append(series[s.Rules], s.asSignal())
 					}
 				}
 				for _, ev := range eps {
