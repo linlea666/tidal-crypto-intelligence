@@ -261,14 +261,22 @@ func TestResourceReplay(t *testing.T) {
 			}
 			lastMaintenance = current
 		}
+		// Reproduce a formal reader holding the original pool while short work
+		// publishes and commits. The ordinary reader pool must not be enlarged.
+		formalReader, err := h.Store.research.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, phase := range []func(context.Context, time.Time) error{h.shortObservationStep, h.shortBaselineStep, h.shortStudyStep} {
 			step, cancel := context.WithTimeout(ctx, 2*time.Second)
 			err := phase(step, time.Now().UTC())
 			cancel()
 			if err != nil {
+				formalReader.Close()
 				t.Fatal("bounded short-flow replay", err)
 			}
 		}
+		formalReader.Close()
 		wg.Wait()
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)

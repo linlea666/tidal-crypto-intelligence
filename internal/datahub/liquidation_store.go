@@ -37,8 +37,12 @@ func (w *Warehouse) liquidationGap(at time.Time, e error) {
 	_ = w.SaveState("liquidation/gap", liquidationGap{at, e.Error(), true})
 }
 func (w *Warehouse) liquidationLoad(ctx context.Context, kind, id string, v any) error {
+	return liquidationLoad(ctx, w.research, kind, id, v)
+}
+
+func liquidationLoad(ctx context.Context, db *sql.DB, kind, id string, v any) error {
 	var b []byte
-	e := w.research.QueryRowContext(ctx, "SELECT payload FROM lz_records WHERE kind=? AND id=?", kind, id).Scan(&b)
+	e := db.QueryRowContext(ctx, "SELECT payload FROM lz_records WHERE kind=? AND id=?", kind, id).Scan(&b)
 	if e != nil {
 		return e
 	}
@@ -274,11 +278,15 @@ func (h *Hub) liquidationCandles(ctx context.Context, a string, from, to, asOf t
 	return h.liquidationCandleSeries(ctx, a, from, to, asOf, true)
 }
 func (h *Hub) liquidationCandleSeries(ctx context.Context, a string, from, to, asOf time.Time, timely bool) (map[int64]Candle, error) {
+	return liquidationCandleSeries(ctx, h.Store.research, a, from, to, asOf, timely)
+}
+
+func liquidationCandleSeries(ctx context.Context, db *sql.DB, a string, from, to, asOf time.Time, timely bool) (map[int64]Candle, error) {
 	out := map[int64]Candle{}
 	if to.Sub(from) > 31*24*time.Hour {
 		return nil, errors.New("清算K线窗口过大")
 	}
-	e := h.Store.FactsAsOf(ctx, ID("candles", a, "Binance", "spot"), from, to, asOf, func(o Observation) error {
+	e := factsAsOf(ctx, db, ID("candles", a, "Binance", "spot"), from, to, asOf, func(o Observation) error {
 		at := recordTime(o)
 		available := o.FetchedAt
 		if o.FirstFetchedAt != nil {

@@ -42,6 +42,7 @@ type StorageStatus struct {
 }
 type Warehouse struct {
 	research                   *sql.DB
+	shortResearch              *sql.DB
 	root                       string
 	db                         *sql.DB
 	write                      sync.Mutex
@@ -125,6 +126,9 @@ CREATE TABLE IF NOT EXISTS rollups(dataset TEXT,res INTEGER,through_ts INTEGER,P
 func (w *Warehouse) Close() error {
 	w.write.Lock()
 	defer w.write.Unlock()
+	if w.shortResearch != nil {
+		_ = w.shortResearch.Close()
+	}
 	if w.research != nil {
 		_, _ = w.research.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 		_ = w.research.Close()

@@ -41,6 +41,56 @@ func shortSnapshot(end time.Time) ShortObservation {
 	bs, b := shortFixture(end)
 	return buildShortObservation(bs, nil, end, end.Add(time.Minute), b)
 }
+
+func TestShortObservationDoesNotQueueBehindFormalResearch(t *testing.T) {
+	end := time.Now().UTC().Truncate(5 * time.Minute)
+	h := shortTestHub(t, end)
+	ctx := context.Background()
+	d, _ := h.Dataset(ID("flow", "BTC", "", "spot"))
+	for at := end.Add(-4 * time.Hour); at.Before(end); at = at.Add(5 * time.Minute) {
+		o := Observation{Dataset: d.ID, Source: d.Source, ObservedAt: flowPtr(at), FetchedAt: at.Add(5 * time.Minute), Resolution: 300, Quality: "valid", Payload: Payload{Flow: &Flow{"2000000", "1000000"}}}
+		if _, e := h.Store.Ingest(d, o); e != nil {
+			t.Fatal(e)
+		}
+	}
+	_, baseline := shortFixture(end)
+	if e := h.Store.shortPut(ctx, "baseline", ShortFlowRules, end, baseline); e != nil {
+		t.Fatal(e)
+	}
+	// Formal research can occupy its sole connection while decoding a long
+	// history. It holds no SQLite write lock, so a short observation must not
+	// spend its entire computation budget waiting in that Go connection pool.
+	busy, e := h.Store.research.Conn(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer busy.Close()
+	step, cancel := context.WithTimeout(ctx, 1800*time.Millisecond)
+	defer cancel()
+	if e = h.shortObservationStep(step, end.Add(time.Minute)); e != nil {
+		t.Fatal(e)
+	}
+	var current ShortObservation
+	if !h.Store.LoadState("short-flow/current", &current) || !current.Fresh || current.Windows["5"].Net == nil {
+		t.Fatal("independent flow was not published")
+	}
+	if e = h.shortStudyStep(step, end.Add(time.Minute)); e != nil {
+		t.Fatal(e)
+	}
+	if e = h.shortBaselineStep(step, end.Add(time.Minute)); e != nil {
+		t.Fatal(e)
+	}
+	if h.Store.research.Stats().MaxOpenConnections != 1 || h.Store.shortDB().Stats().MaxOpenConnections != 1 {
+		t.Fatal("unbounded connection pool")
+	}
+	var cache, pages int
+	if e = h.Store.shortDB().QueryRow("PRAGMA cache_size").Scan(&cache); e != nil || cache != -256 {
+		t.Fatal("short cache cap", cache, e)
+	}
+	if e = h.Store.shortDB().QueryRow("PRAGMA max_page_count").Scan(&pages); e != nil || pages != 126976 {
+		t.Fatal("research page cap", pages, e)
+	}
+}
 func activeShort(s ShortObservation, m int, side string) bool {
 	for _, h := range s.Hints {
 		if h.Minutes == m && h.Direction == side {
