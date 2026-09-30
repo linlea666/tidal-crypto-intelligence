@@ -261,6 +261,20 @@ func TestResourceReplay(t *testing.T) {
 	if !h.Store.LoadState("baselineComputed", &built) {
 		t.Fatal("baseline maintenance never completed")
 	}
+	for _, asset := range Assets() {
+		var zones LiquidationMapSnapshot
+		if err := h.Store.liquidationLoad(ctx, "state", ID("map", asset, "", "futures"), &zones); err != nil || len(zones.Zones) < 321 {
+			t.Fatalf("liquidation state did not advance for %s: zones=%d error=%v", asset, len(zones.Zones), err)
+		}
+	}
+	var completed int
+	if err := h.Store.research.QueryRowContext(ctx, "SELECT count(*) FROM lz_records WHERE kind='event' AND done=1").Scan(&completed); err != nil || completed < 6 {
+		t.Fatalf("liquidation outcome checkpoints did not complete: %d error=%v", completed, err)
+	}
+	var liquidationStatus liquidationGap
+	if h.Store.LoadState("liquidation/gap", &liquidationStatus) && liquidationStatus.Paused {
+		t.Fatalf("liquidation worker remains paused at end of replay: %s", liquidationStatus.Reason)
+	}
 
 	if h.Scheduler.quota.Calls != 0 {
 		t.Fatal("local replay invoked upstream")
