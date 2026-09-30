@@ -349,6 +349,13 @@ func (h *Hub) LiquidationView(a, r string) any {
 		o, ok := h.Store.Latest(id)
 		result[kind] = map[string]any{"data": o.Payload.Model, "meta": metadata(d, o, ok)}
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	risk, e := h.liquidationRiskView(ctx, a, r, time.Now().UTC())
+	result["risk"] = risk
+	if e != nil {
+		result["riskError"] = e.Error()
+	}
 	result["note"] = "模型强度为相对估计，不是必然爆仓金额；实际清算与账户参考清算价分别展示。"
 	return result
 }
@@ -561,6 +568,10 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 				return nil, errors.New("无效清算周期")
 			}
 			return h.LiquidationView(a, r), nil
+		case "liquidation-zones/history":
+			return h.liquidationHistory(ctx, a, q, time.Now().UTC())
+		case "liquidation-study":
+			return h.liquidationStudyView(ctx, a, time.Now().UTC())
 		case "history":
 			return h.HistoryView(ctx, a, hours, parseFloat(q, "price", 0, 0, 1e7), step, span, q.Get("heatmap") == "1")
 		case "candles":

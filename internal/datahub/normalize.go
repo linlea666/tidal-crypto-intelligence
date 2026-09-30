@@ -369,10 +369,14 @@ func Normalize(d Dataset, raw []byte, fetched time.Time) ([]Observation, error) 
 		out = append(out, obs(nil, p))
 	case "map":
 		r := object(data)
-		model := Model{Bins: []ModelBin{}, ReferencePrice: num(r["last_price"]), Unit: "relative", Model: "CoinGlass aggregated-map", Range: d.Params["range"]}
+		model := Model{Bins: []ModelBin{}, ReferencePrice: num(r["last_price"]), Unit: "relative", Model: "CoinGlass aggregated-map", Range: d.Params["range"], Contract: LiquidationContract, CoverageComplete: true}
+		seen := map[string]string{}
 		for _, v := range array(r["data"]) {
 			m := object(v)
 			instrument := object(m["instrument"])
+			if base := str(instrument["baseAsset"]); base != "" && base != d.Asset {
+				return nil, errors.New("map base asset mismatch")
+			}
 			venue := str(instrument["exName"])
 			if venue == "" {
 				venue = str(instrument["exchange_name"])
@@ -386,10 +390,24 @@ func Normalize(d Dataset, raw []byte, fetched time.Time) ([]Observation, error) 
 					if len(a) < 2 {
 						return nil, errors.New("invalid map row")
 					}
-					price, strength := num(a[0]), num(a[1])
-					if price > 0 && strength >= 0 {
-						model.Bins = append(model.Bins, ModelBin{price, strength, venue})
+					pv, pe := validNumber(a[0], false)
+					sv, se := validNumber(a[1], false)
+					if pe != nil || se != nil || num(pv) <= 0 {
+						return nil, errors.New("invalid map price/strength")
 					}
+					instrumentID, quote := str(instrument["instrumentId"]), strings.ToUpper(str(instrument["quoteAsset"]))
+					if instrumentID == "" || venue == "" || quote == "" {
+						model.CoverageComplete = false
+					}
+					key := venue + "/" + instrumentID + "/" + quote + "/" + pv
+					if previous, duplicate := seen[key]; duplicate && instrumentID != "" {
+						if previous != sv {
+							return nil, errors.New("conflicting duplicate map source")
+						}
+						continue
+					}
+					seen[key] = sv
+					model.Bins = append(model.Bins, ModelBin{Price: num(pv), Strength: num(sv), Venue: venue, NativePrice: pv, RawStrength: sv, Instrument: instrumentID, Quote: quote})
 				}
 			}
 		}

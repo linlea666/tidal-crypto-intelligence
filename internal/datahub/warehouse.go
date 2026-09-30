@@ -351,6 +351,7 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 			}
 		}
 		w.putHot(d.ID, o)
+		w.recordLiquidationMap(d, o)
 	}
 	if d.Kind == "price" || d.Kind == "wallet" || d.Kind == "large-history" || d.Kind == "large" {
 		return changed, nil

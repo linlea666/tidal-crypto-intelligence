@@ -161,6 +161,7 @@ func (h *Hub) Run(ctx context.Context) {
 	start := func(f func(context.Context)) { wg.Add(1); go func() { defer wg.Done(); f(ctx) }() }
 	start(h.Scheduler.Run)
 	start(h.researchWorker)
+	start(h.liquidationWorker)
 	if !h.offline {
 		start(h.vixCollector)
 		start(h.vixDailyCollector)
