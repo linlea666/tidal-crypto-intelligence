@@ -493,6 +493,9 @@ func (h *Hub) liquidationStudyView(ctx context.Context, asset string, now time.T
 					c := ev.ControlOutcomes[fmt.Sprint(hours)]
 					if c.State == "complete" && o.State == "complete" {
 						matched++
+						if o.Hit != nil && *o.Hit {
+							matchedHits++
+						}
 						if c.Hit != nil && *c.Hit {
 							controlHits++
 						}

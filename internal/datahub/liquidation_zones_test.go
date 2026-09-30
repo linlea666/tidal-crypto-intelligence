@@ -596,3 +596,65 @@ func TestLiquidationModelCoverageCountsQuietGaps(t *testing.T) {
 		t.Fatal("quiet gap not counted", v, e)
 	}
 }
+
+func TestLiquidationMatchedRatesUseOnlyCompletePairs(t *testing.T) {
+	h, e := Open(Config{Root: t.TempDir(), Offline: true})
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer h.Store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Hour)
+	from := now.Add(-15 * 24 * time.Hour)
+	// Complete model coverage permits the public report to show empirical rates.
+	tx, e := h.Store.research.BeginTx(ctx, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer tx.Rollback()
+	b, _ := liquidationJSON(map[string]string{"test": "complete model coverage"})
+	for i := 0; i < 15*48; i++ {
+		at := from.Add(time.Duration(i) * 30 * time.Minute)
+		if _, e = tx.ExecContext(ctx, "INSERT INTO lz_records(kind,id,asset,at,payload) VALUES('history',?,'BTC',?,?)", fmt.Sprintf("map.btc..futures/%d", i), at.UnixNano(), b); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = tx.Commit(); e != nil {
+		t.Fatal(e)
+	}
+	for i := 0; i < 33; i++ {
+		hit, controlHit := i < 18 || i >= 30, i < 6
+		ev := LiquidationStudyEvent{ID: fmt.Sprint(i), Side: "short", Rule: LiquidationRules, Selected: from.Add(time.Duration(i) * 10 * time.Hour), Control: &LiquidationZone{Side: "short"}, Outcomes: map[string]LiquidationOutcome{}, ControlOutcomes: map[string]LiquidationOutcome{}}
+		for _, key := range []string{"1", "4"} {
+			ev.Outcomes[key] = LiquidationOutcome{State: "complete", Hit: &hit, Coverage: 1}
+			ev.ControlOutcomes[key] = LiquidationOutcome{State: "complete", Hit: &controlHit, Coverage: 1}
+			if i == 32 {
+				ev.ControlOutcomes[key] = LiquidationOutcome{State: "incomplete"}
+			}
+		}
+		if i == 30 || i == 31 {
+			ev.Control = nil
+		}
+		if e = h.Store.liquidationPut(ctx, "event", ev.ID, "BTC", ev.Selected, ev); e != nil {
+			t.Fatal(e)
+		}
+	}
+	report, e := h.liquidationStudyView(ctx, "BTC", now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, g := range report.(map[string]any)["groups"].([]map[string]any) {
+		if g["side"] != "short" {
+			if g["ready"] != false || g["touchRate"] != nil {
+				t.Fatal("empty direction acquired a rate", g)
+			}
+			continue
+		}
+		if g["ready"] != true || g["matched"] != 30 || g["unmatched"] != 2 || g["matchedTouchRate"] != .6 || g["controlTouchRate"] != .2 || g["touchRate"] != float64(21)/33 {
+			t.Fatal("paired rates use different samples or lost hits", g)
+		}
+		if g["matchedConfidenceInterval"] != liquidationWilson(18, 30) || g["controlConfidenceInterval"] != liquidationWilson(6, 30) {
+			t.Fatal("paired confidence interval uses the wrong denominator", g)
+		}
+	}
+}
