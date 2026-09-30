@@ -202,6 +202,11 @@ func Normalize(d Dataset, raw []byte, fetched time.Time) ([]Observation, error) 
 			if at == nil {
 				return nil, errors.New("missing flow timestamp")
 			}
+			// A forming trade bucket cannot become a closed fact merely because
+			// the wall clock advances before the next collection. Retry it later.
+			if d.Kind == "flow" && at.Add(time.Duration(d.Resolution)*time.Second).After(fetched) {
+				continue
+			}
 			keys := []string{"aggregated_buy_volume_usd", "aggregated_sell_volume_usd"}
 			if d.Kind == "liquidations" {
 				keys = []string{"aggregated_long_liquidation_usd", "aggregated_short_liquidation_usd"}

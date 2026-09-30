@@ -3,6 +3,7 @@ import { Chart } from "./Chart";
 import { api, amount, price, useAPI } from "./data";
 import { Metric, type Meta } from "./Pages";
 import type { Asset } from "./types";
+import { ShortStudyContent, type ShortStudy } from "./ShortFlowStudy";
 
 const stamp = (s?: string | null) =>
   s && new Date(s).getFullYear() > 2000
@@ -555,6 +556,7 @@ function FrozenValidationResult({id, asset}: {id: string; asset: Asset}) {
 export function StudiesPage({ asset }: { asset: Asset }) {
   const q = useAPI<{
     items: StudyItem[];
+    shortTerm?: ShortStudy | null;
     forward?: {
 	  multifactor?: { days: number; coverage: number; episodes: number; reviewReady: boolean; comparisons: RuleComparison[]; equalBudget: RuleComparison[]; note: string };
       candidateDays?: number; candidateCoverage?: number; candidateEpisodes?: number;
@@ -594,6 +596,7 @@ export function StudiesPage({ asset }: { asset: Asset }) {
   };
   return (
     <section className="research-page">
+      {asset === "BTC" && <div className="flow-dashboard"><ShortStudyContent d={q.data?.shortTerm}/></div>}
       <div className="research-heading">
         <div>
           <span className="eyebrow">验证先于权重 · 不自动调参</span>
