@@ -34,6 +34,10 @@ func (w *Warehouse) initResearch() error {
 		return e
 	}
 	w.research = db
+	// Optional research must not take the original market service down.
+	if e = w.initShortFlow(); e != nil {
+		w.shortGap(time.Now().UTC(), e)
+	}
 	if e = w.initLiquidationZones(); e != nil {
 		db.Close()
 		return e

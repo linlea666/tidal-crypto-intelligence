@@ -2,6 +2,7 @@ package datahub
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -104,7 +105,14 @@ func (h *Hub) signalsExtra(ctx context.Context, a string, rows []json.RawMessage
 			live = map[string]any{"valueUsdt": num(p.Payload.Price.Value), "at": p.Time()}
 		}
 	}
-	return map[string]any{"current": currentValue, "notificationResults": mail, "prices": prices, "currentPrice": live}, nil
+	var latestFormal any
+	var raw []byte
+	if err := h.Store.research.QueryRowContext(ctx, "SELECT payload FROM documents WHERE kind='signal' AND asset=? AND json_extract(payload,'$.rulesVersion')=? ORDER BY at DESC LIMIT 1", a, MultifactorRules).Scan(&raw); err == nil {
+		latestFormal = decodeSignal(raw)
+	} else if err != sql.ErrNoRows {
+		return nil, err
+	}
+	return map[string]any{"latestFormal": latestFormal, "current": currentValue, "observation": h.shortObservationView(now), "notificationResults": mail, "prices": prices, "currentPrice": live}, nil
 }
 func flowNoticeTitle(v noticePayload) string {
 	name, confirm := "买盘", "突破"

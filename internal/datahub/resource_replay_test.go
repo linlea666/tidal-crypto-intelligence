@@ -71,6 +71,11 @@ func TestResourceReplay(t *testing.T) {
 			t.Logf("backfill through %s", at.Format("2006-01-02"))
 		}
 	}
+	t.Log("phase: native one-minute flow overlapping the recent 48h of five-minute history")
+	for at := now.Add(-48 * time.Hour); at.Before(now); at = at.Add(time.Minute) {
+		bucket := at.Truncate(5 * time.Minute)
+		ingest(flow, Observation{Dataset: flow.ID, Source: flow.Source, ObservedAt: &at, FetchedAt: now, Resolution: 60, Quality: "valid", Payload: Payload{Flow: &Flow{Buy: fmt.Sprint((1000000 + bucket.Minute()*10000) / 5), Sell: "198000"}}})
+	}
 	t.Log("phase: 30-day hourly books and production maintenance")
 	seedBaselineReplay(t, h, now, 30, 1000)
 	t.Log("phase: current books, backfill rollups and local readers")
@@ -138,6 +143,35 @@ func TestResourceReplay(t *testing.T) {
 	}
 	if e = h.advanceLiquidationStudy(ctx, time.Now().UTC()); e != nil {
 		t.Fatal(e)
+	}
+	t.Log("phase: independent short-flow baseline, frozen trials and bounded progress")
+	if e = h.Store.shortPut(ctx, "origin", ShortFlowRules, now, now.Add(-48*time.Hour)); e != nil {
+		t.Fatal(e)
+	}
+	if e = h.shortObservationStep(ctx, now.Add(time.Minute)); e != nil {
+		t.Fatal(e)
+	}
+	for i := 0; i < 16; i++ {
+		step, cancel := context.WithTimeout(ctx, 2*time.Second)
+		e = h.shortBaselineStep(step, time.Now().UTC())
+		cancel()
+		if e != nil {
+			t.Fatal("short baseline batch", e)
+		}
+	}
+	var shortBase ShortBaseline
+	if e = h.Store.shortLoad(ctx, "baseline", ShortFlowRules, &shortBase); e != nil || !shortBase.Valid {
+		t.Fatal("short baseline cold checkpoint", e)
+	}
+	for i := 1; i <= 8; i++ {
+		// All trial windows must already be past the 20-minute late-candle
+		// allowance, independently of the runner's minute within the hour.
+		at := now.Add(-time.Duration(i*4+1) * time.Hour)
+		tr := newShortTrial(fmt.Sprint("replay-short-", i), "short-5", "buy", at, at, nil)
+		v := ShortEpisode{ID: tr.ID, Direction: "buy", At: at, Updated: at, Trials: map[string]*ShortTrial{"5": tr}}
+		if e = h.Store.shortPut(ctx, "episode", v.ID, at, v); e != nil {
+			t.Fatal(e)
+		}
 	}
 	t.Log("phase: repeated full maintenance, current writes and concurrent local GETs")
 	duration := 2 * time.Minute
@@ -227,6 +261,14 @@ func TestResourceReplay(t *testing.T) {
 			}
 			lastMaintenance = current
 		}
+		for _, phase := range []func(context.Context, time.Time) error{h.shortObservationStep, h.shortBaselineStep, h.shortStudyStep} {
+			step, cancel := context.WithTimeout(ctx, 2*time.Second)
+			err := phase(step, time.Now().UTC())
+			cancel()
+			if err != nil {
+				t.Fatal("bounded short-flow replay", err)
+			}
+		}
 		wg.Wait()
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
@@ -278,6 +320,10 @@ func TestResourceReplay(t *testing.T) {
 
 	if h.Scheduler.quota.Calls != 0 {
 		t.Fatal("local replay invoked upstream")
+	}
+	var shortDone int
+	if e = h.Store.research.QueryRow("SELECT count(*) FROM sf_records WHERE kind='episode' AND json_extract(payload,'$.done')=1").Scan(&shortDone); e != nil || shortDone < 8 {
+		t.Fatal("short study checkpoints did not complete", shortDone, e)
 	}
 	if out := os.Getenv("TIDAL_RESOURCE_OUTPUT"); out != "" {
 		phase, err := json.Marshal(map[string]any{"startedAt": phaseStarted.UTC(), "endedAt": time.Now().UTC(), "elapsedSeconds": time.Since(phaseStarted).Seconds()})

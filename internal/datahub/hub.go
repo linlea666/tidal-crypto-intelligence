@@ -162,6 +162,7 @@ func (h *Hub) Run(ctx context.Context) {
 	start(h.Scheduler.Run)
 	start(h.researchWorker)
 	start(h.liquidationWorker)
+	start(h.shortFlowWorker)
 	if !h.offline {
 		start(h.vixCollector)
 		start(h.vixDailyCollector)
