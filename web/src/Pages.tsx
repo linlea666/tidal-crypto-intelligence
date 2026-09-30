@@ -1,3 +1,4 @@
+import { LiquidationPage } from "./Liquidations";
 import { LargeOrderBoard } from "./LargeOrders";
 import { ActivityPage } from "./Activity";
 import { ETFPage } from "./Research";
@@ -118,18 +119,6 @@ type DataStatus = {
   };
   rulesVersion: string;
   legacyCollectorsRunning: boolean;
-};
-type Model = {
-  bins: { price: number; strength: number; venue?: string }[];
-  prices?: number[];
-  times?: number[];
-  cells?: [number, number, number][];
-  referencePrice: number;
-};
-type Liquidations = {
-  map: { data: Model | null; meta: Meta };
-  heatmap: { data: Model | null; meta: Meta };
-  note: string;
 };
 type Large = {
   initialQuantity?: string | null;
@@ -802,154 +791,6 @@ function WhalesPage({ asset }: Props) {
           每5分钟采集，逐条来源时间8分钟内有效。CoinGlass覆盖的Hyperliquid百万美元级持仓，不是全市场巨鲸榜。清算距离使用平台标记价格；名单消失不等于平仓。
         </p>
       </section>
-    </>
-  );
-}
-function LiquidationPage({ asset, frame }: Props) {
-  const [period, setPeriod] = useState("24h"),
-    [heat, setHeat] = useState(false),
-    [message, setMessage] = useState("");
-  const { data, error } = useAPI<Liquidations>(
-    `liquidations?asset=${asset}&period=${period}`,
-    30000,
-  );
-  const model = heat ? data?.heatmap : data?.map;
-  const bins = useMemo(() => {
-    const groups = new Map<number, number>(),
-      step = asset === "BTC" ? 250 : 10;
-    for (const b of data?.map.data?.bins ?? []) {
-      const p = Math.floor(b.price / step) * step;
-      groups.set(p, (groups.get(p) ?? 0) + b.strength);
-    }
-    return [...groups]
-      .map(([p, n]) => ({ p, n }))
-      .sort((a, b) => b.n - a.n)
-      .slice(0, 24)
-      .sort((a, b) => b.p - a.p);
-  }, [data, asset]);
-  const max = Math.max(1, ...bins.map((b) => b.n));
-  const option = useMemo(
-    () => ({
-      grid: { left: 85, right: 85, top: 20, bottom: 45 },
-      tooltip: { position: "top" },
-      xAxis: {
-        type: "category",
-        data: data?.heatmap.data?.times?.map((t) => clock(t)) ?? [],
-        ...baseAxis,
-      },
-      yAxis: {
-        type: "category",
-        data: data?.heatmap.data?.prices ?? [],
-        ...baseAxis,
-      },
-      visualMap: {
-        min: 0,
-        max: (data?.heatmap.data?.cells ?? []).reduce(
-          (max, c) => Math.max(max, c[2]),
-          1,
-        ),
-        calculable: true,
-        orient: "vertical",
-        right: 0,
-        inRange: { color: ["#18231f", "#365b45", "#7deba9"] },
-        textStyle: { color: "#b0c2b8" },
-      },
-      series: [{ type: "heatmap", data: data?.heatmap.data?.cells ?? [] }],
-    }),
-    [data],
-  );
-  async function changePeriod(p: string) {
-    setPeriod(p);
-    if (p !== "24h") {
-      try {
-        for (const kind of ["map", "heatmap"]) {
-          await api("data-requests", {
-            method: "POST",
-            body: JSON.stringify({
-              dataset: `${kind}.${asset.toLowerCase()}..futures`,
-              range: p,
-            }),
-          });
-        }
-        setMessage("所选周期进入共享加载队列，完成后自动显示。");
-      } catch (e) {
-        setMessage((e as Error).message);
-      }
-    }
-  }
-  return (
-    <>
-      <div className="toolbar page-toolbar">
-        <div className="segmented">
-          {["24h", "7d", "30d"].map((p) => (
-            <button
-              key={p}
-              className={period === p ? "selected" : ""}
-              onClick={() => void changePeriod(p)}
-            >
-              {p === "24h" ? "24小时" : p === "7d" ? "7天" : "30天"}
-            </button>
-          ))}
-        </div>
-        <button className="secondary" onClick={() => setHeat(!heat)}>
-          {heat ? "返回清算价位柱状图" : "高级：历史清算热力图"}
-        </button>
-      </div>
-      <p className="helper">{data?.note}</p>
-      <Status meta={model?.meta} />
-      {message && (
-        <p className="helper" role="status">
-          {message}
-        </p>
-      )}
-      {error && <p className="sell">{error}</p>}
-      <section className="data-section">
-        <h2>{heat ? "清算模型随时间的变化" : "清算模型集中价位"}</h2>
-        {heat ? (
-          data?.heatmap.data?.cells?.length ? (
-            <Chart option={option} height={430} label="模型清算历史热力图" />
-          ) : (
-            <Empty text="所选周期尚无可用模型数据。" />
-          )
-        ) : (
-          <>
-            <p className="helper">
-              同一周期内最长柱为100，表示相对强度；不同周期单独比较。
-            </p>
-            {bins.map((b) => (
-              <div
-                className={`liquidation-bar ${(frame?.price ?? 0) > b.p ? "buy" : "sell"}`}
-                key={b.p}
-              >
-                <span>
-                  ${price(b.p, 0)}
-                  <small>
-                    {frame?.price
-                      ? ((b.p / frame.price - 1) * 100).toFixed(2) + "%"
-                      : "—"}
-                  </small>
-                </span>
-                <meter max={max} value={b.n} />
-                <strong>
-                  {((b.n / max) * 100).toFixed(0)}
-                  <small>
-                    {b.n / max >= 0.8
-                      ? "高度集中"
-                      : b.n / max >= 0.5
-                        ? "较集中"
-                        : "一般"}
-                  </small>
-                </strong>
-              </div>
-            ))}
-            {!bins.length && <Empty text="清算地图正在按计划更新。" />}
-          </>
-        )}
-      </section>
-      <div className="notice">
-        <WarningCircle size={18} />
-        模型清算分布、已发生清算、账户清算参考价是三种不同口径，分别查看。
-      </div>
     </>
   );
 }

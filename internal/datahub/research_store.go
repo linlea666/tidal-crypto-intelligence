@@ -34,6 +34,10 @@ func (w *Warehouse) initResearch() error {
 		return e
 	}
 	w.research = db
+	if e = w.initLiquidationZones(); e != nil {
+		db.Close()
+		return e
+	}
 	if e = w.initVIX(); e != nil {
 		db.Close()
 		return e
@@ -175,6 +179,9 @@ func (w *Warehouse) documents(ctx context.Context, kind, asset string, limit int
 	return out, rows.Err()
 }
 func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days int) error {
+	if e := w.pruneLiquidations(ctx, now); e != nil {
+		return e
+	}
 	// Native research facts are retained up to the selected policy (90 days are
 	// necessary for the explicit 30/30/30 study); budget protection takes priority.
 	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour).Unix()

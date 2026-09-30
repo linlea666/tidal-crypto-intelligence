@@ -120,19 +120,25 @@ type LargeOrder struct {
 	End              *time.Time `json:"endAt"`
 }
 type ModelBin struct {
-	Price    float64 `json:"price"`
-	Strength float64 `json:"strength"`
-	Venue    string  `json:"venue,omitempty"`
+	Price       float64 `json:"price"`
+	Strength    float64 `json:"strength"`
+	Venue       string  `json:"venue,omitempty"`
+	NativePrice string  `json:"nativePrice,omitempty"`
+	RawStrength string  `json:"rawStrength,omitempty"`
+	Instrument  string  `json:"instrument,omitempty"`
+	Quote       string  `json:"quote,omitempty"`
 }
 type Model struct {
-	Bins           []ModelBin   `json:"bins"`
-	Prices         []float64    `json:"prices,omitempty"`
-	Times          []int64      `json:"times,omitempty"`
-	Cells          [][3]float64 `json:"cells,omitempty"`
-	ReferencePrice float64      `json:"referencePrice"`
-	Unit           string       `json:"unit"`
-	Model          string       `json:"model"`
-	Range          string       `json:"range"`
+	Bins             []ModelBin   `json:"bins"`
+	Prices           []float64    `json:"prices,omitempty"`
+	Times            []int64      `json:"times,omitempty"`
+	Cells            [][3]float64 `json:"cells,omitempty"`
+	ReferencePrice   float64      `json:"referencePrice"`
+	Unit             string       `json:"unit"`
+	Model            string       `json:"model"`
+	Range            string       `json:"range"`
+	Contract         string       `json:"contract,omitempty"`
+	CoverageComplete bool         `json:"coverageComplete"`
 }
 type Candle struct {
 	Open   float64 `json:"open"`

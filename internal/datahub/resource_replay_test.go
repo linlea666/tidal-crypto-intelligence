@@ -124,6 +124,21 @@ func TestResourceReplay(t *testing.T) {
 			t.Fatal("checkpoint did not finish")
 		}
 	}
+	t.Log("phase: liquidation immutable episodes and 1h/4h outcome evaluation")
+	for i := 1; i <= 8; i++ {
+		side := "short"
+		if i%2 == 0 {
+			side = "long"
+		}
+		start := now.Add(-time.Duration(i*4) * time.Hour)
+		ev := LiquidationStudyEvent{ID: fmt.Sprintf("resource-liquidation-%d", i), Side: side, Rule: LiquidationRules, Selected: start.Add(-time.Minute), Start: start, Price: 80000, ATR: 500, Zone: LiquidationZone{Side: side, Low: 79000, High: 79250}, Outcomes: map[string]LiquidationOutcome{"1": {State: "observing"}, "4": {State: "observing"}}}
+		if e = h.Store.liquidationPut(ctx, "event", ev.ID, "BTC", ev.Selected, ev); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = h.advanceLiquidationStudy(ctx, time.Now().UTC()); e != nil {
+		t.Fatal(e)
+	}
 	t.Log("phase: repeated full maintenance, current writes and concurrent local GETs")
 	duration := 2 * time.Minute
 	if configured := os.Getenv("TIDAL_REPLAY_DURATION"); configured != "" {
@@ -148,6 +163,13 @@ func TestResourceReplay(t *testing.T) {
 				value = "3000"
 			}
 			ingest(pd, Observation{Dataset: pd.ID, Source: pd.Source, ObservedAt: &current, FetchedAt: current, Quality: "valid", Payload: Payload{Price: &Price{value, "USDT"}}})
+		}
+		if current.Sub(lastBooks) >= 2*time.Minute {
+			for _, asset := range Assets() {
+				d, o := liquidationReplayFixture(asset, current)
+				ingest(d, o)
+			}
+			h.processLiquidations(ctx, current)
 		}
 		if current.Sub(lastBooks) >= 2*time.Minute {
 			for _, d := range Registry() {
@@ -188,7 +210,7 @@ func TestResourceReplay(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for _, path := range []string{"activity", "levels", "large-orders", "signals", "studies"} {
+				for _, path := range []string{"activity", "levels", "large-orders", "signals", "studies", "liquidations", "liquidation-study"} {
 					for n := 0; n < 4; n++ {
 						if _, err := h.Read(ctx, path, url.Values{"asset": {"BTC"}, "hours": {"1"}, "layout": {"split"}}); err != nil {
 							t.Error(err)
@@ -199,6 +221,7 @@ func TestResourceReplay(t *testing.T) {
 		}
 		if current.Sub(lastMaintenance) >= time.Minute {
 			h.maintain(ctx)
+			h.processLiquidations(ctx, time.Now().UTC())
 			if e = h.processSignals(ctx, time.Now().UTC()); e != nil {
 				t.Fatal(e)
 			}

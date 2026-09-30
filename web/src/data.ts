@@ -55,7 +55,7 @@ type Entry = {
 };
 const cache = new Map<string, Entry>();
 const pending = new Map<string, Promise<unknown>>();
-// The VIX page has three independent reads; the local API permits two queries
+// VIX and liquidation pages have independent reads; the local API permits two queries
 // in flight. Serialize these lightweight reads without widening that budget.
 let vixReadQueue: Promise<unknown> = Promise.resolve();
 function entry(url: string): Entry {
@@ -116,7 +116,7 @@ export function api<T>(url: string, options: RequestInit = {}): Promise<T> {
     if (url === "logout") clearDataCache();
     return data as T;
   };
-  const serialVIX = method === "GET" && /^vix(?:[/?]|$)/.test(url);
+  const serialVIX = method === "GET" && /^(?:vix|liquidations|liquidation-study|liquidation-zones)(?:[/?]|$)/.test(url);
   const promise = serialVIX ? vixReadQueue.then(request, request) : request();
   if (serialVIX) vixReadQueue = promise.catch(() => {});
   if (method === "GET" && !options.signal) {
