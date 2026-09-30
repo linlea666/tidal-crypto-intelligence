@@ -291,6 +291,9 @@ func TestLiquidationBudgetFailurePreservesMarketAndOrigin(t *testing.T) {
 	if e := w.liquidationLoad(ctx, "origin", LiquidationRules, &origin); e != nil {
 		t.Fatal(e)
 	}
+	if e := w.liquidationPut(ctx, "state", "capacity-checkpoint", "BTC", origin, "unchanged"); e != nil {
+		t.Fatal(e)
+	}
 	_, e := w.research.Exec("UPDATE lz_budget SET used=?", liquidationBudget)
 	if e != nil {
 		t.Fatal(e)
@@ -309,6 +312,24 @@ func TestLiquidationBudgetFailurePreservesMarketAndOrigin(t *testing.T) {
 	var after time.Time
 	if e = w.liquidationLoad(ctx, "origin", LiquidationRules, &after); e != nil || !origin.Equal(after) {
 		t.Fatal("origin changed")
+	}
+	// Existing checkpoints do not consume a second copy of their allocation.
+	if e = w.liquidationPut(ctx, "state", "capacity-checkpoint", "BTC", origin, "unchanged"); e != nil {
+		t.Fatal("full budget rejected an existing equal-size checkpoint", e)
+	}
+	if e = w.liquidationPut(ctx, "state", "capacity-checkpoint", "BTC", origin, strings.Repeat("0123456789abcdefghijklmnopqrstuvwxyz", 20)); e == nil {
+		t.Fatal("checkpoint growth bypassed the full sub-budget")
+	}
+	restored, e := OpenWarehouse(w.Root())
+	if e != nil {
+		t.Fatal("full liquidation budget prevented market service startup", e)
+	}
+	defer restored.Close()
+	if e = restored.liquidationLoad(ctx, "origin", LiquidationRules, &after); e != nil || !origin.Equal(after) {
+		t.Fatal("full-budget restart reset the observation origin", e)
+	}
+	if _, ok := restored.Latest(d.ID); !ok {
+		t.Fatal("full-budget restart lost the original market snapshot")
 	}
 }
 

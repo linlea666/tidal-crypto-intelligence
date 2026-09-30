@@ -14,7 +14,7 @@ func (w *Warehouse) initLiquidationZones() error {
  CREATE INDEX IF NOT EXISTS lz_time ON lz_records(kind,asset,at);
  CREATE TABLE IF NOT EXISTS lz_budget(id INTEGER PRIMARY KEY,used INTEGER NOT NULL);
  INSERT OR IGNORE INTO lz_budget VALUES(1,0);
- CREATE TRIGGER IF NOT EXISTS lz_insert BEFORE INSERT ON lz_records WHEN (SELECT used FROM lz_budget WHERE id=1)+length(NEW.payload)+256>67108864 BEGIN SELECT RAISE(ABORT,'liquidation sub-budget full'); END;
+ CREATE TRIGGER IF NOT EXISTS lz_insert BEFORE INSERT ON lz_records WHEN NOT EXISTS(SELECT 1 FROM lz_records WHERE kind=NEW.kind AND id=NEW.id) AND (SELECT used FROM lz_budget WHERE id=1)+length(NEW.payload)+256>67108864 BEGIN SELECT RAISE(ABORT,'liquidation sub-budget full'); END;
  CREATE TRIGGER IF NOT EXISTS lz_update BEFORE UPDATE OF payload ON lz_records WHEN (SELECT used FROM lz_budget WHERE id=1)+length(NEW.payload)-length(OLD.payload)>67108864 BEGIN SELECT RAISE(ABORT,'liquidation sub-budget full'); END;
  CREATE TRIGGER IF NOT EXISTS lz_added AFTER INSERT ON lz_records BEGIN UPDATE lz_budget SET used=used+length(NEW.payload)+256 WHERE id=1; END;
  CREATE TRIGGER IF NOT EXISTS lz_changed AFTER UPDATE OF payload ON lz_records BEGIN UPDATE lz_budget SET used=used+length(NEW.payload)-length(OLD.payload) WHERE id=1; END;
