@@ -350,9 +350,9 @@ func TestShortBaselineCheckpointAndHourlyReuse(t *testing.T) {
 	ctx := context.Background()
 	to := end.Add(-time.Hour)
 	from := to.Add(-30 * 24 * time.Hour)
-	w := shortBaselineWork{From: from, To: to, Cursor: to.Add(-time.Hour), AsOf: end, Version: h.Store.datasetRangeVersion(ctx, ID("flow", "BTC", "", "spot"), from, to), Bars: []FlowBar{}}
+	w := shortBaselineWork{From: from, To: to, Cursor: to.Add(-time.Hour), AsOf: end, Version: h.Store.datasetRangeVersion(ctx, ID("flow", "BTC", "", "spot"), from, to), Bars: []shortStoredBar{}}
 	for at := from; at.Before(w.Cursor); at = at.Add(5 * time.Minute) {
-		w.Bars = append(w.Bars, FlowBar{At: at, Buy: 20, Sell: 10})
+		w.Bars = append(w.Bars, storeShortBar(FlowBar{At: at, Buy: 20, Sell: 10}))
 	}
 	if e := h.Store.shortPut(ctx, "work", ShortFlowRules, end, w); e != nil {
 		t.Fatal(e)
@@ -416,9 +416,9 @@ func TestShortReportDoesNotExposePrematureRates(t *testing.T) {
 // exercised separately by the constrained Linux concurrent replay.
 func TestShortWorkingSetBounds(t *testing.T) {
 	end := time.Now().UTC().Truncate(time.Hour)
-	work := shortBaselineWork{From: end.Add(-30 * 24 * time.Hour), To: end, Cursor: end, AsOf: end, Bars: []FlowBar{}}
+	work := shortBaselineWork{From: end.Add(-30 * 24 * time.Hour), To: end, Cursor: end, AsOf: end, Bars: []shortStoredBar{}}
 	for at := work.From; at.Before(end); at = at.Add(5 * time.Minute) {
-		work.Bars = append(work.Bars, FlowBar{At: at, Buy: 9999999999999, Sell: 5555555555555})
+		work.Bars = append(work.Bars, storeShortBar(FlowBar{At: at, Buy: 9999999999999, Sell: 5555555555555}))
 	}
 	raw, err := json.Marshal(work)
 	if err != nil {
@@ -432,13 +432,13 @@ func TestShortWorkingSetBounds(t *testing.T) {
 	defer debug.SetGCPercent(old)
 	var before, after runtime.MemStats
 	runtime.ReadMemStats(&before)
-	restored := shortBaselineWork{Bars: make([]FlowBar, 0, 8640)}
+	restored := shortBaselineWork{Bars: make([]shortStoredBar, 0, 8640)}
 	if err = json.Unmarshal(raw, &restored); err != nil {
 		t.Fatal(err)
 	}
-	bars := map[int64]FlowBar{}
+	bars := make(map[int64]FlowBar, len(restored.Bars))
 	for _, v := range restored.Bars {
-		bars[v.At.Unix()] = v
+		bars[v[0]] = v.flow()
 	}
 	baseline := shortBaseline(bars, restored.From, restored.To, end)
 	output, err := json.Marshal(restored)

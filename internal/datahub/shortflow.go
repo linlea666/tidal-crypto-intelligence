@@ -99,10 +99,10 @@ func shortBaseline(bars map[int64]FlowBar, from, to, asOf time.Time) ShortBaseli
 		b.Coverage = float64(valid) / (to.Sub(from).Minutes() / 5)
 	}
 	b.Valid = b.Coverage >= .95 && b.Dates >= 21
+	// Share bounded scratch across horizons; percentile sorts only scratch.
+	buy, sell, volume := make([]float64, 0, 8640), make([]float64, 0, 8640), make([]float64, 0, 8640)
 	for _, m := range []int{5, 10, 15, 60, 240} {
-		// Bound growth allocations even on a cold JSON/allocator cache.
-		n := max(0, min(8640, int(to.Sub(from)/(5*time.Minute))-m/5+1))
-		buy, sell, volume := make([]float64, 0, n), make([]float64, 0, n), make([]float64, 0, n)
+		buy, sell, volume = buy[:0], sell[:0], volume[:0]
 		for end := from.Add(time.Duration(m) * time.Minute); !end.After(to); end = end.Add(5 * time.Minute) {
 			v, ok := sumBars(bars, end, m/5)
 			if !ok {

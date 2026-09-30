@@ -71,6 +71,11 @@ func TestResourceReplay(t *testing.T) {
 			t.Logf("backfill through %s", at.Format("2006-01-02"))
 		}
 	}
+	t.Log("phase: native one-minute flow overlapping the recent 48h of five-minute history")
+	for at := now.Add(-48 * time.Hour); at.Before(now); at = at.Add(time.Minute) {
+		bucket := at.Truncate(5 * time.Minute)
+		ingest(flow, Observation{Dataset: flow.ID, Source: flow.Source, ObservedAt: &at, FetchedAt: now, Resolution: 60, Quality: "valid", Payload: Payload{Flow: &Flow{Buy: fmt.Sprint((1000000 + bucket.Minute()*10000) / 5), Sell: "198000"}}})
+	}
 	t.Log("phase: 30-day hourly books and production maintenance")
 	seedBaselineReplay(t, h, now, 30, 1000)
 	t.Log("phase: current books, backfill rollups and local readers")

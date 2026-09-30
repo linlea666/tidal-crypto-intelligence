@@ -99,12 +99,21 @@ func (w *Warehouse) shortResume() {
 }
 
 type shortBaselineWork struct {
-	From    time.Time `json:"from"`
-	To      time.Time `json:"to"`
-	Cursor  time.Time `json:"cursor"`
-	AsOf    time.Time `json:"asOf"`
-	Version string    `json:"version"`
-	Bars    []FlowBar `json:"bars"`
+	From    time.Time        `json:"from"`
+	To      time.Time        `json:"to"`
+	Cursor  time.Time        `json:"cursor"`
+	AsOf    time.Time        `json:"asOf"`
+	Version string           `json:"version"`
+	Bars    []shortStoredBar `json:"bars"`
+}
+
+// Compact integer checkpoint: UNIX seconds, buy cents, sell cents. This avoids
+// repeated timestamp strings and field names for 8640 bars without precision loss.
+type shortStoredBar [3]int64
+
+func storeShortBar(b FlowBar) shortStoredBar { return shortStoredBar{b.At.Unix(), b.Buy, b.Sell} }
+func (b shortStoredBar) flow() FlowBar {
+	return FlowBar{At: time.Unix(b[0], 0).UTC(), Buy: b[1], Sell: b[2]}
 }
 
 // One or two days per checkpoint keeps cold-start / historical corrections bounded.
@@ -120,7 +129,7 @@ func (h *Hub) shortBaselineStep(ctx context.Context, now time.Time) error {
 	to := current.Through.Truncate(time.Hour).Add(-time.Hour)
 	from := to.Add(-30 * 24 * time.Hour)
 	id := ID("flow", "BTC", "", "spot")
-	w := shortBaselineWork{Bars: make([]FlowBar, 0, 8640)}
+	w := shortBaselineWork{Bars: make([]shortStoredBar, 0, 8640)}
 	err := h.Store.shortLoad(ctx, "work", ShortFlowRules, &w)
 	if err != nil && err != sql.ErrNoRows {
 		return err
@@ -131,9 +140,9 @@ func (h *Hub) shortBaselineStep(ctx context.Context, now time.Time) error {
 			return nil
 		}
 		if w.Version == version && to.After(w.To) && to.Sub(w.To) <= 24*time.Hour {
-			keep := make([]FlowBar, 0, 8640)
+			keep := make([]shortStoredBar, 0, 8640)
 			for _, b := range w.Bars {
-				if !b.At.Before(from) {
+				if b[0] >= from.Unix() {
 					keep = append(keep, b)
 				}
 			}
@@ -144,7 +153,7 @@ func (h *Hub) shortBaselineStep(ctx context.Context, now time.Time) error {
 		}
 	}
 	if w.To.IsZero() {
-		w = shortBaselineWork{From: from, To: to, Cursor: from, AsOf: now, Version: h.Store.datasetRangeVersion(ctx, id, from, to), Bars: []FlowBar{}}
+		w = shortBaselineWork{From: from, To: to, Cursor: from, AsOf: now, Version: h.Store.datasetRangeVersion(ctx, id, from, to), Bars: []shortStoredBar{}}
 	}
 	end := minTime(w.Cursor.Add(48*time.Hour), w.To)
 	acc := newFlowAccumulator(300)
@@ -157,17 +166,17 @@ func (h *Hub) shortBaselineStep(ctx context.Context, now time.Time) error {
 		return err
 	}
 	for _, b := range acc.finish() {
-		w.Bars = append(w.Bars, b)
+		w.Bars = append(w.Bars, storeShortBar(b))
 	}
-	sort.Slice(w.Bars, func(i, j int) bool { return w.Bars[i].At.Before(w.Bars[j].At) })
+	sort.Slice(w.Bars, func(i, j int) bool { return w.Bars[i][0] < w.Bars[j][0] })
 	if len(w.Bars) > 8640 {
 		return errors.New("短周期基线工作集超限")
 	}
 	w.Cursor = end
 	if w.Cursor.Equal(w.To) {
-		bars := map[int64]FlowBar{}
+		bars := make(map[int64]FlowBar, len(w.Bars))
 		for _, b := range w.Bars {
-			bars[b.At.Unix()] = b
+			bars[b[0]] = b.flow()
 		}
 		b := shortBaseline(bars, w.From, w.To, w.AsOf)
 		if err = h.Store.shortPut(ctx, "baseline", ShortFlowRules, now, b); err != nil {
