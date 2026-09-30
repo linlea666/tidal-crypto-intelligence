@@ -78,7 +78,7 @@ func (h *Hub) recordShortObservation(ctx context.Context, s ShortObservation, no
 	}
 	id := strconv.FormatInt(s.Through.Unix(), 10)
 	var exists int
-	if e := h.Store.research.QueryRowContext(ctx, "SELECT count(*) FROM sf_records WHERE kind='coverage' AND id=?", id).Scan(&exists); e != nil {
+	if e := h.Store.shortDB().QueryRowContext(ctx, "SELECT count(*) FROM sf_records WHERE kind='coverage' AND id=?", id).Scan(&exists); e != nil {
 		return e
 	}
 	if exists > 0 {
@@ -102,7 +102,7 @@ func (h *Hub) recordShortObservation(ctx context.Context, s ShortObservation, no
 			}
 			var event ShortEpisode
 			var raw []byte
-			e := h.Store.research.QueryRowContext(ctx, "SELECT payload FROM sf_records WHERE kind='episode' AND json_extract(payload,'$.direction')=? ORDER BY at DESC LIMIT 1", side).Scan(&raw)
+			e := h.Store.shortDB().QueryRowContext(ctx, "SELECT payload FROM sf_records WHERE kind='episode' AND json_extract(payload,'$.direction')=? ORDER BY at DESC LIMIT 1", side).Scan(&raw)
 			if e != nil && e != sql.ErrNoRows {
 				return e
 			}
@@ -136,7 +136,7 @@ func (h *Hub) recordShortObservation(ctx context.Context, s ShortObservation, no
 			}
 		}
 	}
-	tx, e := h.Store.research.BeginTx(ctx, nil)
+	tx, e := h.Store.shortDB().BeginTx(ctx, nil)
 	if e != nil {
 		return e
 	}
@@ -170,7 +170,7 @@ func (h *Hub) advanceShortTrial(ctx context.Context, t *ShortTrial, now time.Tim
 		return nil
 	}
 	end := minTime(t.Start.Add(4*time.Hour), now.Truncate(5*time.Minute))
-	c, e := h.liquidationCandleSeries(ctx, "BTC", t.Cursor, end, now, true)
+	c, e := liquidationCandleSeries(ctx, h.Store.shortDB(), "BTC", t.Cursor, end, now, true)
 	if e != nil {
 		return e
 	}
@@ -226,7 +226,7 @@ func (h *Hub) advanceShortTrial(ctx context.Context, t *ShortTrial, now time.Tim
 func (h *Hub) shortControls(ctx context.Context, origin, now time.Time) error {
 	// At most the last day is needed to discover fresh formal / price controls.
 	from := maxTime(origin, now.Add(-24*time.Hour))
-	rows, e := h.Store.research.QueryContext(ctx, "SELECT payload FROM documents WHERE kind='signal' AND asset='BTC' AND at>=? AND json_extract(payload,'$.rulesVersion')=? ORDER BY at LIMIT 100", from.Unix(), MultifactorRules)
+	rows, e := h.Store.shortDB().QueryContext(ctx, "SELECT payload FROM documents WHERE kind='signal' AND asset='BTC' AND at>=? AND json_extract(payload,'$.rulesVersion')=? ORDER BY at LIMIT 100", from.Unix(), MultifactorRules)
 	if e != nil {
 		return e
 	}
@@ -253,7 +253,7 @@ func (h *Hub) shortControls(ctx context.Context, origin, now time.Time) error {
 	if e != nil {
 		return e
 	}
-	events, e := h.loadPriceEvents(ctx, "BTC", from, now)
+	events, e := loadPriceEvents(ctx, h.Store.shortDB(), "BTC", from, now)
 	if e != nil {
 		return e
 	}
@@ -271,7 +271,7 @@ func (h *Hub) shortControls(ctx context.Context, origin, now time.Time) error {
 		if e != nil {
 			return e
 		}
-		if _, e = h.Store.research.ExecContext(ctx, "INSERT OR IGNORE INTO sf_records VALUES('control',?,?,?)", v.ID, v.At.Unix(), b); e != nil {
+		if _, e = h.Store.shortDB().ExecContext(ctx, "INSERT OR IGNORE INTO sf_records VALUES('control',?,?,?)", v.ID, v.At.Unix(), b); e != nil {
 			return e
 		}
 	}
@@ -327,13 +327,13 @@ func (h *Hub) shortStudyStep(ctx context.Context, now time.Time) error {
 	if e := h.Store.shortLoad(ctx, "origin", ShortFlowRules, &origin); e != nil {
 		return e
 	}
-	if _, e := h.Store.research.ExecContext(ctx, "DELETE FROM sf_records WHERE kind IN ('coverage','episode','control') AND at<?", now.Add(-30*24*time.Hour).Unix()); e != nil {
+	if _, e := h.Store.shortDB().ExecContext(ctx, "DELETE FROM sf_records WHERE kind IN ('coverage','episode','control') AND at<?", now.Add(-30*24*time.Hour).Unix()); e != nil {
 		return e
 	}
 	if e := h.shortControls(ctx, origin, now); e != nil {
 		return e
 	}
-	rows, e := h.Store.research.QueryContext(ctx, "SELECT kind,payload FROM sf_records WHERE kind IN ('episode','control') AND json_extract(payload,'$.done')=0 ORDER BY json_extract(payload,'$.updatedAt') LIMIT 4")
+	rows, e := h.Store.shortDB().QueryContext(ctx, "SELECT kind,payload FROM sf_records WHERE kind IN ('episode','control') AND json_extract(payload,'$.done')=0 ORDER BY json_extract(payload,'$.updatedAt') LIMIT 4")
 	if e != nil {
 		return e
 	}
@@ -408,7 +408,7 @@ func (h *Hub) buildShortReport(ctx context.Context, origin, now time.Time) error
 	from := maxTime(origin, now.Add(-30*24*time.Hour))
 	r := ShortStudyReport{Rule: ShortFlowRules, Origin: origin, At: now, From: from, Days: now.Sub(origin).Hours() / 24, Groups: []ShortStudyGroup{}, Note: "独立前向观察；5/10分钟不发送邮件。位移从发现后的下一根完整5分钟开盘计算，不含交易成本，不是交易收益。共同事件要求前后4小时≥95%有效观察；行情成熟8小时后比较，未匹配观察最长等待12小时；缺口事件排除，未匹配不等于亏损。每方向≥14天、95%覆盖、30个独立事件后才展示比例；不自动改参。明细保留30天，已知上线前案例不计入。"}
 	coverage := map[int64]bool{}
-	rows, e := h.Store.research.QueryContext(ctx, "SELECT payload FROM sf_records WHERE kind='coverage' AND at>=? ORDER BY at", from.Unix())
+	rows, e := h.Store.shortDB().QueryContext(ctx, "SELECT payload FROM sf_records WHERE kind='coverage' AND at>=? ORDER BY at", from.Unix())
 	if e != nil {
 		return e
 	}
@@ -442,7 +442,7 @@ func (h *Hub) buildShortReport(ctx context.Context, origin, now time.Time) error
 	if r.Expected > 0 {
 		r.Coverage = math.Min(1, float64(r.Observed)/float64(r.Expected))
 	}
-	priceEvents, e := h.loadPriceEvents(ctx, "BTC", from, now)
+	priceEvents, e := loadPriceEvents(ctx, h.Store.shortDB(), "BTC", from, now)
 	if e != nil {
 		return e
 	}
@@ -475,7 +475,7 @@ func (h *Hub) buildShortReport(ctx context.Context, origin, now time.Time) error
 	}
 	// Stream one event at a time; retain compact trials only, never all snapshots.
 	trials := []ShortTrial{}
-	rows, e = h.Store.research.QueryContext(ctx, "SELECT payload FROM sf_records WHERE kind IN ('episode','control') AND at>=? ORDER BY at", from.Unix())
+	rows, e = h.Store.shortDB().QueryContext(ctx, "SELECT payload FROM sf_records WHERE kind IN ('episode','control') AND at>=? ORDER BY at", from.Unix())
 	if e != nil {
 		return e
 	}

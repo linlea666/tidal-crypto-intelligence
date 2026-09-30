@@ -39,10 +39,16 @@ func (w *Warehouse) initResearch() error {
 		w.shortGap(time.Now().UTC(), e)
 	}
 	if e = w.initLiquidationZones(); e != nil {
+		if w.shortResearch != nil {
+			w.shortResearch.Close()
+		}
 		db.Close()
 		return e
 	}
 	if e = w.initVIX(); e != nil {
+		if w.shortResearch != nil {
+			w.shortResearch.Close()
+		}
 		db.Close()
 		return e
 	}
@@ -125,7 +131,11 @@ func (w *Warehouse) researchGap(at time.Time) {
 // FactsAsOf reads the newest version actually available by asOf. Passing a
 // present-day asOf for old market times is association analysis, never a replay.
 func (w *Warehouse) FactsAsOf(ctx context.Context, id string, from, to, asOf time.Time, fn func(Observation) error) error {
-	rows, e := w.research.QueryContext(ctx, `SELECT f.payload FROM facts f WHERE f.dataset=? AND f.ts>=? AND f.ts<? AND f.available<=? AND f.available=(SELECT max(g.available) FROM facts g WHERE g.dataset=f.dataset AND g.ts=f.ts AND g.res=f.res AND g.available<=?) ORDER BY f.ts,f.res`, id, from.Unix(), to.Unix(), asOf.UnixNano(), asOf.UnixNano())
+	return factsAsOf(ctx, w.research, id, from, to, asOf, fn)
+}
+
+func factsAsOf(ctx context.Context, db *sql.DB, id string, from, to, asOf time.Time, fn func(Observation) error) error {
+	rows, e := db.QueryContext(ctx, `SELECT f.payload FROM facts f WHERE f.dataset=? AND f.ts>=? AND f.ts<? AND f.available<=? AND f.available=(SELECT max(g.available) FROM facts g WHERE g.dataset=f.dataset AND g.ts=f.ts AND g.res=f.res AND g.available<=?) ORDER BY f.ts,f.res`, id, from.Unix(), to.Unix(), asOf.UnixNano(), asOf.UnixNano())
 	if e != nil {
 		return e
 	}

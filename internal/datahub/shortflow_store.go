@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
+	"path/filepath"
 	"sort"
 	"time"
 )
@@ -28,12 +30,31 @@ CREATE TRIGGER IF NOT EXISTS sf_removed AFTER DELETE ON sf_records BEGIN UPDATE 
 	now := time.Now().UTC()
 	b, _ := json.Marshal(now)
 	_, err = w.research.Exec("INSERT OR IGNORE INTO sf_records VALUES('origin',?,?,?)", ShortFlowRules, now.Unix(), b)
-	return err
+	if err != nil {
+		return err
+	}
+	// Long formal-history readers occupy the original single-connection pool.
+	// A dedicated, bounded WAL connection isolates short work without changing
+	// existing collectors/readers, the database file, or its page ceiling.
+	u := url.URL{Scheme: "file", Path: filepath.Join(w.root, "research.sqlite")}
+	u.RawQuery = "mode=rw&_pragma=busy_timeout(1500)&_pragma=cache_size(-256)&_pragma=max_page_count(126976)&_pragma=synchronous(NORMAL)"
+	db, err := sql.Open("sqlite", u.String())
+	if err != nil {
+		return err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if err = db.Ping(); err != nil {
+		db.Close()
+		return err
+	}
+	w.shortResearch = db
+	return nil
 }
 
 func (w *Warehouse) shortLoad(ctx context.Context, kind, id string, v any) error {
 	var b []byte
-	if e := w.research.QueryRowContext(ctx, "SELECT payload FROM sf_records WHERE kind=? AND id=?", kind, id).Scan(&b); e != nil {
+	if e := w.shortDB().QueryRowContext(ctx, "SELECT payload FROM sf_records WHERE kind=? AND id=?", kind, id).Scan(&b); e != nil {
 		return e
 	}
 	if len(b) > shortFlowRowLimit || ((kind == "episode" || kind == "control") && len(b) > shortFlowEventLimit) {
@@ -68,7 +89,7 @@ func (w *Warehouse) shortPut(ctx context.Context, kind, id string, at time.Time,
 	if len(b) > shortFlowRowLimit || ((kind == "episode" || kind == "control") && len(b) > shortFlowEventLimit) {
 		return errors.New("短周期研究行超过写入上限")
 	}
-	_, e = w.research.ExecContext(ctx, "INSERT INTO sf_records VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET at=excluded.at,payload=excluded.payload", kind, id, at.Unix(), b)
+	_, e = w.shortDB().ExecContext(ctx, "INSERT INTO sf_records VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET at=excluded.at,payload=excluded.payload", kind, id, at.Unix(), b)
 	return e
 }
 
@@ -139,7 +160,10 @@ func (h *Hub) shortBaselineAt(ctx context.Context, through, now time.Time) error
 		return err
 	}
 	if w.Cursor.Equal(w.To) && !w.To.IsZero() {
-		version := h.Store.datasetRangeVersion(ctx, id, w.From, w.To)
+		version, e := h.Store.shortRangeVersion(ctx, id, w.From, w.To)
+		if e != nil {
+			return e
+		}
 		if w.To.Equal(to) && w.Version == version {
 			return nil
 		}
@@ -151,17 +175,24 @@ func (h *Hub) shortBaselineAt(ctx context.Context, through, now time.Time) error
 				}
 			}
 			w.From, w.To, w.AsOf, w.Bars = from, to, now, keep
-			w.Version = h.Store.datasetRangeVersion(ctx, id, from, to)
+			w.Version, err = h.Store.shortRangeVersion(ctx, id, from, to)
+			if err != nil {
+				return err
+			}
 		} else {
 			w = shortBaselineWork{}
 		}
 	}
 	if w.To.IsZero() {
-		w = shortBaselineWork{From: from, To: to, Cursor: from, AsOf: now, Version: h.Store.datasetRangeVersion(ctx, id, from, to), Bars: []shortStoredBar{}}
+		version, e := h.Store.shortRangeVersion(ctx, id, from, to)
+		if e != nil {
+			return e
+		}
+		w = shortBaselineWork{From: from, To: to, Cursor: from, AsOf: now, Version: version, Bars: []shortStoredBar{}}
 	}
 	end := minTime(w.Cursor.Add(48*time.Hour), w.To)
 	acc := newFlowAccumulator(300)
-	if err = h.Store.FactsAsOf(ctx, id, w.Cursor, end, w.AsOf, func(o Observation) error {
+	if err = factsAsOf(ctx, h.Store.shortDB(), id, w.Cursor, end, w.AsOf, func(o Observation) error {
 		if shortClosedFact(o) {
 			acc.add(o)
 		}
@@ -204,7 +235,7 @@ func (h *Hub) shortInput(ctx context.Context, now time.Time) (map[int64]FlowBar,
 	}
 	acc := newFlowAccumulator(300)
 	available := map[int64]time.Time{}
-	e := h.Store.FactsAsOf(ctx, id, end.Add(-4*time.Hour), end, now, func(o Observation) error {
+	e := factsAsOf(ctx, h.Store.shortDB(), id, end.Add(-4*time.Hour), end, now, func(o Observation) error {
 		if !shortClosedFact(o) {
 			return nil
 		}
@@ -247,7 +278,7 @@ func (h *Hub) shortObservationStep(ctx context.Context, now time.Time) error {
 			baselineErr = h.Store.shortLoad(ctx, "baseline", ShortFlowRules, &baseline)
 		}
 	}
-	candles, ce := h.liquidationCandleSeries(ctx, "BTC", end.Add(-16*time.Hour), end, now, false)
+	candles, ce := liquidationCandleSeries(ctx, h.Store.shortDB(), "BTC", end.Add(-16*time.Hour), end, now, false)
 	if ce != nil {
 		candles = map[int64]Candle{}
 	}
@@ -281,7 +312,7 @@ func (h *Hub) shortObservationStep(ctx context.Context, now time.Time) error {
 
 func (h *Hub) shortZones(ctx context.Context, s *ShortObservation, now time.Time) {
 	var model LiquidationMapSnapshot
-	if h.Store.liquidationLoad(ctx, "state", ID("map", "BTC", "", "futures"), &model) != nil || !model.Complete || model.Available.After(now) || now.Sub(model.Fetched) > 35*time.Minute || model.Quote != "USDT" {
+	if liquidationLoad(ctx, h.Store.shortDB(), "state", ID("map", "BTC", "", "futures"), &model) != nil || !model.Complete || model.Available.After(now) || now.Sub(model.Fetched) > 35*time.Minute || model.Quote != "USDT" {
 		return
 	}
 	pd, _ := h.Dataset(ID("price", "BTC", "Binance", "spot"))
@@ -364,4 +395,18 @@ func (h *Hub) shortFlowWorker(ctx context.Context) {
 		case <-tick.C:
 		}
 	}
+}
+
+// Fall back only if optional initialization failed; bounded contexts still
+// preserve the original service and surface the research gap.
+func (w *Warehouse) shortDB() *sql.DB {
+	if w.shortResearch != nil {
+		return w.shortResearch
+	}
+	return w.research
+}
+func (w *Warehouse) shortRangeVersion(ctx context.Context, id string, from, to time.Time) (string, error) {
+	var n, last int64
+	e := w.shortDB().QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE dataset=? AND ts>=? AND ts<?", id, from.Unix(), to.Unix()).Scan(&n, &last)
+	return fmt.Sprintf("%d/%d", n, last), e
 }

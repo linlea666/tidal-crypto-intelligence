@@ -2,6 +2,7 @@ package datahub
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"time"
 )
@@ -61,7 +62,11 @@ func (h *Hub) insertPriceEvent(ctx context.Context, a string, ev PriceEpisode) e
 	return e
 }
 func (h *Hub) loadPriceEvents(ctx context.Context, a string, from, to time.Time) ([]PriceEpisode, error) {
-	rows, e := h.Store.research.QueryContext(ctx, "SELECT payload FROM documents WHERE kind='price-event' AND asset=? AND at>=? AND at<? ORDER BY at", a, from.Unix(), to.Unix())
+	return loadPriceEvents(ctx, h.Store.research, a, from, to)
+}
+
+func loadPriceEvents(ctx context.Context, db *sql.DB, a string, from, to time.Time) ([]PriceEpisode, error) {
+	rows, e := db.QueryContext(ctx, "SELECT payload FROM documents WHERE kind='price-event' AND asset=? AND at>=? AND at<? ORDER BY at", a, from.Unix(), to.Unix())
 	if e != nil {
 		return nil, e
 	}
