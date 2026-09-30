@@ -506,3 +506,68 @@ func TestShortHourGapDoesNotEraseFiveMinuteHint(t *testing.T) {
 		t.Fatal("common comparison accepted missing longer window")
 	}
 }
+
+func TestShortHourlyRolloverDoesNotCreateRoutineCoverageGap(t *testing.T) {
+	end := time.Now().UTC().Truncate(time.Hour)
+	h := shortTestHub(t, end)
+	ctx := context.Background()
+	bars, _ := shortFixture(end)
+	fd, _ := h.Dataset(ID("flow", "BTC", "", "spot"))
+	for _, bar := range bars {
+		at := bar.At
+		if _, e := h.Store.Ingest(fd, Observation{Dataset: fd.ID, Source: fd.Source, ObservedAt: &at, FetchedAt: end, Resolution: 300, Quality: "valid", Payload: Payload{Flow: &Flow{Buy: fmt.Sprint(bar.Buy / 100), Sell: fmt.Sprint(bar.Sell / 100)}}}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	oldTo := end.Add(-2 * time.Hour)
+	from := oldTo.Add(-30 * 24 * time.Hour)
+	work := shortBaselineWork{From: from, To: oldTo, Cursor: oldTo, AsOf: end.Add(-10 * time.Minute), Version: h.Store.datasetRangeVersion(ctx, fd.ID, from, oldTo)}
+	baselineBars := make(map[int64]FlowBar, 8640)
+	for at := from; at.Before(oldTo); at = at.Add(5 * time.Minute) {
+		b := FlowBar{At: at, Buy: 200000000, Sell: 100000000}
+		work.Bars = append(work.Bars, storeShortBar(b))
+		baselineBars[at.Unix()] = b
+	}
+	base := shortBaseline(baselineBars, from, oldTo, end.Add(-10*time.Minute))
+	if e := h.Store.shortPut(ctx, "work", ShortFlowRules, end, work); e != nil {
+		t.Fatal(e)
+	}
+	if e := h.Store.shortPut(ctx, "baseline", ShortFlowRules, end, base); e != nil {
+		t.Fatal(e)
+	}
+	step, cancel := context.WithTimeout(ctx, 1800*time.Millisecond)
+	defer cancel()
+	if e := h.shortObservationStep(step, end.Add(time.Minute)); e != nil {
+		t.Fatal(e)
+	}
+	s := h.shortObservationView(end.Add(time.Minute)).(ShortObservation)
+	if !s.Baseline.Valid || !s.Baseline.To.Equal(end.Add(-time.Hour)) {
+		t.Fatal("hourly baseline stale at first enrollment", s.Baseline)
+	}
+	var cov ShortCoverage
+	if e := h.Store.shortLoad(ctx, "coverage", fmt.Sprint(end.Unix()), &cov); e != nil {
+		t.Fatal(e)
+	}
+	if !cov.Valid {
+		t.Fatal("phase ordering created a routine hourly coverage gap")
+	}
+}
+
+func TestShortFinalCandleGraceRemainsPending(t *testing.T) {
+	at := time.Now().UTC().Truncate(5 * time.Minute)
+	h := shortTestHub(t, at)
+	ctx := context.Background()
+	tr := newShortTrial("grace", "short-5", "buy", at, at, nil)
+	if e := h.advanceShortTrial(ctx, tr, tr.Start.Add(4*time.Hour+10*time.Minute)); e != nil {
+		t.Fatal(e)
+	}
+	if tr.Done || tr.Outcomes[3].State != "pending" {
+		t.Fatal("missing final candle prematurely completed")
+	}
+	if e := h.advanceShortTrial(ctx, tr, tr.Start.Add(4*time.Hour+20*time.Minute)); e != nil {
+		t.Fatal(e)
+	}
+	if !tr.Done || tr.Outcomes[3].State != "incomplete" {
+		t.Fatal("mature gap not finalized")
+	}
+}

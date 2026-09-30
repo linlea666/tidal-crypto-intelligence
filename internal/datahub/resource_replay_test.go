@@ -164,7 +164,9 @@ func TestResourceReplay(t *testing.T) {
 		t.Fatal("short baseline cold checkpoint", e)
 	}
 	for i := 1; i <= 8; i++ {
-		at := now.Add(-time.Duration(i*4) * time.Hour)
+		// All trial windows must already be past the 20-minute late-candle
+		// allowance, independently of the runner's minute within the hour.
+		at := now.Add(-time.Duration(i*4+1) * time.Hour)
 		tr := newShortTrial(fmt.Sprint("replay-short-", i), "short-5", "buy", at, at, nil)
 		v := ShortEpisode{ID: tr.ID, Direction: "buy", At: at, Updated: at, Trials: map[string]*ShortTrial{"5": tr}}
 		if e = h.Store.shortPut(ctx, "episode", v.ID, at, v); e != nil {

@@ -126,7 +126,11 @@ func (h *Hub) shortBaselineStep(ctx context.Context, now time.Time) error {
 	if current.Through.IsZero() {
 		return nil
 	}
-	to := current.Through.Truncate(time.Hour).Add(-time.Hour)
+	return h.shortBaselineAt(ctx, current.Through, now)
+}
+
+func (h *Hub) shortBaselineAt(ctx context.Context, through, now time.Time) error {
+	to := through.Truncate(time.Hour).Add(-time.Hour)
 	from := to.Add(-30 * 24 * time.Hour)
 	id := ID("flow", "BTC", "", "spot")
 	w := shortBaselineWork{Bars: make([]shortStoredBar, 0, 8640)}
@@ -232,6 +236,17 @@ func (h *Hub) shortObservationStep(ctx context.Context, now time.Time) error {
 	}
 	var baseline ShortBaseline
 	baselineErr := h.Store.shortLoad(ctx, "baseline", ShortFlowRules, &baseline)
+	// Resolve an ordinary hourly rollover before first-visible enrollment.
+	// Otherwise the worker phase order would invalidate one of twelve windows
+	// every hour and make the 95% coverage gate unattainable. Cold backfill stays
+	// checkpointed in its own phase; this shares the existing two-second budget.
+	to := end.Truncate(time.Hour).Add(-time.Hour)
+	if baselineErr == nil && to.After(baseline.To) && to.Sub(baseline.To) <= time.Hour {
+		baselineErr = h.shortBaselineAt(ctx, end, now)
+		if baselineErr == nil {
+			baselineErr = h.Store.shortLoad(ctx, "baseline", ShortFlowRules, &baseline)
+		}
+	}
 	candles, ce := h.liquidationCandleSeries(ctx, "BTC", end.Add(-16*time.Hour), end, now, false)
 	if ce != nil {
 		candles = map[int64]Candle{}
