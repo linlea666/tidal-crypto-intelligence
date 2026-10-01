@@ -89,6 +89,10 @@ CREATE TABLE IF NOT EXISTS rollups(dataset TEXT,res INTEGER,through_ts INTEGER,P
 		db.Close()
 		return nil, e
 	}
+	if e = w.initOrderZoneSamples(); e != nil {
+		db.Close()
+		return nil, e
+	}
 	if e = w.initLiquidity(); e != nil {
 		db.Close()
 		return nil, e
@@ -356,6 +360,9 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 		}
 		w.putHot(d.ID, o)
 		w.recordLiquidationMap(d, o)
+		if err := w.recordOrderZoneSample(d, o); err != nil {
+			return false, err
+		}
 	}
 	if d.Kind == "price" || d.Kind == "wallet" || d.Kind == "large-history" || d.Kind == "large" {
 		return changed, nil
@@ -434,6 +441,11 @@ func targets(d Dataset) []int {
 // Visit uses a separate read connection and decodes one row at a time. No hot-cache
 // lock or writer lock is held while doing history IO or decompressing.
 func (w *Warehouse) Visit(ctx context.Context, d Dataset, res int, from, to time.Time, fn func(Observation) error) error {
+	return w.visitSampled(ctx, d, res, from, to, 0, fn)
+}
+
+// Sampling selects the last actual stored row, without averaging stock across time.
+func (w *Warehouse) visitSampled(ctx context.Context, d Dataset, res int, from, to time.Time, sample int, fn func(Observation) error) error {
 	dir := filepath.Dir(w.partition(res, from, d.Kind == "whales"))
 	paths, e := filepath.Glob(filepath.Join(dir, "*.sqlite"))
 	if e != nil {
@@ -450,7 +462,13 @@ func (w *Warehouse) Visit(ctx context.Context, d Dataset, res int, from, to time
 			return e
 		}
 		db.SetMaxOpenConns(1)
-		rows, e := db.QueryContext(ctx, "SELECT payload FROM records WHERE dataset=? AND ts>=? AND ts<? ORDER BY ts", d.ID, from.Unix(), to.Unix())
+		query := "SELECT payload FROM records WHERE dataset=? AND ts>=? AND ts<? ORDER BY ts"
+		args := []any{d.ID, from.Unix(), to.Unix()}
+		if sample > res {
+			query = "SELECT payload FROM records WHERE dataset=? AND ts IN (SELECT max(ts) FROM records WHERE dataset=? AND ts>=? AND ts<? GROUP BY ts/?) ORDER BY ts"
+			args = []any{d.ID, d.ID, from.Unix(), to.Unix(), sample}
+		}
+		rows, e := db.QueryContext(ctx, query, args...)
 		if e != nil {
 			db.Close()
 			return e

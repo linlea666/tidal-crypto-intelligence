@@ -307,13 +307,15 @@ func (h *Hub) WhalesView(ctx context.Context, a, side, order string, limit int, 
 	return map[string]any{"items": items[:min(limit, len(items))], "count": len(items), "buckets": buckets, "monitor": monitor, "at": now, "longCents": optionalAmount(long, fresh > 0), "shortCents": optionalAmount(short, fresh > 0), "nearLiquidationCents": optionalAmount(near, fresh > 0), "hasData": fresh > 0, "meta": metadata(d, o, ok), "distributionScope": "全部有效已覆盖大仓，不受榜单前50/100及方向筛选影响"}, nil
 }
 func (h *Hub) LargeView(a string, history bool) any {
+	return h.largeViewAt(a, history, time.Now())
+}
+func (h *Hub) largeViewAt(a string, history bool, now time.Time) any {
 	kind := "large"
 	if history {
 		kind = "large-history"
 	}
 	items := []map[string]any{}
 	sources := []map[string]any{}
-	now := time.Now()
 	for _, d := range Registry() {
 		if d.Kind != kind || d.Asset != a {
 			continue
@@ -428,6 +430,7 @@ func (h *Hub) HistoryView(ctx context.Context, a string, hours int, price, step,
 				}
 			}
 			book := o.Payload.Book
+			contributes := false
 			bid, ask := best(book)
 			r := num(rate)
 			if price > 0 && ((price >= book.Low*r && price+step <= bid*r+step) || (price >= ask*r-step && price+step <= book.High*r+step)) {
@@ -452,8 +455,12 @@ func (h *Hub) HistoryView(ctx context.Context, a string, hours int, price, step,
 						z.Side = side
 						z.USD += usd
 						p.zones[k] = z
+						contributes = true
 					}
 				}
+			}
+			if heat && price == 0 && contributes {
+				p.covered++
 			}
 			return nil
 		})
@@ -557,6 +564,10 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 			return h.WalletTrends(ctx, a)
 		case "etf":
 			return h.ETFView(ctx, a)
+		case "large-order-zones":
+			return h.orderZones(ctx, a, q, time.Now().UTC())
+		case "large-order-zones/history":
+			return h.orderZoneHistory(ctx, a, q, time.Now().UTC())
 		case "large-orders":
 			return h.LargeBoard(ctx, a, q)
 		case "liquidations":

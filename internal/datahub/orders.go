@@ -106,6 +106,27 @@ func (w *Warehouse) ingestOrders(d Dataset, o Observation) error {
 	if err = tx.QueryRow("SELECT bytes FROM order_storage WHERE id=1").Scan(&bytes); err != nil {
 		return err
 	}
+	// Existing lifecycle facts have priority over optional observation history.
+	// Reclaim only new history before applying the established ledger limit.
+	var incoming int64
+	for _, r := range o.Payload.Large {
+		b, _ := json.Marshal(r)
+		incoming += int64(4*len(b) + 2048)
+	}
+	if incoming > OrderHistoryLimit {
+		incoming = OrderHistoryLimit
+	}
+	if bytes+incoming >= OrderHistoryLimit {
+		if _, err = trimOrderZoneSamples(tx, 0, orderZoneLimit, OrderHistoryLimit-incoming); err != nil {
+			return err
+		}
+		if err = tx.QueryRow("SELECT bytes FROM order_storage WHERE id=1").Scan(&bytes); err != nil {
+			return err
+		}
+		w.mu.RLock()
+		paused = w.status.Paused || bytes >= OrderHistoryLimit
+		w.mu.RUnlock()
+	}
 	if paused || bytes >= OrderHistoryLimit {
 		if _, err = tx.Exec("INSERT OR IGNORE INTO order_gaps VALUES(?,?)", d.ID, o.FetchedAt.Truncate(time.Hour).Unix()); err != nil {
 			return err
@@ -321,8 +342,11 @@ ON CONFLICT(dataset,side,step,ts) DO UPDATE SET payload=excluded.payload`, cut)
 			return err
 		}
 	}
+	if _, err = tx.ExecContext(ctx, "DELETE FROM order_zone_samples WHERE ts<?", now.Add(-7*24*time.Hour).UnixMilli()); err != nil {
+		return err
+	}
 	var bytes int64
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT sum(length(payload)+length(k)+length(order_key)+128) FROM order_events),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM tracked_orders),0)+coalesce((SELECT sum(length(payload)+64) FROM order_hours),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM liquidity_events),0)+coalesce((SELECT sum(length(payload)+length(dataset)+128) FROM liquidity_hours),0)`).Scan(&bytes); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT sum(length(payload)+length(k)+length(order_key)+128) FROM order_events),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM tracked_orders),0)+coalesce((SELECT sum(length(payload)+64) FROM order_hours),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM liquidity_events),0)+coalesce((SELECT sum(length(payload)+length(dataset)+128) FROM liquidity_hours),0)+coalesce((SELECT bytes FROM order_zone_storage WHERE id=1),0)`).Scan(&bytes); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
