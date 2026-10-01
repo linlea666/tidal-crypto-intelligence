@@ -898,8 +898,7 @@ function ZoneHistory({
           gridIndex: 1,
           data: centers.flatMap((c) => [`${c}|买`, `${c}|卖`]),
           axisLabel: {
-            formatter: (v: string) =>
-              price(+v.split("|")[0], 0) + " " + v.split("|")[1],
+            formatter: (v: string) => price(+v.split("|")[0], 0),
           },
         },
       ],
