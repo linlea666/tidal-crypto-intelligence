@@ -272,8 +272,8 @@ export function App() {
           <span
             className={`status-dot ${isVIX || validVenues.size < 5 || stale ? "warn" : ""}`}
           />
-          <span>{isVIX ? "VIX · 延时数据" : stale ? "数据已过期" : `${validVenues.size}/5 家现货`}</span>
-          {!isVIX && <span className="desktop-only">USD 实时换算</span>}
+          <span>{isVIX ? "VIX · 延时数据" : view === "large-orders" ? "现货大单 · 独立覆盖" : stale ? "数据已过期" : `${validVenues.size}/5 家现货`}</span>
+          {!isVIX && view !== "large-orders" && <span className="desktop-only">USD 实时换算</span>}
           <time>
             {new Date(clockNow).toLocaleDateString("zh-CN", {
               month: "2-digit",
@@ -316,7 +316,7 @@ export function App() {
                 )[view] ?? "现货买卖墙"}
               </h1>
               {!isVIX && <><span className="asset-label">{asset} / 美元</span>
-              <strong className="headline-price">
+              <strong className="headline-price" hidden={view === "large-orders"}>
                 {frame?.price ? "$" + price(frame.price) : "等待行情"}
               </strong>
               <div className="segmented asset-switch">
@@ -336,7 +336,7 @@ export function App() {
               )}
             </div>
             <p className="subtitle">
-              {isVIX ? "观察市场恐慌，达到自定阈值时邮件提醒" : view === "liquidity"
+              {isVIX ? "观察市场恐慌，达到自定阈值时邮件提醒" : view === "large-orders" ? "看清买卖集中价位，逐层核对来源与成交证据" : view === "liquidity"
                 ? "柱子越长，当前挂单金额越大"
                 : view === "whales"
                   ? "看清已监控大仓位的均价与动态清算位置"
@@ -350,13 +350,13 @@ export function App() {
             </p>
           </div>
         </section>
-        {!isVIX && (error || stale) && (
+        {!isVIX && view !== "large-orders" && (error || stale) && (
           <div className="notice danger">
             <WarningCircle size={18} />
             {error || "实时连接已中断，当前数字为最后一次有效观察。"}
           </div>
         )}
-        {!isVIX && !fixture && frame && valid.length < frame.coverage.length && (
+        {!isVIX && view !== "large-orders" && !fixture && frame && valid.length < frame.coverage.length && (
           <div className="notice">
             <WarningCircle size={17} />
             {valid.length}/{frame.coverage.length}{" "}

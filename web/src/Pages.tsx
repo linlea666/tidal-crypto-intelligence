@@ -1,5 +1,5 @@
 import { LiquidationPage } from "./Liquidations";
-import { LargeOrderBoard } from "./LargeOrders";
+import { LargeOrderZones } from "./LargeOrderZones";
 import { ActivityPage } from "./Activity";
 import { ETFPage } from "./Research";
 import { VIXPage, vixStatuses } from "./VIX";
@@ -275,7 +275,7 @@ function Backfill({
 }
 export function MarketPages(p: Props) {
   if (p.view === "vix") return <VIXPage />;
-  if(p.view==="large-orders")return <LargeOrderBoard key={p.asset} asset={p.asset}/>;
+  if(p.view==="large-orders")return <LargeOrderZones key={p.asset} asset={p.asset}/>;
   if (p.view === "etf") return <ETFPage key={p.asset} asset={p.asset}/>;
   if (p.view === "activity")
     return <ActivityPage key={p.asset} asset={p.asset} />;

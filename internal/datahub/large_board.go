@@ -246,7 +246,7 @@ func (h *Hub) reconcileOrderRows(ctx context.Context, a string, all []any, now t
 	}
 	for _, raw := range all {
 		r := raw.(map[string]any)
-		expires, _ := time.Parse(time.RFC3339Nano, str(r["expiresAt"]))
+		expires := orderViewTime(r["expiresAt"])
 		r["presenceState"], r["presenceNote"] = "observed", "截至所选来源快照仍有记录"
 		if expires.IsZero() || now.After(expires) {
 			r["valid"] = false
@@ -257,7 +257,7 @@ func (h *Hub) reconcileOrderRows(ctx context.Context, a string, all []any, now t
 			continue
 		}
 		o, ok := latest[parts[0]]
-		fetched, _ := time.Parse(time.RFC3339Nano, str(r["fetchedAt"]))
+		fetched := orderViewTime(r["fetchedAt"])
 		if ok && o.FetchedAt.After(fetched) {
 			r["checkedAt"] = o.FetchedAt
 			if n, found := identities[parts[0]][str(r["id"])]; found {
@@ -303,4 +303,18 @@ func (h *Hub) largeSourceVersion(a string) string {
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, ";")
+}
+
+// Facts are native times before encoding and RFC3339 strings in frozen views.
+func orderViewTime(v any) time.Time {
+	switch t := v.(type) {
+	case time.Time:
+		return t
+	case *time.Time:
+		if t != nil {
+			return *t
+		}
+	}
+	t, _ := time.Parse(time.RFC3339Nano, str(v))
+	return t
 }
