@@ -125,13 +125,16 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 		return out, err
 	}
 	type preparedPrice struct {
-		value  decimal.Decimal
-		center float64
-		inside bool
+		value        decimal.Decimal
+		center       float64
+		inside       bool
+		lastQuantity string
+		quantity     decimal.Decimal
+		cents        int64
 	}
 	type priceCache struct {
 		rate   string
-		values map[string]preparedPrice
+		values map[string]*preparedPrice
 	}
 	caches := map[string]*priceCache{}
 	stepDecimal := decimal.NewFromFloat(step)
@@ -141,6 +144,7 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 		approx float64
 	}
 	nativePrices := map[string]nativePrice{}
+	quantities := map[string]decimal.Decimal{}
 	frames := map[int64]map[string]zoneHistorySlice{}
 	retained := 0
 	consume := func(d Dataset, o Observation, at time.Time, rate string, fxAt *time.Time, approx bool) error {
@@ -166,7 +170,7 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 		s := zoneHistorySlice{source: zoneHistorySource{Venue: d.Venue, At: at, Partial: o.Quality != "valid", FXAt: fxAt, HourlyFX: approx}, cells: map[zoneHistoryKey]zoneHistoryCell{}}
 		cache := caches[d.Venue]
 		if cache == nil || cache.rate != rate {
-			cache = &priceCache{rate: rate, values: map[string]preparedPrice{}}
+			cache = &priceCache{rate: rate, values: map[string]*preparedPrice{}}
 			caches[d.Venue] = cache
 		}
 		rd := dec(rate)
@@ -184,7 +188,7 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 				pd := native.value.Mul(rd)
 				lp := native.approx * rateFloat
 				center := historyOrderCenter(pd, lp, step, stepDecimal, half)
-				pp = preparedPrice{pd, center, math.Abs(lp-p)/p*100 <= span}
+				pp = &preparedPrice{value: pd, center: center, inside: math.Abs(lp-p)/p*100 <= span}
 				if len(cache.values) < 8192 {
 					cache.values[raw] = pp
 				}
@@ -193,12 +197,24 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 				return
 			}
 			k := zoneHistoryKey{pp.center, side}
-			q := dec(qty)
+			// Unchanged price/quantity/FX tuples have the same exact cents.
+			// Keep only the last quantity per bounded price cache entry.
+			if pp.lastQuantity != qty {
+				q, exists := quantities[qty]
+				if !exists {
+					q = dec(qty)
+					if len(quantities) < 8192 {
+						quantities[qty] = q
+					}
+				}
+				pp.lastQuantity, pp.quantity = qty, q
+				pp.cents = moneyDecimal(pp.value.Mul(q))
+			}
 			c := s.cells[k]
 			c.center = pp.center
 			c.side = side
-			c.usd += moneyDecimal(pp.value.Mul(q))
-			c.quantity = c.quantity.Add(q)
+			c.usd += pp.cents
+			c.quantity = c.quantity.Add(pp.quantity)
 			s.cells[k] = c
 		}
 

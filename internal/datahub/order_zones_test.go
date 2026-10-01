@@ -432,3 +432,43 @@ func TestOrderZoneFastIndexPreservesExactBoundaries(t *testing.T) {
 		t.Fatal("half-open boundary rounded", g)
 	}
 }
+
+func TestOrderZoneHistoryCachedAmountsFollowQuantityAndFX(t *testing.T) {
+	h := zoneHub(t)
+	now := time.Now().UTC()
+	zonePrice(t, h, "BTC", "1", "85000", now)
+	fd, _ := h.Dataset("fx.usd.kraken")
+	bd, _ := h.Dataset(ID("book", "BTC", "Binance", "spot"))
+	type want struct{ quantity, rate string }
+	expected := map[int64]want{}
+	for i, x := range []want{{"1.25", "1"}, {"2.75", "1"}, {"2.75", "1.002"}, {"1.25", "0.9995"}} {
+		at := now.Truncate(30 * time.Minute).Add(time.Duration(i-6) * 30 * time.Minute)
+		zoneIngest(t, h, fd, Observation{Dataset: fd.ID, ObservedAt: &at, FetchedAt: now, Resolution: 60, Quality: "valid", Payload: Payload{Rates: []Rate{{Quote: "USDT", USD: x.rate}}}})
+		zoneIngest(t, h, bd, Observation{Dataset: bd.ID, ObservedAt: &at, FetchedAt: now, Resolution: 300, Quality: "valid", Payload: Payload{Book: &Book{Low: 81000, High: 89000, Bids: []Level{{Price: "82000", Quantity: x.quantity}}, Asks: []Level{{Price: "88000", Quantity: "3"}}}}})
+		expected[at.Unix()] = x
+	}
+	hist, e := h.orderZoneHistory(context.Background(), "BTC", url.Values{"period": {"24h"}}, now)
+	if e != nil {
+		t.Fatal(e)
+	}
+	seen := 0
+	for _, p := range hist.Points {
+		x, ok := expected[p.Time]
+		if !ok {
+			continue
+		}
+		for _, c := range p.Cells {
+			if c[1].(int) != 0 {
+				continue
+			}
+			seen++
+			dollarPrice := multiply("82000", x.rate)
+			if c[0].(float64) != orderZoneCenter(dollarPrice, 250) || c[2].(int64) != money(multiply(dollarPrice, x.quantity)) || c[3].(string) != x.quantity {
+				t.Fatalf("stale cached value: %v, want %+v", c, x)
+			}
+		}
+	}
+	if seen != len(expected) {
+		t.Fatalf("observations %d != %d", seen, len(expected))
+	}
+}
