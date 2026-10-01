@@ -445,7 +445,46 @@ func (w *Warehouse) Visit(ctx context.Context, d Dataset, res int, from, to time
 }
 
 // Sampling selects the last actual stored row, without averaging stock across time.
+// Sampled books use one bounded read/decode worker to overlap decompression
+// with exact aggregation. The existing Visit path stays synchronous.
 func (w *Warehouse) visitSampled(ctx context.Context, d Dataset, res int, from, to time.Time, sample int, fn func(Observation) error) error {
+	if sample <= 0 || d.Kind != "book" {
+		return w.visitSampledRows(ctx, d, res, from, to, sample, fn)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// At most one queued observation plus the producer/consumer frames. Every
+	// observation owns its slices; cancellation joins the worker before return.
+	observations := make(chan Observation, 1)
+	done := make(chan error, 1)
+	go func() {
+		err := w.visitSampledRows(ctx, d, res, from, to, sample, func(o Observation) error {
+			select {
+			case observations <- o:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+		close(observations)
+		done <- err
+	}()
+	for o := range observations {
+		if err := ctx.Err(); err != nil {
+			cancel()
+			<-done
+			return err
+		}
+		if err := fn(o); err != nil {
+			cancel()
+			<-done
+			return err
+		}
+	}
+	return <-done
+}
+
+func (w *Warehouse) visitSampledRows(ctx context.Context, d Dataset, res int, from, to time.Time, sample int, fn func(Observation) error) error {
 	dir := filepath.Dir(w.partition(res, from, d.Kind == "whales"))
 	paths, e := filepath.Glob(filepath.Join(dir, "*.sqlite"))
 	if e != nil {

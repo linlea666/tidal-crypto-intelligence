@@ -43,6 +43,9 @@ func TestOrderZoneHistoryResource(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if v.CoveredSlots < 335 {
+		t.Fatalf("incomplete stress fixture: %d covered slots", v.CoveredSlots)
+	}
 	if time.Since(start) > 8*time.Second {
 		t.Fatal("production query deadline exceeded")
 	}

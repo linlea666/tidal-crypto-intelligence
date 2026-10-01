@@ -472,3 +472,36 @@ func TestOrderZoneHistoryCachedAmountsFollowQuantityAndFX(t *testing.T) {
 		t.Fatalf("observations %d != %d", seen, len(expected))
 	}
 }
+
+func TestOrderZoneSampledReaderOwnsFramesAndStops(t *testing.T) {
+	h := zoneHub(t)
+	d, _ := h.Dataset(ID("book", "BTC", "Coinbase", "spot"))
+	now := time.Now().UTC().Truncate(5 * time.Minute)
+	for i := 0; i < 5; i++ {
+		at := now.Add(time.Duration(i-6) * 5 * time.Minute)
+		o := Observation{Dataset: d.ID, ObservedAt: &at, FetchedAt: now, Resolution: 300, Quality: "valid", Payload: Payload{Book: &Book{Bids: []Level{{Price: "82000", Quantity: fmt.Sprint(i + 1)}}}}}
+		if i == 2 {
+			o.Payload.Book = nil
+			o.Quality = "missing"
+		}
+		zoneIngest(t, h, d, o)
+	}
+	var got []Observation
+	if e := h.Store.visitSampled(context.Background(), d, 300, now.Add(-time.Hour), now, 300, func(o Observation) error { got = append(got, o); return nil }); e != nil {
+		t.Fatal(e)
+	}
+	if len(got) != 5 || got[0].Payload.Book.Bids[0].Quantity != "1" || got[2].Payload.Book != nil || got[4].Payload.Book.Bids[0].Quantity != "5" {
+		t.Fatal("retained frames were overwritten or missing data carried forward")
+	}
+	stop := fmt.Errorf("stop after first frame")
+	calls := 0
+	e := h.Store.visitSampled(context.Background(), d, 300, now.Add(-time.Hour), now, 300, func(o Observation) error { calls++; return stop })
+	if e != stop || calls != 1 {
+		t.Fatalf("callback after stop: %v / %d", e, calls)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if e = h.Store.visitSampled(ctx, d, 300, now.Add(-time.Hour), now, 300, func(Observation) error { t.Fatal("callback after cancellation"); return nil }); e == nil {
+		t.Fatal("cancel ignored")
+	}
+}
