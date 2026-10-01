@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/shopspring/decimal"
 )
 
 // Compact cells keep the bounded historical response below the shared view cache
@@ -70,16 +72,20 @@ type orderZoneHistoryView struct {
 	CapacityGapAt  *time.Time          `json:"capacityGapAt"`
 	Note           string              `json:"note"`
 }
+type zoneHistoryKey struct {
+	center float64
+	side   string
+}
 type zoneHistoryCell struct {
 	center   float64
 	side     string
 	usd      int64
-	quantity string
+	quantity decimal.Decimal
 	mask     int
 }
 type zoneHistorySlice struct {
 	source zoneHistorySource
-	cells  map[string]zoneHistoryCell
+	cells  map[zoneHistoryKey]zoneHistoryCell
 }
 
 func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now time.Time) (orderZoneHistoryView, error) {
@@ -118,6 +124,23 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 	if err != nil {
 		return out, err
 	}
+	type preparedPrice struct {
+		value  decimal.Decimal
+		center float64
+		inside bool
+	}
+	type priceCache struct {
+		rate   string
+		values map[string]preparedPrice
+	}
+	caches := map[string]*priceCache{}
+	stepDecimal := decimal.NewFromFloat(step)
+	half := decimal.NewFromFloat(step / 2)
+	type nativePrice struct {
+		value  decimal.Decimal
+		approx float64
+	}
+	nativePrices := map[string]nativePrice{}
 	frames := map[int64]map[string]zoneHistorySlice{}
 	retained := 0
 	consume := func(d Dataset, o Observation, at time.Time, rate string, fxAt *time.Time, approx bool) error {
@@ -140,22 +163,45 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 			}
 			retained -= len(old.cells)
 		}
-		s := zoneHistorySlice{source: zoneHistorySource{Venue: d.Venue, At: at, Partial: o.Quality != "valid", FXAt: fxAt, HourlyFX: approx}, cells: map[string]zoneHistoryCell{}}
+		s := zoneHistorySlice{source: zoneHistorySource{Venue: d.Venue, At: at, Partial: o.Quality != "valid", FXAt: fxAt, HourlyFX: approx}, cells: map[zoneHistoryKey]zoneHistoryCell{}}
+		cache := caches[d.Venue]
+		if cache == nil || cache.rate != rate {
+			cache = &priceCache{rate: rate, values: map[string]preparedPrice{}}
+			caches[d.Venue] = cache
+		}
+		rd := dec(rate)
+		rateFloat := num(rate)
 		add := func(side, raw, qty string) {
-			price := multiply(raw, rate)
-			lp := num(price)
-			if math.Abs(lp-p)/p*100 > span {
+			pp, exists := cache.values[raw]
+			if !exists {
+				native, exists := nativePrices[raw]
+				if !exists {
+					native = nativePrice{dec(raw), num(raw)}
+					if len(nativePrices) < 8192 {
+						nativePrices[raw] = native
+					}
+				}
+				pd := native.value.Mul(rd)
+				lp := native.approx * rateFloat
+				center := historyOrderCenter(pd, lp, step, stepDecimal, half)
+				pp = preparedPrice{pd, center, math.Abs(lp-p)/p*100 <= span}
+				if len(cache.values) < 8192 {
+					cache.values[raw] = pp
+				}
+			}
+			if !pp.inside {
 				return
 			}
-			center := orderZoneCenter(price, step)
-			k := orderZoneID(side, center)
+			k := zoneHistoryKey{pp.center, side}
+			q := dec(qty)
 			c := s.cells[k]
-			c.center = center
+			c.center = pp.center
 			c.side = side
-			c.usd += money(multiply(price, qty))
-			c.quantity = dec(c.quantity).Add(dec(qty)).String()
+			c.usd += moneyDecimal(pp.value.Mul(q))
+			c.quantity = c.quantity.Add(q)
 			s.cells[k] = c
 		}
+
 		if layer == "book" {
 			if b := o.Payload.Book; b != nil {
 				s.source.Low = b.Low * num(rate)
@@ -265,7 +311,7 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 	first := out.From.Unix() / int64(display) * int64(display)
 	for t := first; t <= now.Unix()/int64(display)*int64(display); t += int64(display) {
 		point := zoneHistoryPoint{Time: t, Cells: [][]any{}, Sources: []zoneHistorySource{}}
-		cells := map[string]zoneHistoryCell{}
+		cells := map[zoneHistoryKey]zoneHistoryCell{}
 		slices := frames[t]
 		for i, v := range out.Venues {
 			s, exists := slices[v]
@@ -278,7 +324,7 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 				sum.center = c.center
 				sum.side = c.side
 				sum.usd += c.usd
-				sum.quantity = dec(sum.quantity).Add(dec(c.quantity)).String()
+				sum.quantity = sum.quantity.Add(c.quantity)
 				sum.mask |= 1 << i
 				cells[k] = sum
 			}
@@ -292,11 +338,16 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 		}
 		out.ExpectedSlots++
 		out.Partial = out.Partial || point.Partial
-		keys := []string{}
+		keys := []zoneHistoryKey{}
 		for k := range cells {
 			keys = append(keys, k)
 		}
-		sort.Strings(keys)
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].center == keys[j].center {
+				return keys[i].side < keys[j].side
+			}
+			return keys[i].center < keys[j].center
+		})
 		for _, k := range keys {
 			c := cells[k]
 			coverage := 0
@@ -314,7 +365,7 @@ func (h *Hub) orderZoneHistory(ctx context.Context, a string, q url.Values, now 
 			if c.side == "ask" {
 				side = 1
 			}
-			point.Cells = append(point.Cells, []any{c.center, side, c.usd, c.quantity, c.mask, coverage})
+			point.Cells = append(point.Cells, []any{c.center, side, c.usd, c.quantity.String(), c.mask, coverage})
 		}
 		out.Points = append(out.Points, point)
 	}
@@ -369,4 +420,15 @@ func (h *Hub) orderZoneCandles(ctx context.Context, a string, from, to time.Time
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Time < out[j].Time })
 	return out, err
+}
+
+// Only the display index takes a floating fast path. Near any bucket boundary
+// (with a guard much wider than IEEE multiplication error), use exact decimals.
+// All notional, quantity and cent calculations remain decimal.
+func historyOrderCenter(exact decimal.Decimal, approx, step float64, stepD, half decimal.Decimal) float64 {
+	index := approx/step + 0.5
+	if math.Abs(index-math.Round(index)) <= math.Max(1, math.Abs(index))*1e-12 {
+		return centeredOrderPrice(exact, stepD, half)
+	}
+	return math.Floor(index) * step
 }

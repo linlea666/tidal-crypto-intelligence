@@ -32,8 +32,11 @@ func num(v any) float64 {
 	return f
 }
 func dec(s string) decimal.Decimal { d, _ := decimal.NewFromString(s); return d }
-func money(s string) int64 {
-	d := dec(s).Mul(decimal.NewFromInt(100)).Round(0)
+func money(s string) int64         { return moneyDecimal(dec(s)) }
+
+// Shared exact cents conversion; avoids a decimal/string round trip in history.
+func moneyDecimal(value decimal.Decimal) int64 {
+	d := value.Mul(decimal.NewFromInt(100)).Round(0)
 	if d.Abs().GreaterThan(decimal.NewFromInt(9_000_000_000_000_000)) {
 		return 0
 	}

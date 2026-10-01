@@ -821,7 +821,7 @@ function ZoneHistory({
       p.cells.forEach((c) =>
         data.push([
           i,
-          centers.indexOf(c[0]),
+          centers.indexOf(c[0]) * 2 + c[1],
           c[2] * (c[1] ? -1 : 1),
           Number(c[3]),
           c[4],
@@ -852,7 +852,7 @@ function ZoneHistory({
           }
           const [i, j, cents, q, mask, coverage] = x.value;
           const p = d.points[i];
-          return `${stamp(new Date(p.time * 1000).toISOString())}\n$${price(centers[j], 0)} 附近 · ${cents < 0 ? "卖单" : "买单"}\n${dollars(Math.abs(cents))} · ${qty(String(q))} ${asset}\n贡献：${d.venues.filter((_, v) => mask & (1 << v)).join("、")}\n已覆盖该单元：${d.venues.filter((_, v) => coverage & (1 << v)).join("、") || "不完整"}\n${p.sources
+          return `${stamp(new Date(p.time * 1000).toISOString())}\n$${price(centers[Math.floor(j / 2)], 0)} 附近 · ${cents < 0 ? "卖单" : "买单"}\n${dollars(Math.abs(cents))} · ${qty(String(q))} ${asset}\n贡献：${d.venues.filter((_, v) => mask & (1 << v)).join("、")}\n已覆盖该单元：${d.venues.filter((_, v) => coverage & (1 << v)).join("、") || "不完整"}\n${p.sources
             .filter((s) =>
               d.venues.some((v, n) => v === s.venue && mask & (1 << n)),
             )
@@ -896,8 +896,11 @@ function ZoneHistory({
         {
           type: "category",
           gridIndex: 1,
-          data: centers,
-          axisLabel: { formatter: (v: string) => price(+v, 0) },
+          data: centers.flatMap((c) => [`${c}|买`, `${c}|卖`]),
+          axisLabel: {
+            formatter: (v: string) =>
+              price(+v.split("|")[0], 0) + " " + v.split("|")[1],
+          },
         },
       ],
       visualMap: {
@@ -984,12 +987,16 @@ function ZoneHistory({
       <p className="oz-caption">
         <span className="oz-bid">■ 买单</span>　
         <span className="oz-ask">■ 卖单</span>　亮度＝美元存量（共用线性尺度）·
-        空白＝缺口 · K线缺少任一基础时段则不显示
+        同档买卖分行，避免遮挡 · 空白＝无可显示记录，不补零 ·
+        K线缺少任一基础时段则不显示
       </p>
       {track && layer === "orders" && (
         <div className="oz-track">
           <h3>{track.label} · 实际采样轨迹</h3>
           <button onClick={clearTrack}>取消本单选择</button>
+          <p className="oz-caption">
+            仅连接相邻实际采样；未返回或间距超过7.5分钟即断开，连线不证明期间数量不变。
+          </p>
           {d?.track.length ? (
             <Chart
               label="所选大单剩余数量随时间的实际观察，缺口断开"

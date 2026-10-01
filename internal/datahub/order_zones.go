@@ -103,8 +103,13 @@ type OrderZoneView struct {
 // Centered bins are an independent display contract. Existing floor-based book
 // cohorts and their grades remain unchanged. Use decimal arithmetic at boundaries.
 func orderZoneCenter(p string, step float64) float64 {
-	s := decimal.NewFromFloat(step)
-	return num(dec(p).Div(s).Add(dec("0.5")).Floor().Mul(s).String())
+	return centeredOrderPrice(dec(p), decimal.NewFromFloat(step), decimal.NewFromFloat(step/2))
+}
+
+// QuoRem avoids finite-precision division rounding across a half-open boundary.
+func centeredOrderPrice(p, step, half decimal.Decimal) float64 {
+	q, _ := p.Add(half).QuoRem(step, 0)
+	return q.Mul(step).InexactFloat64()
 }
 func orderZoneID(side string, center float64) string { return fmt.Sprintf("%s/%.8f", side, center) }
 func orderZoneParams(a string, q url.Values) (float64, float64, int, error) {

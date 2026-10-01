@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/shopspring/decimal"
 	"net/url"
 	"path/filepath"
 	"testing"
@@ -409,5 +410,25 @@ func TestOrderZoneDuplicateIdentityNeverAddsLiquidity(t *testing.T) {
 	v, e = h.orderZones(context.Background(), "BTC", url.Values{}, now.Add(time.Second))
 	if e != nil || len(v.Zones) != 0 || !v.Partial {
 		t.Fatal("conflicting duplicates ranked", e)
+	}
+}
+
+func TestOrderZoneFastIndexPreservesExactBoundaries(t *testing.T) {
+	for _, step := range []float64{1, 10, 25, 250, 1000} {
+		sd, half := decimal.NewFromFloat(step), decimal.NewFromFloat(step/2)
+		for _, rate := range []string{"1", "1.0000000000000000003", "0.99871432", "1.05237854"} {
+			for i := 0; i < 2500; i++ {
+				raw := fmt.Sprintf("%d.%012d", 80000+i, i*i%1000000)
+				pd := dec(raw).Mul(dec(rate))
+				want := centeredOrderPrice(pd, sd, half)
+				got := historyOrderCenter(pd, num(raw)*num(rate), step, sd, half)
+				if got != want {
+					t.Fatalf("index changed: %s %s %v: %v != %v", raw, rate, step, got, want)
+				}
+			}
+		}
+	}
+	if g := orderZoneCenter("81874.9999999999999999", 250); g != 81750 {
+		t.Fatal("half-open boundary rounded", g)
 	}
 }
