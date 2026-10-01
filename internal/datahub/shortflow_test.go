@@ -100,6 +100,24 @@ func activeShort(s ShortObservation, m int, side string) bool {
 	return false
 }
 
+func TestShortBaselineDoesNotQueueBehindSharedStateReader(t *testing.T) {
+	end := time.Now().UTC().Truncate(time.Hour)
+	h := shortTestHub(t, end)
+	if e := h.Store.SaveState("short-flow/current", ShortObservation{Through: end}); e != nil {
+		t.Fatal(e)
+	}
+	busy, e := h.Store.db.Conn(context.Background())
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer busy.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if e = h.shortBaselineStep(ctx, end.Add(time.Minute)); e != nil {
+		t.Fatal("baseline still waits for unrelated hub state pool", e)
+	}
+}
+
 func TestShortWindowsMissingZeroContinuityAndAge(t *testing.T) {
 	end := testTime("2026-10-01T10:30:00Z")
 	bs, b := shortFixture(end)
@@ -420,7 +438,7 @@ func TestShortBaselineCheckpointAndHourlyReuse(t *testing.T) {
 	if e := h.shortBaselineStep(ctx, end.Add(time.Hour)); e != nil {
 		t.Fatal(e)
 	}
-	h.Store.shortLoad(ctx, "work", ShortFlowRules, &w)
+	h.Store.shortLoad(ctx, "work-v2", ShortFlowRules, &w)
 	if !w.Cursor.Equal(to.Add(time.Hour)) || len(w.Bars) < 8000 {
 		t.Fatal("hourly advance rebuilt or dropped history")
 	}
@@ -557,7 +575,7 @@ func TestShortHourGapDoesNotEraseFiveMinuteHint(t *testing.T) {
 	}
 }
 
-func TestShortHourlyRolloverDoesNotCreateRoutineCoverageGap(t *testing.T) {
+func TestShortHourlyRolloverPreparesBeforeFirstObservation(t *testing.T) {
 	end := time.Now().UTC().Truncate(time.Hour)
 	h := shortTestHub(t, end)
 	ctx := context.Background()
@@ -587,6 +605,9 @@ func TestShortHourlyRolloverDoesNotCreateRoutineCoverageGap(t *testing.T) {
 	}
 	step, cancel := context.WithTimeout(ctx, 1800*time.Millisecond)
 	defer cancel()
+	if e := h.shortBaselineStep(step, end.Add(-30*time.Second)); e != nil {
+		t.Fatal(e)
+	}
 	if e := h.shortObservationStep(step, end.Add(time.Minute)); e != nil {
 		t.Fatal(e)
 	}
@@ -619,5 +640,38 @@ func TestShortFinalCandleGraceRemainsPending(t *testing.T) {
 	}
 	if !tr.Done || tr.Outcomes[3].State != "incomplete" {
 		t.Fatal("mature gap not finalized")
+	}
+}
+
+func TestShortV2QuantileWorkingSetBound(t *testing.T) {
+	end := time.Now().UTC().Truncate(time.Hour)
+	h := shortTestHub(t, end)
+	ctx := context.Background()
+	to := end.Add(-time.Hour)
+	from := to.Add(-30 * 24 * time.Hour)
+	version, e := h.Store.shortRangeVersion(ctx, ID("flow", "BTC", "", "spot"), from, to)
+	if e != nil {
+		t.Fatal(e)
+	}
+	work := shortBaselineV2{shortBaselineWork: shortBaselineWork{From: from, To: to, Cursor: to, AsOf: end, Version: version, Bars: make([]shortStoredBar, 0, 8640)}, Phase: "quantiles"}
+	for at := from; at.Before(to); at = at.Add(5 * time.Minute) {
+		work.Bars = append(work.Bars, storeShortBar(FlowBar{At: at, Buy: 9999999999999, Sell: 5555555555555}))
+	}
+	if e = h.Store.shortPut(ctx, "work-v2", ShortFlowRules, end, work); e != nil {
+		t.Fatal(e)
+	}
+	runtime.GC()
+	old := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(old)
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	if e = h.shortBaselineAt(ctx, end, end); e != nil {
+		t.Fatal(e)
+	}
+	runtime.ReadMemStats(&after)
+	used := after.TotalAlloc - before.TotalAlloc
+	t.Logf("v2 checkpoint load + five quantiles + atomic publish: %.2f MiB", float64(used)/(1<<20))
+	if used > shortFlowWorkLimit {
+		t.Fatal("8 MiB budget exceeded", used)
 	}
 }

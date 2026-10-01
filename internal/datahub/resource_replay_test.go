@@ -163,6 +163,28 @@ func TestResourceReplay(t *testing.T) {
 	if e = h.Store.shortLoad(ctx, "baseline", ShortFlowRules, &shortBase); e != nil || !shortBase.Valid {
 		t.Fatal("short baseline cold checkpoint", e)
 	}
+	// Compare the old entry-point wait with the fixed entry under identical
+	// pool contention and container limits. No SQL write lock is involved.
+	busyState, e := h.Store.db.Conn(ctx)
+	if e != nil {
+		t.Fatal(e)
+	}
+	legacyCtx, stopLegacy := context.WithTimeout(ctx, 200*time.Millisecond)
+	beforeWait := time.Now()
+	var previous ShortObservation
+	h.Store.shortState(legacyCtx, "short-flow/current", &previous)
+	oldDuration, oldError := time.Since(beforeWait), legacyCtx.Err()
+	stopLegacy()
+	nextCtx, stopNext := context.WithTimeout(ctx, 1650*time.Millisecond)
+	afterStart := time.Now()
+	e = h.shortBaselineStep(nextCtx, time.Now().UTC())
+	newDuration := time.Since(afterStart)
+	stopNext()
+	busyState.Close()
+	if oldError != context.DeadlineExceeded || e != nil {
+		t.Fatal("state contention comparison", oldError, e)
+	}
+	t.Logf("baseline shared-state contention before=%s (deadline), after=%s (completed); same 1-connection pools", oldDuration, newDuration)
 	for i := 1; i <= 8; i++ {
 		// All trial windows must already be past the 20-minute late-candle
 		// allowance, independently of the runner's minute within the hour.
@@ -277,6 +299,19 @@ func TestResourceReplay(t *testing.T) {
 			}
 		}
 		formalReader.Close()
+		// Baseline no longer touches the shared state pool. Reproduce the
+		// production contention without increasing connections or CPU limits.
+		stateReader, err := h.Store.db.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		step, cancelBaseline := context.WithTimeout(ctx, 1650*time.Millisecond)
+		err = h.shortBaselineStep(step, time.Now().UTC())
+		cancelBaseline()
+		stateReader.Close()
+		if err != nil {
+			t.Fatal("baseline queued behind state reader", err)
+		}
 		wg.Wait()
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)

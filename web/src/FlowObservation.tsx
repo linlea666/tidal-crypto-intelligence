@@ -1,10 +1,12 @@
 import { amount, clock, price } from "./data";
 import { modelScale } from "./liquidationMath";
+import type { ShortRuntime } from "./ShortFlowHealth";
 
 export type FlowWindow = { minutes: number; from: string; to: string; coverage: number; netCents: number | null; buyCents: number | null; sellCents: number | null; volumeCents: number | null; buyShare: number | null; sellShare: number | null; volumeRatio: number | null };
 export type FlowCheck = { name: string; passed: boolean; known: boolean; actual: number | null; required: number | null };
 export type Observation = {
   rulesVersion: string; at: string; dataThrough: string; availableAt: string | null; fresh: boolean; ageSeconds: number; processingDelaySeconds: number | null;
+  firstGeneratedAt?: string | null; refreshedAt?: string | null; inputAvailableAt?: string | null; firstPublishDelaySeconds?: number | null; sourceArrivalDelaySeconds?: number | null; diagnostics?: ShortRuntime | null;
   windows: Record<string, FlowWindow>; segments: FlowWindow[];
   hints: { minutes: number; direction: string; active: boolean; checks: FlowCheck[] }[];
   baseline: { valid: boolean; coverage: number; validDates: number; from: string; to: string; windows: Record<string, { buyP95Cents: number | null; sellP95Cents: number | null; medianVolumeCents: number | null }> };
@@ -50,17 +52,22 @@ export function FlowObservation({ s, failed }: { s?: Observation | null; failed:
   const netHour = s.windows["60"]?.netCents;
   return <section className="short-flow" aria-label="5／10分钟独立成交观察">
     <div className="flow-section-title"><h3>刚刚发生了什么</h3><span>{fresh ? "已闭合成交窗口" : "窗口滞后 · 暂停新提示"} · 独立观察，不发送邮件</span></div>
-    <p className="short-flow-clock">统一截止 {stamp(s.dataThrough)} · 生成 {clock(s.at)}{s.availableAt && ` · 最新5分钟组成数据入库 ${clock(s.availableAt)}`}</p>
+    <p className="short-flow-clock">统一截止 {stamp(s.dataThrough)} · 最近刷新 {clock(s.refreshedAt ?? s.at)} · 首次生成 {s.firstGeneratedAt ? stamp(s.firstGeneratedAt) : "未留存可核验证据"}</p>
+    <p className="short-flow-clock">数据到达延迟 {s.sourceArrivalDelaySeconds == null ? "未知" : `${s.sourceArrivalDelaySeconds.toFixed(0)} 秒`} · 首次发布延迟 {s.firstPublishDelaySeconds == null ? "未知" : `${s.firstPublishDelaySeconds.toFixed(0)} 秒`}{s.inputAvailableAt && ` · 本次成交输入到齐 ${clock(s.inputAvailableAt)}`}</p>
     <div className="flow-numbers flow-short-numbers">{[5,10].map(m => <div className="short-flow-column" key={m}><WindowCard w={s.windows[String(m)]} title={`最近${m}分钟`} stale={!fresh}/><p className="short-price">同期价格 {pct(s.prices[String(m)]?.returnPercent)} · 位移 {s.prices[String(m)]?.displacementAtr == null ? "未知" : `${s.prices[String(m)].displacementAtr?.toFixed(2)} ATR`}</p></div>)}</div>
     <div className="short-flow-hints" aria-live="polite">
-      {!fresh ? <p>数据截止超过5分钟或读取延迟，金额保留为历史参考。</p> : hints.length ? hints.map(h => <p className={h.direction === "buy" ? "buy" : "sell"} key={`${h.minutes}-${h.direction}`}><strong>{h.minutes}分钟{h.direction === "buy" ? "买入" : "卖出"}{h.minutes === 5 ? "脉冲" : "延续观察"}</strong> · 效果验证中{netHour != null && netHour !== 0 && (netHour > 0) !== (h.direction === "buy") && " · 与1小时方向相反"}</p>) : <p>{s.baseline.valid ? "当前5／10分钟未满足独立观察条件；没有提示不代表没有行情。" : "同周期30天基线正在补齐，先展示完整成交金额。"}</p>}
+      {!fresh ? <p>数据截止超过5分钟或读取延迟，金额保留为历史参考。</p> : hints.length ? hints.map(h => <p className={h.direction === "buy" ? "buy" : "sell"} key={`${h.minutes}-${h.direction}`}><strong>{h.minutes}分钟{h.direction === "buy" ? "买入" : "卖出"}{h.minutes === 5 ? "脉冲" : "延续观察"}</strong> · 效果验证中{netHour != null && netHour !== 0 && (netHour > 0) !== (h.direction === "buy") && " · 与1小时方向相反"}</p>) : s.baseline.valid ? <p>当前5／10分钟未满足独立观察条件；没有提示不代表没有行情。</p> : null}
+      {!s.baseline.valid && <p>同周期30天基线未就绪或覆盖不足，暂停异常提示，继续展示完整成交金额。</p>}
       {s.researchPaused && <p className="flow-error">独立验证暂停：{s.researchReason || "研究容量或写入保护"}。页面金额继续更新。</p>}
+      {s.diagnostics?.stages.study?.state === "error" && !s.researchPaused && <p>结果研究最近执行异常；成交观察独立更新，验证报告可能滞后。</p>}
+      {!s.baseline.valid && s.diagnostics?.stages.baseline?.state === "yielded" && <p>同周期基线已保存计算进度，准备完成前暂停异常提示。</p>}
     </div>
     <div className="flow-numbers flow-long-numbers">{[["15","最近15分钟"],["60","最近1小时"],["240","最近4小时"]].map(([key,title]) => <WindowCard key={key} w={s.windows[key]} title={title} stale={!fresh}/>)}</div>
     <p className="flow-explainer">5／10／15分钟相互重叠，金额不可相加。主动买卖差额不等于新增资金。价格缺失时不阻塞成交展示；ATR来自观察窗口之前已完成的小时。</p>
     <Continuity rows={s.segments ?? []} title="最近30分钟：六段独立5分钟" stale={!fresh}/>
     <details className="flow-raw"><summary>短周期条件、数据覆盖与邻近清算区域</summary>
       <p>以下为 {clock(s.at)} 生成时的条件{!fresh && "，当前已过期"}。</p>
+      <p>数据到达延迟：最新5分钟成交到齐时间减窗口截止；首次发布延迟：该版本成交输入到齐后，首次生成观察所用时间。重复刷新不重新计时，旧记录无证据时保留未知。</p>
       <p>{s.coverageRequested} · {s.coverageNote}</p>
       <p>基线覆盖 {(s.baseline.coverage * 100).toFixed(1)}% · {s.baseline.validDates}个有效日期；{s.baseline.from && stamp(s.baseline.from)} 至 {s.baseline.to && stamp(s.baseline.to)}</p>
       <div className="flow-checks">{(s.hints ?? []).map(h => <section key={`${h.minutes}-${h.direction}`}><h4>{h.minutes}分钟{h.direction === "buy" ? "买入" : "卖出"}</h4><ul>{h.checks.map(c => <li key={c.name}>{c.known ? c.passed ? "✓" : "·" : "?"} {c.name} · {checkValue(c)}</li>)}</ul></section>)}</div>

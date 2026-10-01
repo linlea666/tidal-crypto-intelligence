@@ -143,7 +143,16 @@ func (h *Hub) updatePriceProgress(ctx context.Context, a string, bars map[int64]
 		if i, ok := positions[s.ID]; ok {
 			s = (*updates)[i]
 		}
+		if progressTerminal(s.Progress) {
+			continue
+		}
 		p := priceProgress(s, bars, candles, end, now, fresh)
+		if s.ConfirmedThrough != nil && !now.Before(s.ConfirmedThrough.Add(4*time.Hour)) {
+			p, e = h.finalPriceProgress(ctx, h.Store.research, s, now)
+			if e != nil {
+				return e
+			}
+		}
 		// Do not rewrite an expired archive on every worker tick.
 		if s.Progress != nil && s.Progress.DataThrough.Equal(end) && s.Progress.Status == p.Status {
 			continue

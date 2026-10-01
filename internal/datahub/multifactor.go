@@ -406,26 +406,31 @@ func (s *FlowSnapshot) explain(side string) {
 }
 
 type PriceProgress struct {
-	At              time.Time  `json:"at"`
-	DataThrough     time.Time  `json:"dataThrough"`
-	Line            float64    `json:"lineUsdt"`
-	Closes          []*float64 `json:"closesUsdt"`
-	Outside         int        `json:"outsideCloses"`
-	FlowSame        *bool      `json:"flowSame"`
-	Status          string     `json:"status"`
-	ObservationEnds *time.Time `json:"observationEnds"`
+	Version         string         `json:"evaluationVersion,omitempty"`
+	Deadline        *time.Time     `json:"dataDeadline,omitempty"`
+	GapReason       string         `json:"gapReason,omitempty"`
+	Evidence        []ProgressFact `json:"facts,omitempty"`
+	At              time.Time      `json:"at"`
+	DataThrough     time.Time      `json:"dataThrough"`
+	Line            float64        `json:"lineUsdt"`
+	Closes          []*float64     `json:"closesUsdt"`
+	Outside         int            `json:"outsideCloses"`
+	FlowSame        *bool          `json:"flowSame"`
+	Status          string         `json:"status"`
+	ObservationEnds *time.Time     `json:"observationEnds"`
 }
 
 func priceProgress(s Signal, bars map[int64]FlowBar, candles map[int64]Candle, end, now time.Time, fresh bool) PriceProgress {
 	if s.ConfirmedThrough != nil {
 		end = minTime(end, s.ConfirmedThrough.Add(4*time.Hour))
 	}
-	p := PriceProgress{At: now, DataThrough: end, Line: s.FrozenHigh, Closes: []*float64{}, Status: "waiting"}
+	p := PriceProgress{Version: ProgressVersion, At: now, DataThrough: end, Line: s.FrozenHigh, Closes: []*float64{}, Status: "waiting"}
 	if s.Direction == "sell" {
 		p.Line = s.FrozenLow
 	}
 	if s.ConfirmedThrough != nil {
 		p.ObservationEnds = flowPtr(s.ConfirmedThrough.Add(4 * time.Hour))
+		p.Deadline = flowPtr(p.ObservationEnds.Add(progressGrace))
 	}
 	for i := 2; i >= 1; i-- {
 		t := end.Add(-time.Duration(i) * 5 * time.Minute)
@@ -466,7 +471,11 @@ func priceProgress(s Signal, bars map[int64]FlowBar, candles map[int64]Candle, e
 	// End the follow-up using data time; outage cannot leave monitoring open forever.
 	if p.ObservationEnds != nil && !now.Before(*p.ObservationEnds) {
 		if !fresh || end.Before(*p.ObservationEnds) || p.Status == "unknown" {
-			p.Status = "ended_with_gap"
+			p.Status = "awaiting_data"
+			if !now.Before(*p.Deadline) {
+				p.Status = "ended_with_gap"
+				p.GapReason = "等待期限内未取得完整末段收盘或成交"
+			}
 		} else {
 			p.Status = "completed_" + p.Status
 		}

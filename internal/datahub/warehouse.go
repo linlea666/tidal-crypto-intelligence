@@ -43,6 +43,7 @@ type StorageStatus struct {
 type Warehouse struct {
 	research                   *sql.DB
 	shortResearch              *sql.DB
+	shortRuntime               *ShortRuntime
 	root                       string
 	db                         *sql.DB
 	write                      sync.Mutex
