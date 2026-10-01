@@ -6,9 +6,9 @@ mkdir -p tmp/resource-v24
 rm -f tmp/resource-v24/samples.jsonl tmp/resource-v24/runtime.jsonl
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c ./internal/datahub -o tmp/resource-v24/replay.test
 mode=${TIDAL_REPLAY_MODE:-replay}
-run='^TestResourceReplay$'
+run='^(TestResourceReplay|TestOrderZoneHistoryResource)$'
 if [[ "$mode" == reference ]]; then run='^TestBaselineResource$'; fi
-cid=$(docker create --memory=768m --cpus=1.7 -e GOMEMLIMIT=512MiB -e TIDAL_RESOURCE_REPLAY=1 -e TIDAL_RESOURCE_OUTPUT=/out -e TIDAL_REPLAY_DURATION="${TIDAL_REPLAY_DURATION:-6m}" -e TIDAL_BASELINE_REPLAY=1 -e TIDAL_BASELINE_REFERENCE="${TIDAL_BASELINE_REFERENCE:-0}" -v "$PWD/tmp/resource-v24:/out" alpine:3.22 /out/replay.test -test.run="$run" -test.v -test.timeout=335m -test.cpuprofile=/out/cpu.pprof)
+cid=$(docker create --memory=768m --cpus=1.7 -e GOMEMLIMIT=512MiB -e TIDAL_RESOURCE_REPLAY=1 -e TIDAL_ORDER_ZONE_REPLAY=1 -e TIDAL_RESOURCE_OUTPUT=/out -e TIDAL_REPLAY_DURATION="${TIDAL_REPLAY_DURATION:-6m}" -e TIDAL_BASELINE_REPLAY=1 -e TIDAL_BASELINE_REFERENCE="${TIDAL_BASELINE_REFERENCE:-0}" -v "$PWD/tmp/resource-v24:/out" alpine:3.22 /out/replay.test -test.run="$run" -test.v -test.failfast -test.timeout=335m -test.cpuprofile=/out/cpu.pprof)
 log_pid=
 cleanup() {
   # Preserve partial evidence when CI cancels a replay before the test exits.

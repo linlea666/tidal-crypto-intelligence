@@ -1,0 +1,694 @@
+.oz-page {
+  min-width: 0;
+}
+.oz-page small {
+  display: block;
+  line-height: 1.6;
+}
+.oz-muted,
+.oz-caption {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.oz-caption {
+  padding: 10px 0;
+}
+.oz-warning {
+  color: var(--amber);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.oz-warning button {
+  margin-left: 12px;
+  text-decoration: underline;
+}
+.oz-tabs {
+  display: flex;
+  gap: 5px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 10px;
+  margin-bottom: 14px;
+}
+.oz-tabs button,
+.oz-board-heading button,
+.oz-freeze,
+.oz-trace-button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 9px 14px;
+  min-height: 40px;
+}
+.oz-tabs .selected,
+.oz-board-heading button[aria-pressed="true"] {
+  background: #293b32;
+  color: #b8f2d1;
+  border-color: #63806f;
+}
+.oz-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin: 12px 0;
+}
+.oz-toolbar label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+}
+.oz-toolbar select {
+  padding: 7px 22px 7px 9px;
+}
+.oz-freeze {
+  margin-left: auto;
+}
+.oz-summary {
+  display: grid;
+  grid-template-columns: 1fr 0.9fr 1fr;
+  gap: 12px;
+}
+.oz-candidate,
+.oz-reference {
+  padding: 18px 20px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  text-align: left;
+  background: #18211e;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.oz-candidate span,
+.oz-reference > span {
+  font-size: 12px;
+  color: var(--muted);
+}
+.oz-candidate strong {
+  font-size: 25px;
+  letter-spacing: -0.7px;
+}
+.oz-candidate b {
+  font-size: 13px;
+  font-weight: 500;
+}
+.oz-reference {
+  text-align: center;
+  background: transparent;
+}
+.oz-reference strong {
+  font-size: 24px;
+}
+.oz-bid {
+  color: var(--green);
+}
+.oz-ask {
+  color: var(--red);
+}
+.oz-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 20px;
+  align-items: start;
+}
+.oz-board {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #161e1b;
+  padding: 18px;
+  min-width: 0;
+}
+.oz-board-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.oz-board-heading h2 {
+  font-size: 17px;
+}
+.oz-board-heading > div {
+  display: flex;
+  gap: 6px;
+}
+.oz-board-heading > div:first-child:has(h2) {
+  display: block;
+}
+.oz-board-heading button {
+  padding: 6px 8px;
+  font-size: 12px;
+  min-height: 34px;
+}
+.oz-scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 10px;
+  padding: 13px 0 8px;
+  gap: 8px;
+}
+.oz-side-title {
+  font-size: 12px;
+  display: flex;
+  justify-content: space-between;
+  padding: 9px 0;
+}
+.oz-side-title small {
+  color: var(--muted);
+}
+.oz-row {
+  display: grid;
+  grid-template-columns: 145px minmax(110px, 1fr) 164px;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 10px 8px;
+  min-height: 74px;
+}
+.oz-row:hover {
+  background: #223027;
+}
+.oz-row.selected {
+  border-color: currentColor;
+  background: #223027;
+}
+.oz-row-price strong {
+  font-size: 18px;
+  white-space: nowrap;
+}
+.oz-row-price strong small {
+  display: inline;
+  font-size: 10px;
+  color: inherit;
+}
+.oz-row-price > small {
+  font-size: 10px;
+}
+.oz-row-bar {
+  position: relative;
+  padding: 7px 9px;
+  min-width: 0;
+  color: #f0f4f1;
+}
+.oz-row-bar i {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 3px;
+  opacity: 0.3;
+  max-width: 100%;
+  background: var(--green);
+}
+.oz-ask .oz-row-bar i {
+  background: var(--red);
+}
+.oz-row-bar b,
+.oz-row-bar small {
+  position: relative;
+  z-index: 1;
+  white-space: nowrap;
+}
+.oz-row-bar b {
+  font-size: 15px;
+  font-weight: 600;
+}
+.oz-row-bar small {
+  font-size: 11px;
+  color: #c8d3cd;
+}
+.oz-row-evidence b {
+  font-size: 11px;
+  color: #cbd7d0;
+  font-weight: 400;
+}
+.oz-row-evidence small {
+  font-size: 10px;
+}
+.oz-divider {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #e9eee8;
+  border-top: 1px dashed #73887b;
+  border-bottom: 1px dashed #73887b;
+  margin: 13px -6px 7px;
+  padding: 10px 9px;
+  font-size: 13px;
+}
+.oz-divider span {
+  font-size: 10px;
+  color: var(--muted);
+}
+.oz-empty {
+  padding: 25px 5px;
+  color: var(--muted);
+  line-height: 1.8;
+  font-size: 13px;
+}
+.oz-inspector {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  position: sticky;
+  top: 12px;
+  max-height: 82vh;
+  overflow-y: auto;
+}
+.oz-inspector-empty {
+  padding: 26px 22px;
+  min-height: 260px;
+}
+.oz-inspector-empty > span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.oz-inspector-empty h2 {
+  font-size: 18px;
+  margin: 20px 0 12px;
+}
+.oz-inspector-empty p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.8;
+}
+.oz-detail {
+  padding: 20px;
+}
+.oz-detail > h2 {
+  margin: 5px 0;
+}
+.oz-detail > h3 {
+  font-size: 14px;
+  margin: 20px 0 8px;
+}
+.oz-detail-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin: 20px 0;
+}
+.oz-detail-total strong {
+  font-size: 24px;
+}
+.oz-detail-total span {
+  font-size: 13px;
+}
+.oz-contribution {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 0 14px;
+  margin: 5px 0;
+  font-size: 13px;
+}
+.oz-contribution b {
+  text-align: right;
+  font-weight: 500;
+}
+.oz-contribution i {
+  height: 3px;
+  position: absolute;
+  bottom: 3px;
+  left: 0;
+  background: #749b85;
+  max-width: 100%;
+}
+.oz-evidence-list {
+  margin-top: 20px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.oz-evidence-list p {
+  font-size: 12px;
+  line-height: 1.8;
+  margin: 12px 0 3px;
+  display: flex;
+  flex-direction: column;
+}
+.oz-evidence-list b {
+  font-weight: 400;
+  color: var(--muted);
+}
+.oz-evidence-list small {
+  font-size: 10px;
+}
+.oz-order {
+  padding: 11px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+.oz-order summary {
+  cursor: pointer;
+  line-height: 1.8;
+}
+.oz-order summary small {
+  padding-left: 15px;
+}
+.oz-order dl {
+  display: grid;
+  grid-template-columns: 75px 1fr;
+  gap: 8px;
+  line-height: 1.5;
+}
+.oz-order dt {
+  color: var(--muted);
+}
+.oz-order dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.oz-order p {
+  color: var(--muted);
+  line-height: 1.8;
+}
+.oz-trace-button {
+  margin-top: 12px;
+  font-size: 11px;
+  width: 100%;
+}
+.oz-mobile-detail {
+  display: none;
+}
+.oz-trades {
+  margin: 24px 0;
+  border: 1px solid var(--line);
+  padding: 20px;
+  border-radius: 8px;
+}
+.oz-trades label {
+  font-size: 12px;
+}
+.oz-trade-leaders {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin: 20px 0;
+}
+.oz-trade-leaders > div {
+  padding-left: 13px;
+  border-left: 2px solid #617768;
+}
+.oz-trade-leaders strong {
+  display: block;
+  font-size: 18px;
+  margin: 6px 0;
+}
+.oz-trade-leaders span {
+  font-size: 13px;
+}
+.oz-trade-row {
+  display: grid;
+  grid-template-columns: 110px 1fr 115px;
+  gap: 15px;
+  align-items: center;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.oz-trade-row > span:last-child {
+  text-align: right;
+}
+.oz-trade-bars {
+  display: flex;
+  height: 15px;
+  gap: 1px;
+}
+.oz-buy-fill {
+  background: var(--green);
+}
+.oz-sell-fill {
+  background: var(--red);
+}
+.oz-coverage {
+  padding: 15px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.9;
+}
+.oz-coverage summary {
+  cursor: pointer;
+  color: #c9d4ce;
+}
+.oz-coverage ul {
+  padding-left: 20px;
+}
+.oz-coverage p {
+  margin: 10px 0;
+}
+.oz-history {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 20px;
+}
+.oz-history h2 {
+  font-size: 18px;
+  margin: 20px 0 6px;
+}
+.oz-track {
+  border-top: 1px solid var(--line);
+  margin-top: 18px;
+  padding-top: 18px;
+}
+.oz-track > button {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 10px 0;
+  text-decoration: underline;
+}
+.oz-expired .oz-bid,
+.oz-expired .oz-ask,
+.oz-expired.oz-bid,
+.oz-expired.oz-ask {
+  color: #9fa8a3;
+}
+.oz-expired .oz-row-bar i {
+  background: #909b94;
+}
+.oz-expired .oz-candidate {
+  color: #aeb6b1;
+}
+@media (max-width: 1200px) {
+  .oz-layout {
+    grid-template-columns: minmax(0, 1fr) 290px;
+    gap: 12px;
+  }
+  .oz-row {
+    grid-template-columns: 125px 1fr;
+    gap: 5px 10px;
+  }
+  .oz-row-evidence {
+    grid-column: 1/-1;
+    display: flex;
+    justify-content: space-between;
+  }
+  .oz-row-price strong {
+    font-size: 17px;
+  }
+  .oz-candidate strong {
+    font-size: 21px;
+  }
+}
+@media (max-width: 760px) {
+  .oz-tabs {
+    margin-bottom: 8px;
+    gap: 4px;
+  }
+  .oz-tabs button {
+    font-size: 12px;
+    padding: 8px 11px;
+    flex: 1;
+  }
+  .oz-toolbar {
+    gap: 8px;
+  }
+  .oz-toolbar label {
+    font-size: 11px;
+    gap: 4px;
+  }
+  .oz-toolbar select {
+    font-size: 12px;
+    padding: 6px 20px 6px 6px;
+    min-height: 36px;
+  }
+  .oz-freeze {
+    padding: 6px 9px;
+    font-size: 11px;
+    min-height: 36px;
+  }
+  .oz-toolbar > span {
+    font-size: 10px;
+    width: 100%;
+  }
+  .oz-summary {
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .oz-reference {
+    grid-column: 1/-1;
+    grid-row: 1;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 0;
+    border: 0;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .oz-reference strong {
+    font-size: 19px;
+  }
+  .oz-reference small {
+    font-size: 10px;
+  }
+  .oz-candidate {
+    padding: 12px 10px;
+    gap: 7px;
+  }
+  .oz-candidate span {
+    font-size: 10px;
+  }
+  .oz-candidate strong {
+    font-size: 20px;
+    letter-spacing: -0.8px;
+  }
+  .oz-candidate b {
+    font-size: 10px;
+    line-height: 1.7;
+  }
+  .oz-caption {
+    font-size: 10px;
+    padding: 8px 0;
+  }
+  .oz-layout {
+    display: block;
+  }
+  .oz-inspector {
+    display: none;
+  }
+  .oz-mobile-detail {
+    display: block;
+  }
+  .oz-board {
+    padding: 12px 8px;
+  }
+  .oz-board-heading {
+    gap: 7px;
+  }
+  .oz-board-heading h2 {
+    font-size: 15px;
+  }
+  .oz-board-heading button {
+    font-size: 10px;
+    padding: 5px 6px;
+    min-height: 32px;
+  }
+  .oz-scale {
+    font-size: 9px;
+    line-height: 1.6;
+  }
+  .oz-row {
+    grid-template-columns: 125px 1fr;
+    padding: 10px 5px;
+    min-height: 89px;
+    gap: 5px 10px;
+  }
+  .oz-row-evidence {
+    grid-column: 1/-1;
+    display: flex;
+    justify-content: space-between;
+    gap: 4px;
+  }
+  .oz-row-evidence b,
+  .oz-row-evidence small {
+    font-size: 9px;
+  }
+  .oz-row-price strong {
+    font-size: 17px;
+  }
+  .oz-row-bar b {
+    font-size: 14px;
+  }
+  .oz-divider {
+    font-size: 12px;
+    margin: 10px 0;
+    padding: 9px 5px;
+  }
+  .oz-divider span {
+    font-size: 9px;
+  }
+  .oz-detail {
+    padding: 16px 12px;
+    border: 1px solid #496653;
+    border-radius: 6px;
+    background: #1a251f;
+    margin: 4px 0 12px;
+  }
+  .oz-detail > h2 {
+    font-size: 20px;
+  }
+  .oz-trades {
+    padding: 15px 10px;
+    margin: 16px 0;
+  }
+  .oz-trades .oz-board-heading {
+    align-items: start;
+  }
+  .oz-trades .oz-board-heading label {
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .oz-trades select {
+    font-size: 11px;
+    padding: 6px 20px 6px 5px;
+    min-height: 32px;
+  }
+  .oz-trade-leaders {
+    gap: 5px;
+    margin: 18px 0;
+  }
+  .oz-trade-leaders > div {
+    padding-left: 7px;
+  }
+  .oz-trade-leaders small {
+    font-size: 9px;
+  }
+  .oz-trade-leaders strong {
+    font-size: 12px;
+  }
+  .oz-trade-leaders span {
+    font-size: 11px;
+  }
+  .oz-trade-row {
+    grid-template-columns: 75px 1fr 78px;
+    gap: 8px;
+    font-size: 11px;
+  }
+  .oz-trade-row small {
+    font-size: 9px;
+  }
+  .oz-history {
+    padding: 12px 6px;
+  }
+  .oz-history h2 {
+    font-size: 16px;
+  }
+  .oz-warning {
+    font-size: 11px;
+  }
+  .oz-coverage {
+    font-size: 11px;
+  }
+  .oz-page:has(.oz-tabs) .oz-trades .oz-muted {
+    font-size: 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oz-page * {
+    scroll-behavior: auto;
+  }
+}
