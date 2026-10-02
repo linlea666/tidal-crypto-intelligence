@@ -13,9 +13,11 @@ import (
 )
 
 type ShortCoverage struct {
-	Through time.Time `json:"through"`
-	Seen    time.Time `json:"seenAt"`
-	Valid   bool      `json:"valid"`
+	Through  time.Time `json:"through"`
+	Seen     time.Time `json:"seenAt"`
+	Valid    bool      `json:"valid"`
+	Pipeline string    `json:"pipelineVersion,omitempty"`
+	Reasons  []string  `json:"reasons,omitempty"`
 }
 type ShortOutcome struct {
 	Minutes  int      `json:"minutes"`
@@ -88,6 +90,24 @@ func (h *Hub) recordShortObservation(ctx context.Context, s ShortObservation, no
 	// Common comparison coverage is stricter than enrollment. A missing hour
 	// must not erase a valid five-minute hint; keep it for the excluded count.
 	cov := ShortCoverage{Through: s.Through, Seen: now, Valid: eligible && s.Windows["10"].Net != nil && s.Windows["60"].Net != nil}
+	cov.Pipeline = ShortPipeline
+	if s.ResearchPaused {
+		cov.Reasons = append(cov.Reasons, "research_paused")
+	}
+	if !s.Fresh {
+		cov.Reasons = append(cov.Reasons, "stale_flow")
+	}
+	if !s.Baseline.Valid {
+		cov.Reasons = append(cov.Reasons, "baseline_unavailable")
+	}
+	if s.Windows["5"].From.Before(origin) {
+		cov.Reasons = append(cov.Reasons, "origin_boundary")
+	}
+	for _, m := range []string{"5", "10", "60"} {
+		if s.Windows[m].Net == nil {
+			cov.Reasons = append(cov.Reasons, "missing_"+m+"m")
+		}
+	}
 	updates := []ShortEpisode{}
 	if eligible {
 		for _, side := range []string{"buy", "sell"} {
@@ -138,12 +158,12 @@ func (h *Hub) recordShortObservation(ctx context.Context, s ShortObservation, no
 	}
 	tx, e := h.Store.shortDB().BeginTx(ctx, nil)
 	if e != nil {
-		return e
+		return shortWriteError(e)
 	}
 	defer tx.Rollback()
 	b, _ := json.Marshal(cov)
 	if _, e = tx.ExecContext(ctx, "INSERT OR IGNORE INTO sf_records VALUES('coverage',?,?,?)", id, s.Through.Unix(), b); e != nil {
-		return e
+		return shortWriteError(e)
 	}
 	for _, v := range updates {
 		b, e = json.Marshal(v)
@@ -154,11 +174,11 @@ func (h *Hub) recordShortObservation(ctx context.Context, s ShortObservation, no
 			return errors.New("短周期事件超过写入上限")
 		}
 		if _, e = tx.ExecContext(ctx, "INSERT INTO sf_records VALUES('episode',?,?,?) ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload", v.ID, v.At.Unix(), b); e != nil {
-			return e
+			return shortWriteError(e)
 		}
 	}
 	if e = tx.Commit(); e != nil {
-		return e
+		return shortWriteError(e)
 	}
 	return nil
 }
@@ -272,7 +292,7 @@ func (h *Hub) shortControls(ctx context.Context, origin, now time.Time) error {
 			return e
 		}
 		if _, e = h.Store.shortDB().ExecContext(ctx, "INSERT OR IGNORE INTO sf_records VALUES('control',?,?,?)", v.ID, v.At.Unix(), b); e != nil {
-			return e
+			return shortWriteError(e)
 		}
 	}
 	return nil
@@ -306,29 +326,34 @@ type ShortOutcomeSummary struct {
 	MAE        *float64 `json:"medianMaePercent"`
 }
 type ShortStudyReport struct {
-	Rule     string            `json:"rulesVersion"`
-	Origin   time.Time         `json:"origin"`
-	At       time.Time         `json:"at"`
-	From     time.Time         `json:"from"`
-	Days     float64           `json:"days"`
-	Coverage float64           `json:"coverage"`
-	Observed int               `json:"observedWindows"`
-	Expected int               `json:"expectedWindows"`
-	Groups   []ShortStudyGroup `json:"groups"`
-	Gap      shortGap          `json:"gap"`
-	Note     string            `json:"note"`
+	Rule        string            `json:"rulesVersion"`
+	Origin      time.Time         `json:"origin"`
+	At          time.Time         `json:"at"`
+	From        time.Time         `json:"from"`
+	Days        float64           `json:"days"`
+	Coverage    float64           `json:"coverage"`
+	Observed    int               `json:"observedWindows"`
+	Expected    int               `json:"expectedWindows"`
+	Groups      []ShortStudyGroup `json:"groups"`
+	Gap         shortGap          `json:"gap"`
+	Note        string            `json:"note"`
+	GapReasons  map[string]int    `json:"gapReasons,omitempty"`
+	Diagnostics *ShortRuntime     `json:"diagnostics,omitempty"`
 }
 
 func (h *Hub) shortStudyStep(ctx context.Context, now time.Time) error {
 	if h.Store.Status().ResearchPaused || h.Store.Status().Paused {
 		return errors.New("研究总容量保护")
 	}
+	if e := h.repairPriceProgress(ctx, now); e != nil {
+		return e
+	}
 	var origin time.Time
 	if e := h.Store.shortLoad(ctx, "origin", ShortFlowRules, &origin); e != nil {
 		return e
 	}
-	if _, e := h.Store.shortDB().ExecContext(ctx, "DELETE FROM sf_records WHERE kind IN ('coverage','episode','control') AND at<?", now.Add(-30*24*time.Hour).Unix()); e != nil {
-		return e
+	if _, e := h.Store.shortDB().ExecContext(ctx, "DELETE FROM sf_records WHERE kind IN ('coverage','episode','control','publication') AND at<?", now.Add(-30*24*time.Hour).Unix()); e != nil {
+		return shortWriteError(e)
 	}
 	if e := h.shortControls(ctx, origin, now); e != nil {
 		return e
@@ -405,9 +430,11 @@ func shortMedian(v []float64) *float64 {
 }
 
 func (h *Hub) buildShortReport(ctx context.Context, origin, now time.Time) error {
+	defer shortMeasure(ctx, "report", time.Now())
 	from := maxTime(origin, now.Add(-30*24*time.Hour))
 	r := ShortStudyReport{Rule: ShortFlowRules, Origin: origin, At: now, From: from, Days: now.Sub(origin).Hours() / 24, Groups: []ShortStudyGroup{}, Note: "独立前向观察；5/10分钟不发送邮件。位移从发现后的下一根完整5分钟开盘计算，不含交易成本，不是交易收益。共同事件要求前后4小时≥95%有效观察；行情成熟8小时后比较，未匹配观察最长等待12小时；缺口事件排除，未匹配不等于亏损。每方向≥14天、95%覆盖、30个独立事件后才展示比例；不自动改参。明细保留30天，已知上线前案例不计入。"}
 	coverage := map[int64]bool{}
+	r.GapReasons = map[string]int{}
 	rows, e := h.Store.shortDB().QueryContext(ctx, "SELECT payload FROM sf_records WHERE kind='coverage' AND at>=? ORDER BY at", from.Unix())
 	if e != nil {
 		return e
@@ -424,6 +451,12 @@ func (h *Hub) buildShortReport(ctx context.Context, origin, now time.Time) error
 		coverage[v.Through.Unix()] = v.Valid
 		if v.Valid {
 			r.Observed++
+		} else if len(v.Reasons) == 0 {
+			r.GapReasons["legacy_unknown"]++
+		} else {
+			for _, reason := range v.Reasons {
+				r.GapReasons[reason]++
+			}
 		}
 		if len(coverage) > 8641 {
 			e = errors.New("观察覆盖工作集超限")
@@ -439,6 +472,11 @@ func (h *Hub) buildShortReport(ctx context.Context, origin, now time.Time) error
 	}
 	start := from.Truncate(5 * time.Minute).Add(5 * time.Minute)
 	r.Expected = max(0, int(now.Truncate(5*time.Minute).Sub(start)/(5*time.Minute))+1)
+	for at := start; !at.After(now.Truncate(5 * time.Minute)); at = at.Add(5 * time.Minute) {
+		if _, ok := coverage[at.Unix()]; !ok {
+			r.GapReasons["unrecorded_unknown"]++
+		}
+	}
 	if r.Expected > 0 {
 		r.Coverage = math.Min(1, float64(r.Observed)/float64(r.Expected))
 	}
@@ -601,5 +639,6 @@ func (h *Hub) shortStudyView(a string) any {
 		return nil
 	}
 	h.Store.LoadState("short-flow/gap", &r.Gap)
+	r.Diagnostics = h.Store.shortRuntimeView()
 	return r
 }

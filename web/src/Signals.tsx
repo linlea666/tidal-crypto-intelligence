@@ -18,10 +18,11 @@ type Snapshot = {
   price: { closeUsdt: number | null; return1h: number | null; priorAtr1h: number | null; displacementAtr: number | null };
   context: { futures: Record<string, Window>; oi: { coinChange1h: number | null; coinChange4h: number | null; usdChange1h: number | null; usdChange4h: number | null; regime: string }; funding: Funding[]; liquidations: Record<string, { longCents: number | null; shortCents: number | null; coverage: number }> };
 };
-type Progress = { at: string; dataThrough: string; lineUsdt: number; closesUsdt: (number | null)[]; outsideCloses: number; flowSame: boolean | null; status: string; observationEnds: string | null };
+type Progress = { evaluationVersion?: string; dataDeadline?: string | null; gapReason?: string; at: string; dataThrough: string; lineUsdt: number; closesUsdt: (number | null)[]; outsideCloses: number; flowSame: boolean | null; status: string; observationEnds: string | null };
+type ProgressRepair = { evaluationVersion: string; repairedAt: string; evidenceAsOf: string; original: Progress; result: Progress; reason: string };
 type Signal = { id: string; direction: string; pattern: string; state: string; level?: string; rulesVersion: string; at: string; dataThrough: string; expiresAt: string; confirmedAt: string | null; confirmedDataThrough?: string; updatedAt: string; frozenHigh: number; frozenLow: number; net15Cents: number; buyShare: number | null; detectionDelaySeconds: number | null; evidence: string[]; conflicts: string[]; missing: string[]; multifactor?: Snapshot; multifactorUpgrade?: Snapshot; confirmationSnapshot?: Snapshot; priceProgress?: Progress; lifecycleRepair?: { reason: string } };
 type MailResult = { id: string; signalId: string; kind: string; status: string; createdAt: string; attemptedAt: string | null; completedAt: string | null; error?: string };
-type Response = { latestFormal?: Signal | null; observation?: Observation | null; current: Snapshot | null; currentPrice: { valueUsdt: number; at: string } | null; items: Signal[]; notificationResults: MailResult[]; prices: { at: string; closeUsdt: number | null }[]; mail: { configured: boolean; latestStatus: string; lastAttemptAt: string | null; lastError: { error: string } | null; note: string }; cutoverAt?: string };
+type Response = { progressRepairs?: Record<string, ProgressRepair>; latestFormal?: Signal | null; observation?: Observation | null; current: Snapshot | null; currentPrice: { valueUsdt: number; at: string } | null; items: Signal[]; notificationResults: MailResult[]; prices: { at: string; closeUsdt: number | null }[]; mail: { configured: boolean; latestStatus: string; lastAttemptAt: string | null; lastError: { error: string } | null; note: string }; cutoverAt?: string };
 const stamp = (s?: string | null) => s ? new Date(s).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "当时未记录";
 const day = (s: string) => new Date(s).toLocaleDateString("en-CA", { timeZone: "Asia/Shanghai" });
 const money = (n?: number | null) => n == null ? "缺失" : amount(n, true);
@@ -30,8 +31,8 @@ const sideName = (s: string) => s === "sell" ? "卖压" : "买盘";
 const tone = (n?: number | null) => n == null || n === 0 ? "neutral" : n > 0 ? "buy" : "sell";
 const factorNames: Record<string, string> = { spot: "现货成交", futures: "合约成交", oi: "持仓 OI", funding: "资金费率", liquidations: "已发生清算", price: "价格响应" };
 const stateNames: Record<string, string> = { support: "✓ 支持", conflict: "! 分歧", neutral: "· 背景", missing: "? 不足" };
-const progressNames: Record<string, string> = { waiting: "等待价格确认", holding: "破位保持，资金仍同向", reclaimed: "原破位已收回", flow_reversed: "价格已确认，资金方向转变", near_line: "确认位附近反复", unknown: "数据不足，暂停判断", not_recorded: "当时未记录确认数据时点", expired: "四小时内未确认，已到期", ended_with_gap: "观察结束，末段数据缺失" };
-const progressText = (v?: string) => v?.startsWith("completed_") ? `四小时观察结束 · ${progressNames[v.slice(10)] ?? "已完成"}` : progressNames[v ?? "not_recorded"] ?? "当时未记录";
+const progressNames: Record<string, string> = { waiting: "等待价格确认", holding: "破位保持，资金仍同向", reclaimed: "原破位已收回", flow_reversed: "价格已确认，资金方向转变", near_line: "确认位附近反复", unknown: "数据不足，暂停判断", not_recorded: "当时未记录确认数据时点", expired: "四小时内未确认，已到期", awaiting_data: "等待末段数据", ended_with_gap: "最终缺口 · 末段数据不足" };
+const progressText = (v?: string) => v?.startsWith("completed_") ? `完整结束 · ${progressNames[v.slice(10)] ?? "已完成"}` : progressNames[v ?? "not_recorded"] ?? "当时未记录";
 const mailNames: Record<string, string> = { pending: "排队中", unconfigured: "当时未配置", sending: "提交中", sent: "SMTP 已接受", delivery_unknown: "结果不确定 · 不重发", failed_before_submission: "提交前失败", rejected: "邮件服务器明确拒绝", unknown_after_restart: "重启后结果不确定", suppressed_restart: "重启积压未补发", suppressed_expired_or_validation: "过期或规则切换未发送", suppressed_scope: "范围外未发送" };
 
 function RawFactors({ s }: { s: Snapshot }) {
@@ -47,11 +48,14 @@ function RawFactors({ s }: { s: Snapshot }) {
 function EvidenceGrid({ s }: { s: Snapshot }) {
   return <><div className="flow-evidence-grid">{s.evidence.map(e => <article key={e.factor} className={`flow-factor ${e.state}`}><div><h3>{factorNames[e.factor] ?? e.factor}</h3><span>{stateNames[e.state]}</span></div><p>{e.text}</p><small>{e.scope}</small></article>)}</div><RawFactors s={s} /></>;
 }
-function Confirmation({ s }: { s: Signal }) {
-  const p = s.priceProgress, direction = s.direction === "sell" ? "跌破" : "突破", line = s.direction === "sell" ? s.frozenLow : s.frozenHigh;
-  return <section className="flow-confirm"><div className="flow-section-title"><h3>{s.confirmedAt ? "确认后观察" : "价格确认进度"} · {sideName(s.direction)}</h3><span>{p && !p.status.startsWith("completed_") && p.status !== "ended_with_gap" && Date.now() - new Date(p.at).getTime() > 12 * 60_000 ? "历史状态 · " : ""}{progressText(p?.status)}</span></div>
+function Confirmation({ s, repair }: { s: Signal; repair?: ProgressRepair }) {
+  const p = repair?.result ?? s.priceProgress, direction = s.direction === "sell" ? "跌破" : "突破", line = s.direction === "sell" ? s.frozenLow : s.frozenHigh;
+  return <section className="flow-confirm"><div className="flow-section-title"><h3>{s.confirmedAt ? "确认后观察" : "价格确认进度"} · {sideName(s.direction)}</h3><span>{p && !p.status.startsWith("completed_") && p.status !== "ended_with_gap" && Date.now() - new Date(p.at).getTime() > 12 * 60_000 ? "历史状态 · " : ""}{repair && "审计修复 · "}{progressText(p?.status)}</span></div>
     <div className="flow-confirm-grid"><div><span>本事件固定观察线</span><strong>{price(line)} <small>USDT</small></strong><p>发现于 {stamp(s.at)}，区间边界固定不追价。</p></div><div><span>连续已闭合 5 分钟收盘</span><div className="flow-candles">{[0, 1].map(i => { const c = p?.closesUsdt[i]; const outside = c != null && (s.direction === "sell" ? c < line : c > line); return <span key={i} className={outside ? "passed" : ""}>{c == null ? "等待闭合" : `${outside ? "✓" : "·"} ${price(c)}`}</span>; })}</div><p>最近 15 分钟资金：{p?.flowSame == null ? "未知" : p.flowSame ? "✓ 仍同向" : "! 不再同向"}</p></div></div>
     <p>{s.confirmedAt ? `${direction}已于 ${stamp(s.confirmedAt)} 确认。当前状态单独更新，历史确认不会被改写。` : `四小时内，两根收盘均${direction}观察线且资金同向才确认。到期：${stamp(s.expiresAt)}。`}</p>
+    {p?.dataDeadline && <p>末段数据等待至 {stamp(p.dataDeadline)}；观察市场窗口仍截至 {stamp(p.observationEnds)}。</p>}
+    {p?.gapReason && <p className="flow-error">{p.gapReason}</p>}
+    {repair && <details className="flow-raw"><summary>审计修复依据与原记录</summary><p>{repair.reason}</p><p>修复于 {stamp(repair.repairedAt)} · 仅使用 {stamp(repair.evidenceAsOf)} 之前实际可见的事实。</p><p>原状态：{progressText(repair.original.status)} · 原判断 {stamp(repair.original.at)} · 原数据截止 {stamp(repair.original.dataThrough)}</p><small>原事件、通知与研究覆盖保留；复盘版本 {repair.evaluationVersion}。</small></details>}
     <small>{p ? `进度数据截止 ${stamp(p.dataThrough)}${p.observationEnds ? ` · 确认后观察至 ${stamp(p.observationEnds)}` : ""}` : "旧事件当时未记录进度，不根据事后行情补造。"} · 确认不保证后续延续。</small>
   </section>;
 }
@@ -76,7 +80,7 @@ export function SignalsPage({ asset }: { asset: Asset }) {
     {!d?.observation && <div className="flow-numbers">{[["15", "最近15分钟"], ["60", "最近1小时"], ["240", "最近4小时"]].map(([key, title]) => <WindowCard key={key} w={s?.spot[key]} title={title} stale={!fresh}/>)}</div>}
     <p className="flow-explainer">正负表示买卖偏向。资金规模、相对异常、放量和持续性同时达标才称为异动。{d?.currentPrice && <span>最新价格 {price(d.currentPrice.valueUsdt)} USDT · {clock(d.currentPrice.at)}，时点与资金窗口不同。</span>}</p>
     {s && <><div className="flow-continuity-grid"><Continuity rows={s.quarters} title="正式快照最近一小时：四段15分钟" stale={!fresh} /><Continuity rows={s.hours} title="正式快照最近四小时：四段1小时" stale={!fresh} /></div><div className="flow-section-title"><h3>当前证据，哪里一致、哪里有分歧</h3><span>缺失不按中性处理</span></div><EvidenceGrid s={s} /></>}
-    {chosen && <Confirmation s={chosen} />}
+    {chosen && <Confirmation s={chosen} repair={d?.progressRepairs?.[chosen.id]} />}
     <section className="flow-history" id="formal-flow-history"><div className="flow-section-title"><h3>{history ? "最近提醒记录" : "今日提醒时间线"}</h3><button className="text-button" onClick={() => setHistory(!history)}>{history ? "只看今天" : "查看历史"}</button></div><p>北京时间 · 选择一条提醒，查看固定观察线及价格图中的发现、确认时点。</p>
       {!!d?.prices?.length && <Chart height={215} label="BTC/USDT 最近24小时价格；虚线对应选中事件的发现、确认时点和固定观察线" option={priceOption} />}
       <label className="flow-filter">记录范围 <select value={rules} aria-label="记录规则筛选" onChange={e => { setRules(e.target.value); setSelected(""); }}><option value="">正式提醒与切换前记录</option><option value="flow-multifactor-v1">新双向规则</option><option value="flow-experiment-2.2.0">旧双向规则 · 研究对照</option><option value="flow-candidate-2.5.0">旧买方候选 · 研究对照</option></select></label>

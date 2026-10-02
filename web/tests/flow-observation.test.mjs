@@ -44,3 +44,13 @@ test("blocker values retain cents, ratios, counts and unknown distinctions",()=>
   assert.match(checkValue({name:"该方向15分钟P95",known:true,passed:false,actual:500000000,required:1000000000}),/500万.*1000万 USD/);
   assert.equal(checkValue({name:"主导方占比≥55%",known:false,passed:false,actual:null,required:55}),"未知");
 });
+
+
+test("first publication latency is not the repeatedly refreshed legacy delay",()=>{
+  const s={at:now.toISOString(),dataThrough:end,fresh:true,availableAt:end,processingDelaySeconds:9999,firstGeneratedAt:end,firstPublishDelaySeconds:12,sourceArrivalDelaySeconds:150,inputAvailableAt:end,windows:{"5":window,"10":window,"15":window,"60":window,"240":window},segments:[],hints:[],baseline:{valid:false,coverage:.8,validDates:20},prices:{},zones:[],diagnostics:{stages:{baseline:{state:"yielded"},study:{state:"error"}}}};
+  const html=render(FlowObservation,{s,failed:false});
+  assert.match(html,/首次发布延迟 12 秒/);assert.match(html,/数据到达延迟 150 秒/);assert.match(html,/最近刷新/);assert.doesNotMatch(html,/9999/);
+  assert.match(html,/同周期基线已保存计算进度/);assert.match(html,/结果研究最近执行异常/);
+  const legacy=render(FlowObservation,{s:{...s,firstGeneratedAt:null,firstPublishDelaySeconds:null},failed:false});
+  assert.match(legacy,/首次发布延迟 未知/);assert.match(legacy,/未留存可核验证据/);
+});

@@ -112,7 +112,11 @@ func (h *Hub) signalsExtra(ctx context.Context, a string, rows []json.RawMessage
 	} else if err != sql.ErrNoRows {
 		return nil, err
 	}
-	return map[string]any{"latestFormal": latestFormal, "current": currentValue, "observation": h.shortObservationView(now), "notificationResults": mail, "prices": prices, "currentPrice": live}, nil
+	repairs, e := h.progressRepairs(ctx, a)
+	if e != nil {
+		return nil, e
+	}
+	return map[string]any{"progressRepairs": repairs, "progressEvaluationVersion": ProgressVersion, "latestFormal": latestFormal, "current": currentValue, "observation": h.shortObservationView(now), "notificationResults": mail, "prices": prices, "currentPrice": live}, nil
 }
 func flowNoticeTitle(v noticePayload) string {
 	name, confirm := "买盘", "突破"

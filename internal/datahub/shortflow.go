@@ -55,6 +55,14 @@ type ShortZone struct {
 	Reference float64   `json:"referencePrice"`
 }
 type ShortObservation struct {
+	Pipeline          string                `json:"pipelineVersion,omitempty"`
+	InputVersion      string                `json:"inputVersion,omitempty"`
+	FirstGenerated    *time.Time            `json:"firstGeneratedAt"`
+	Refreshed         *time.Time            `json:"refreshedAt,omitempty"`
+	InputAvailable    *time.Time            `json:"inputAvailableAt"`
+	FirstDelay        *float64              `json:"firstPublishDelaySeconds"`
+	ArrivalDelay      *float64              `json:"sourceArrivalDelaySeconds"`
+	Diagnostics       *ShortRuntime         `json:"diagnostics,omitempty"`
 	Rules             string                `json:"rulesVersion"`
 	At                time.Time             `json:"at"`
 	Through           time.Time             `json:"dataThrough"`
@@ -80,17 +88,17 @@ type ShortObservation struct {
 	ResearchReason    string                `json:"researchReason"`
 }
 
-func shortBaseline(bars map[int64]FlowBar, from, to, asOf time.Time) ShortBaseline {
+func shortBaselineCoverage(bars map[int64]FlowBar, from, to, asOf time.Time) ShortBaseline {
 	b := ShortBaseline{From: from, To: to, AsOf: asOf, Windows: map[string]ShortThreshold{}}
 	dates := map[string]int{}
+	valid := 0
 	for _, v := range bars {
 		if !v.At.Before(from) && v.At.Before(to) {
 			dates[v.At.Format("2006-01-02")]++
+			valid++
 		}
 	}
-	valid := 0
 	for _, n := range dates {
-		valid += n
 		if n >= 274 {
 			b.Dates++
 		}
@@ -99,34 +107,43 @@ func shortBaseline(bars map[int64]FlowBar, from, to, asOf time.Time) ShortBaseli
 		b.Coverage = float64(valid) / (to.Sub(from).Minutes() / 5)
 	}
 	b.Valid = b.Coverage >= .95 && b.Dates >= 21
-	// Share bounded scratch across horizons; percentile sorts only scratch.
+	return b
+}
+func shortThreshold(bars map[int64]FlowBar, from, to time.Time, m int) ShortThreshold {
+	buy, sell, volume := make([]float64, 0, 8640), make([]float64, 0, 8640), make([]float64, 0, 8640)
+	return shortThresholdScratch(bars, from, to, m, buy, sell, volume)
+}
+func shortThresholdScratch(bars map[int64]FlowBar, from, to time.Time, m int, buy, sell, volume []float64) ShortThreshold {
+	for end := from.Add(time.Duration(m) * time.Minute); !end.After(to); end = end.Add(5 * time.Minute) {
+		v, ok := sumBars(bars, end, m/5)
+		if !ok {
+			continue
+		}
+		volume = append(volume, float64(v.Buy+v.Sell))
+		if v.Net() > 0 {
+			buy = append(buy, float64(v.Net()))
+		}
+		if v.Net() < 0 {
+			sell = append(sell, -float64(v.Net()))
+		}
+	}
+	th := ShortThreshold{Samples: len(volume)}
+	if len(volume) > 0 {
+		th.MedianVolume = flowPtr(percentile(volume, .5))
+	}
+	if len(buy) > 0 {
+		th.BuyP95 = flowPtr(percentile(buy, .95))
+	}
+	if len(sell) > 0 {
+		th.SellP95 = flowPtr(percentile(sell, .95))
+	}
+	return th
+}
+func shortBaseline(bars map[int64]FlowBar, from, to, asOf time.Time) ShortBaseline {
+	b := shortBaselineCoverage(bars, from, to, asOf)
 	buy, sell, volume := make([]float64, 0, 8640), make([]float64, 0, 8640), make([]float64, 0, 8640)
 	for _, m := range []int{5, 10, 15, 60, 240} {
-		buy, sell, volume = buy[:0], sell[:0], volume[:0]
-		for end := from.Add(time.Duration(m) * time.Minute); !end.After(to); end = end.Add(5 * time.Minute) {
-			v, ok := sumBars(bars, end, m/5)
-			if !ok {
-				continue
-			}
-			volume = append(volume, float64(v.Buy+v.Sell))
-			if v.Net() > 0 {
-				buy = append(buy, float64(v.Net()))
-			}
-			if v.Net() < 0 {
-				sell = append(sell, -float64(v.Net()))
-			}
-		}
-		th := ShortThreshold{Samples: len(volume)}
-		if len(volume) > 0 {
-			th.MedianVolume = flowPtr(percentile(volume, .5))
-		}
-		if len(buy) > 0 {
-			th.BuyP95 = flowPtr(percentile(buy, .95))
-		}
-		if len(sell) > 0 {
-			th.SellP95 = flowPtr(percentile(sell, .95))
-		}
-		b.Windows[fmt.Sprint(m)] = th
+		b.Windows[fmt.Sprint(m)] = shortThresholdScratch(bars, from, to, m, buy[:0], sell[:0], volume[:0])
 	}
 	return b
 }

@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/url"
 	"path/filepath"
-	"sort"
 	"time"
 )
 
@@ -33,6 +32,13 @@ CREATE TRIGGER IF NOT EXISTS sf_removed AFTER DELETE ON sf_records BEGIN UPDATE 
 	if err != nil {
 		return err
 	}
+	// Keep the bounded reader available even if a full research budget prevents
+	// creation of new diagnostic metadata; live amounts still need isolation.
+	_, pipelineErr := w.research.Exec("INSERT OR IGNORE INTO sf_records VALUES('pipeline-origin',?,?,?)", ShortPipeline, now.Unix(), b)
+	var runtime ShortRuntime
+	if w.LoadState("short-flow/runtime-v2", &runtime) && runtime.Version == ShortPipeline {
+		w.shortRuntime = &runtime
+	}
 	// Long formal-history readers occupy the original single-connection pool.
 	// A dedicated, bounded WAL connection isolates short work without changing
 	// existing collectors/readers, the database file, or its page ceiling.
@@ -49,7 +55,7 @@ CREATE TRIGGER IF NOT EXISTS sf_removed AFTER DELETE ON sf_records BEGIN UPDATE 
 		return err
 	}
 	w.shortResearch = db
-	return nil
+	return pipelineErr
 }
 
 func (w *Warehouse) shortLoad(ctx context.Context, kind, id string, v any) error {
@@ -72,13 +78,23 @@ func (w *Warehouse) shortSaveState(ctx context.Context, key string, v any) error
 		return errors.New("短周期状态工作集超限")
 	}
 	_, e = w.db.ExecContext(ctx, "INSERT INTO state(key,payload) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", key, b)
-	return e
+	return shortWriteError(e)
 }
 func (w *Warehouse) shortState(ctx context.Context, key string, v any) bool {
+	return w.shortStateResult(ctx, key, v) == nil
+}
+func (w *Warehouse) shortStateResult(ctx context.Context, key string, v any) error {
 	var b []byte
-	return w.db.QueryRowContext(ctx, "SELECT payload FROM state WHERE key=?", key).Scan(&b) == nil && len(b) <= shortFlowRowLimit && json.Unmarshal(b, v) == nil
+	if e := w.db.QueryRowContext(ctx, "SELECT payload FROM state WHERE key=?", key).Scan(&b); e != nil {
+		return e
+	}
+	if len(b) > shortFlowRowLimit {
+		return errors.New("短周期状态读取超过上限")
+	}
+	return json.Unmarshal(b, v)
 }
 func (w *Warehouse) shortPut(ctx context.Context, kind, id string, at time.Time, v any) error {
+	defer shortMeasure(ctx, "checkpoint_write", time.Now())
 	if w.Status().Paused || w.Status().ResearchPaused {
 		return errors.New("研究总容量保护")
 	}
@@ -90,7 +106,7 @@ func (w *Warehouse) shortPut(ctx context.Context, kind, id string, at time.Time,
 		return errors.New("短周期研究行超过写入上限")
 	}
 	_, e = w.shortDB().ExecContext(ctx, "INSERT INTO sf_records VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET at=excluded.at,payload=excluded.payload", kind, id, at.Unix(), b)
-	return e
+	return shortWriteError(e)
 }
 
 type shortGap struct {
@@ -100,12 +116,25 @@ type shortGap struct {
 	Count  int       `json:"count"`
 }
 
-func (w *Warehouse) shortGap(now time.Time, e error) {
+func (w *Warehouse) shortGap(now time.Time, e error, pause ...bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	var g shortGap
-	w.shortState(ctx, "short-flow/gap", &g)
+	var raw []byte
+	err := w.db.QueryRowContext(ctx, "SELECT payload FROM state WHERE key='short-flow/gap'").Scan(&raw)
+	if err != nil && err != sql.ErrNoRows {
+		return
+	}
+	if err == nil {
+		if json.Unmarshal(raw, &g) != nil {
+			return
+		}
+	}
+	wasPaused := g.Paused
 	g.At, g.Reason, g.Paused = now, e.Error(), true
+	if len(pause) > 0 {
+		g.Paused = wasPaused || pause[0]
+	}
 	g.Count++
 	_ = w.shortSaveState(ctx, "short-flow/gap", g)
 }
@@ -137,88 +166,10 @@ func (b shortStoredBar) flow() FlowBar {
 	return FlowBar{At: time.Unix(b[0], 0).UTC(), Buy: b[1], Sell: b[2]}
 }
 
-// One or two days per checkpoint keeps cold-start / historical corrections bounded.
-// An ordinary hourly advance reuses the unchanged prior range and reads one hour.
+// Prepare the baseline from the clock, independently of the shared hub state
+// connection. The old entry point remains for bounded tests and callers.
 func (h *Hub) shortBaselineStep(ctx context.Context, now time.Time) error {
-	var current ShortObservation
-	if !h.Store.shortState(ctx, "short-flow/current", &current) {
-		return ctx.Err()
-	}
-	if current.Through.IsZero() {
-		return nil
-	}
-	return h.shortBaselineAt(ctx, current.Through, now)
-}
-
-func (h *Hub) shortBaselineAt(ctx context.Context, through, now time.Time) error {
-	to := through.Truncate(time.Hour).Add(-time.Hour)
-	from := to.Add(-30 * 24 * time.Hour)
-	id := ID("flow", "BTC", "", "spot")
-	w := shortBaselineWork{Bars: make([]shortStoredBar, 0, 8640)}
-	err := h.Store.shortLoad(ctx, "work", ShortFlowRules, &w)
-	if err != nil && err != sql.ErrNoRows {
-		return err
-	}
-	if w.Cursor.Equal(w.To) && !w.To.IsZero() {
-		version, e := h.Store.shortRangeVersion(ctx, id, w.From, w.To)
-		if e != nil {
-			return e
-		}
-		if w.To.Equal(to) && w.Version == version {
-			return nil
-		}
-		if w.Version == version && to.After(w.To) && to.Sub(w.To) <= 24*time.Hour {
-			keep := make([]shortStoredBar, 0, 8640)
-			for _, b := range w.Bars {
-				if b[0] >= from.Unix() {
-					keep = append(keep, b)
-				}
-			}
-			w.From, w.To, w.AsOf, w.Bars = from, to, now, keep
-			w.Version, err = h.Store.shortRangeVersion(ctx, id, from, to)
-			if err != nil {
-				return err
-			}
-		} else {
-			w = shortBaselineWork{}
-		}
-	}
-	if w.To.IsZero() {
-		version, e := h.Store.shortRangeVersion(ctx, id, from, to)
-		if e != nil {
-			return e
-		}
-		w = shortBaselineWork{From: from, To: to, Cursor: from, AsOf: now, Version: version, Bars: []shortStoredBar{}}
-	}
-	end := minTime(w.Cursor.Add(48*time.Hour), w.To)
-	acc := newFlowAccumulator(300)
-	if err = factsAsOf(ctx, h.Store.shortDB(), id, w.Cursor, end, w.AsOf, func(o Observation) error {
-		if shortClosedFact(o) {
-			acc.add(o)
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-	for _, b := range acc.finish() {
-		w.Bars = append(w.Bars, storeShortBar(b))
-	}
-	sort.Slice(w.Bars, func(i, j int) bool { return w.Bars[i][0] < w.Bars[j][0] })
-	if len(w.Bars) > 8640 {
-		return errors.New("短周期基线工作集超限")
-	}
-	w.Cursor = end
-	if w.Cursor.Equal(w.To) {
-		bars := make(map[int64]FlowBar, len(w.Bars))
-		for _, b := range w.Bars {
-			bars[b[0]] = b.flow()
-		}
-		b := shortBaseline(bars, w.From, w.To, w.AsOf)
-		if err = h.Store.shortPut(ctx, "baseline", ShortFlowRules, now, b); err != nil {
-			return err
-		}
-	}
-	return h.Store.shortPut(ctx, "work", ShortFlowRules, now, w)
+	return h.shortBaselineAt(ctx, now.Add(time.Minute).Truncate(time.Hour), now)
 }
 
 // Legacy forming revisions remain in the ledger for audit, not new evidence.
@@ -235,20 +186,24 @@ func (h *Hub) shortInput(ctx context.Context, now time.Time) (map[int64]FlowBar,
 	}
 	acc := newFlowAccumulator(300)
 	available := map[int64]time.Time{}
+	unknown := map[int64]bool{}
 	e := factsAsOf(ctx, h.Store.shortDB(), id, end.Add(-4*time.Hour), end, now, func(o Observation) error {
 		if !shortClosedFact(o) {
 			return nil
 		}
 		acc.add(o)
 		at := recordTime(o).Truncate(5 * time.Minute).Unix()
-		seen := o.FetchedAt
-		if o.FirstFetchedAt != nil {
-			seen = *o.FirstFetchedAt
+		if o.FirstFetchedAt == nil {
+			unknown[at] = true
+		} else {
+			available[at] = maxTime(available[at], *o.FirstFetchedAt)
 		}
-		available[at] = maxTime(available[at], seen)
 		return nil
 	})
 	bars := acc.finish()
+	for at := range unknown {
+		delete(available, at)
+	}
 	// Do not pretend a missing latest bucket is complete. An older complete end
 	// is displayed with its real age and cannot silently re-arm an experiment.
 	for end.After(now.Add(-4 * time.Hour)) {
@@ -261,51 +216,88 @@ func (h *Hub) shortInput(ctx context.Context, now time.Time) (map[int64]FlowBar,
 }
 
 func (h *Hub) shortObservationStep(ctx context.Context, now time.Time) error {
+	inputStart := time.Now()
 	bars, available, end, e := h.shortInput(ctx, now)
+	shortMeasure(ctx, "flow_read", inputStart)
 	if e != nil {
 		return e
 	}
 	var baseline ShortBaseline
-	baselineErr := h.Store.shortLoad(ctx, "baseline", ShortFlowRules, &baseline)
-	// Resolve an ordinary hourly rollover before first-visible enrollment.
-	// Otherwise the worker phase order would invalidate one of twelve windows
-	// every hour and make the 95% coverage gate unattainable. Cold backfill stays
-	// checkpointed in its own phase; this shares the existing two-second budget.
-	to := end.Truncate(time.Hour).Add(-time.Hour)
-	if baselineErr == nil && to.After(baseline.To) && to.Sub(baseline.To) <= time.Hour {
-		baselineErr = h.shortBaselineAt(ctx, end, now)
-		if baselineErr == nil {
-			baselineErr = h.Store.shortLoad(ctx, "baseline", ShortFlowRules, &baseline)
-		}
+	optional, cancelOptional := context.WithTimeout(ctx, 300*time.Millisecond)
+	baselineErr := h.Store.shortLoad(optional, "baseline-v2", end.Truncate(time.Hour).Add(-time.Hour).Format(time.RFC3339), &baseline)
+	if baselineErr == sql.ErrNoRows {
+		baselineErr = h.Store.shortLoad(optional, "baseline", ShortFlowRules, &baseline)
 	}
-	candles, ce := liquidationCandleSeries(ctx, h.Store.shortDB(), "BTC", end.Add(-16*time.Hour), end, now, false)
+	cancelOptional()
+	priceStart := time.Now()
+	optional, cancelOptional = context.WithTimeout(ctx, 200*time.Millisecond)
+	candles, ce := liquidationCandleSeries(optional, h.Store.shortDB(), "BTC", end.Add(-16*time.Hour), end, now, false)
+	cancelOptional()
+	shortMeasure(ctx, "price_read", priceStart)
 	if ce != nil {
 		candles = map[int64]Candle{}
 	}
 	s := buildShortObservation(bars, candles, end, now, baseline)
+	s.Pipeline = ShortPipeline
+	for at, v := range available {
+		if at >= end.Add(-4*time.Hour).Unix() && at < end.Unix() && (s.InputAvailable == nil || v.After(*s.InputAvailable)) {
+			s.InputAvailable = flowPtr(v)
+		}
+	}
+	for at := range bars {
+		if at >= end.Add(-4*time.Hour).Unix() && at < end.Unix() && available[at].IsZero() {
+			s.InputAvailable = nil
+			break
+		}
+	}
 	if t := available[end.Add(-5*time.Minute).Unix()]; !t.IsZero() {
 		s.Available = &t
 		s.Delay = flowPtr(math.Max(0, now.Sub(t).Seconds()))
 	}
 	var formal FlowSnapshot
-	if h.Store.shortState(ctx, "signals/current/BTC", &formal) && !formal.At.After(now) && now.Sub(formal.DataThrough) <= 12*time.Minute {
+	optional, cancelOptional = context.WithTimeout(ctx, 100*time.Millisecond)
+	var gap shortGap
+	gapErr := h.Store.shortStateResult(optional, "short-flow/gap", &gap)
+	if h.Store.shortState(optional, "signals/current/BTC", &formal) && !formal.At.After(now) && now.Sub(formal.DataThrough) <= 12*time.Minute {
 		s.Background = &formal.Context
 		s.BackgroundAt = &formal.At
 		s.BackgroundThrough = &formal.DataThrough
 	}
-	h.shortZones(ctx, &s, now)
-	var gap shortGap
-	h.Store.shortState(ctx, "short-flow/gap", &gap)
+	h.shortZones(optional, &s, now)
+	cancelOptional()
 	s.ResearchPaused = gap.Paused || h.Store.Status().ResearchPaused || h.Store.Status().Paused
 	if s.ResearchPaused {
 		s.ResearchReason = gap.Reason
 	}
+	if h.Store.Status().ResearchPaused || h.Store.Status().Paused {
+		s.ResearchReason = "研究总容量保护"
+	}
+	if gapErr != nil && gapErr != sql.ErrNoRows {
+		s.ResearchPaused = true
+		s.ResearchReason = "研究暂停状态暂不可核验"
+	}
+	s.At = now.Add(time.Since(inputStart))
+	s.Refreshed = flowPtr(s.At)
+	publication, pubErr := h.shortPublication(ctx, &s, s.At)
 	// Current observations remain available when research storage is full.
+	persistStart := time.Now()
 	if e = h.Store.shortSaveState(ctx, "short-flow/current", s); e != nil {
 		return e
 	}
+	shortMeasure(ctx, "current_write", persistStart)
+	if pubErr != nil {
+		return pubErr
+	}
+	if publication != nil {
+		if e := h.Store.shortPut(ctx, "publication", s.InputVersion, s.Through, publication); e != nil {
+			return e
+		}
+	}
 	if baselineErr != nil && baselineErr != sql.ErrNoRows {
 		return baselineErr
+	}
+	if gapErr != nil && gapErr != sql.ErrNoRows {
+		return gapErr
 	}
 	return h.recordShortObservation(ctx, s, now)
 }
@@ -351,11 +343,15 @@ func (h *Hub) shortObservationView(now time.Time) any {
 		return nil
 	}
 	s.age(now)
+	s.Diagnostics = h.Store.shortRuntimeView()
 	var g shortGap
 	h.Store.LoadState("short-flow/gap", &g)
 	s.ResearchPaused = g.Paused || h.Store.Status().ResearchPaused || h.Store.Status().Paused
 	if s.ResearchPaused {
 		s.ResearchReason = g.Reason
+	}
+	if h.Store.Status().ResearchPaused || h.Store.Status().Paused {
+		s.ResearchReason = "研究总容量保护"
 	}
 	return s
 }
@@ -367,8 +363,13 @@ func (h *Hub) shortFlowWorker(ctx context.Context) {
 	phase, successes := 0, 0
 	for {
 		now := time.Now().UTC()
-		// Reserve 200ms of the two-second slice for persisting gap/recovery state.
-		step, cancel := context.WithTimeout(ctx, 1800*time.Millisecond)
+		// Reserve 350ms of the two-second slice for diagnostics and recovery state.
+		step, cancel := context.WithTimeout(ctx, 1650*time.Millisecond)
+		trace := &shortTrace{Operations: map[string]time.Duration{}}
+		step = context.WithValue(step, shortTraceKey{}, trace)
+		started := time.Now()
+		hubWait := h.Store.db.Stats().WaitDuration
+		researchWait := h.Store.shortDB().Stats().WaitDuration
 		var e error
 		switch phase % 3 {
 		case 0:
@@ -379,9 +380,16 @@ func (h *Hub) shortFlowWorker(ctx context.Context) {
 			e = h.shortStudyStep(step, now)
 		}
 		cancel()
+		if ctx.Err() != nil {
+			return
+		}
+		trace.Operations["hub_pool_wait"] = h.Store.db.Stats().WaitDuration - hubWait
+		trace.Operations["research_pool_wait"] = h.Store.shortDB().Stats().WaitDuration - researchWait
+		h.Store.recordShortRuntime([]string{"observation", "baseline", "study"}[phase%3], now, time.Since(started), trace, e)
 		if e != nil {
 			successes = 0
-			h.Store.shortGap(now, fmt.Errorf("短周期阶段%d: %w", phase%3, e))
+			class := shortErrorClass(e)
+			h.Store.shortGap(now, fmt.Errorf("短周期阶段%d: %w", phase%3, e), class == "write" || class == "capacity")
 		} else {
 			successes++
 			if successes >= 3 {
@@ -406,6 +414,7 @@ func (w *Warehouse) shortDB() *sql.DB {
 	return w.research
 }
 func (w *Warehouse) shortRangeVersion(ctx context.Context, id string, from, to time.Time) (string, error) {
+	defer shortMeasure(ctx, "input_version", time.Now())
 	var n, last int64
 	e := w.shortDB().QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE dataset=? AND ts>=? AND ts<?", id, from.Unix(), to.Unix()).Scan(&n, &last)
 	return fmt.Sprintf("%d/%d", n, last), e
