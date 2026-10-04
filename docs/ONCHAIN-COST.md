@@ -71,7 +71,7 @@ GET `/api/v2/onchain-cost`、`/history`、`/events`、`/research` 全部只读�
 
 `go test -race ./...`、`go vet ./...`、前端typecheck/build/test、`bash -n deploy/*.sh scripts/resource-replay.sh`；浏览器1440/1280/390px、键盘/区间/日期/ETH返回/缺失与过期。既有资源回放加入四年周成本、连续日线、16项研究结果推进及并发新GET；仍1.7CPU/768MiB容器、600MiB目标。短回放与5小时15分钟长回放分别记录，不以本机采样代替。
 
-稳定Release之前必须通过当前提交的CI和资源门槛；不直接改生产源码。在线备份旧state/hub/research及新onchain库。`TIDAL_ONCHAIN_DISABLED=true`停新采集；`TIDAL_ONCHAIN_EVENTS_DISABLED=true`停新情景与邮件；设置接口独立关邮件。Compose接受两个变量，稳定升级保留已有显式关闭值。
+原发布方案要求稳定Release之前通过当前提交的CI和资源门槛。2026-10-04用户明确授权直接发布生产、不等待资源门槛全部通过；本轮按此授权先发布，未完成的长测和运行验收继续记录，资源标准不变。不直接改生产源码。在线备份旧state/hub/research及已存在的onchain库。`TIDAL_ONCHAIN_DISABLED=true`停新采集；`TIDAL_ONCHAIN_EVENTS_DISABLED=true`停新情景与邮件；设置接口独立关邮件。Compose接受两个变量，稳定升级保留已有显式关闭值。
 
 回退顺序：停止新app任务；用新镜像运行 `tidal quiesce-onchain /data/v2`，关闭新邮件并终结待发onchain通知；操作成功才启动旧稳定镜像。不得删onchain库或事件。新部署脚本自动健康回退已接入此过程，失败时阻止不安全启动。手工回退也必须执行同样顺序；恢复库通过既有SQLite在线备份产物，不复制运行中WAL。
 
