@@ -284,6 +284,9 @@ func TestResourceReplay(t *testing.T) {
 			if e = h.processSignals(ctx, time.Now().UTC()); e != nil {
 				t.Fatal(e)
 			}
+			if e = costReplayRevision(ctx, h, time.Now().UTC()); e != nil {
+				t.Fatal(e)
+			}
 			if e = h.processCostResearch(ctx, time.Now().UTC()); e != nil {
 				t.Fatal(e)
 			}

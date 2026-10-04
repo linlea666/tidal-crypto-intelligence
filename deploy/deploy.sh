@@ -45,17 +45,18 @@ if [[ -s "$root/deployed-version" && -f "$root/state.env" ]]; then
   old_image=$(sed -n 's/^TIDAL_IMAGE=//p' "$root/state.env")
 fi
 # Online SQLite backup includes WAL transactions and avoids copying live WAL files.
+backup_batch="$version-$(date -u +%s)"
 if [[ -f "$root/data/state.sqlite" ]]; then
   sqlite3 "$root/data/state.sqlite" ".timeout 10000" ".backup '$root/backups/state-$version.sqlite'"
 fi
 if [[ -f "$root/data/v2/hub.sqlite" ]]; then
-  docker run --rm --user 0:0 -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/hub.sqlite "/backup/hub-$version-$(date -u +%s).sqlite"
+  docker run --rm --user 0:0 -e "TIDAL_BACKUP_BATCH=$backup_batch" -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/hub.sqlite "/backup/hub-$backup_batch.sqlite"
 fi
 if [[ -f "$root/data/v2/research.sqlite" ]]; then
-  docker run --rm --user 0:0 -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/research.sqlite "/backup/research-$version-$(date -u +%s).sqlite"
+  docker run --rm --user 0:0 -e "TIDAL_BACKUP_BATCH=$backup_batch" -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/research.sqlite "/backup/research-$backup_batch.sqlite"
 fi
 if [[ -f "$root/data/v2/onchain.sqlite" ]]; then
-  docker run --rm --user 0:0 -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/onchain.sqlite "/backup/onchain-$version-$(date -u +%s).sqlite"
+  docker run --rm --user 0:0 -e "TIDAL_BACKUP_BATCH=$backup_batch" -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/onchain.sqlite "/backup/onchain-$backup_batch.sqlite"
 fi
 [[ ! -f "$root/state.env" ]] || cp "$root/state.env" "$root/backups/state-$version.env"
 ln -sfn "$release" "$root/current.next"

@@ -14,7 +14,8 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-const OnchainRules = "onchain-cost-1"
+const OnchainRules = "onchain-cost-2"
+const onchainLegacyRules = "onchain-cost-1"
 const onchainSource = "BlockHorizon"
 const onchainURL = "https://zbvrubdalcojapjygbcz.supabase.co/functions/v1/bundle_handler"
 const onchainBudget int64 = 128 << 20
@@ -29,21 +30,30 @@ type CostCohort struct {
 	Total  string   `json:"total"`
 }
 type CostFrame struct {
-	Date      string     `json:"date"`
-	Price     string     `json:"price"`
-	STH       CostCohort `json:"sth"`
-	LTH       CostCohort `json:"lth"`
-	Method    string     `json:"method"`
-	Revision  string     `json:"revision"`
-	FirstSeen time.Time  `json:"firstSeen"`
-	BuiltAt   *time.Time `json:"builtAt"`
-	Origin    string     `json:"origin"`
+	Date                 string     `json:"date"`
+	Price                string     `json:"price"`
+	STH                  CostCohort `json:"sth"`
+	LTH                  CostCohort `json:"lth"`
+	Method               string     `json:"method"`
+	Revision             string     `json:"revision"`
+	FirstSeen            time.Time  `json:"firstSeen"`
+	BuiltAt              *time.Time `json:"builtAt"`
+	Origin               string     `json:"origin"`
+	DistributionRevision string     `json:"distributionRevision"`
+	PriceRevision        string     `json:"priceRevision"`
+	ValidatedAt          *time.Time `json:"validatedAt"`
+	IntervalEnd          *time.Time `json:"intervalEnd"`
 }
 type CostPrice struct {
-	Date      string    `json:"date"`
-	Value     string    `json:"value"`
-	Revision  string    `json:"revision"`
-	FirstSeen time.Time `json:"firstSeen"`
+	Date        string     `json:"date"`
+	Value       string     `json:"value"`
+	Revision    string     `json:"revision"`
+	FirstSeen   time.Time  `json:"firstSeen"`
+	ValidatedAt *time.Time `json:"validatedAt"`
+	IntervalEnd *time.Time `json:"intervalEnd"`
+	Role        string     `json:"role"`
+	Source      string     `json:"source"`
+	Completion  string     `json:"completion"`
 }
 type CostBounds struct {
 	Lower string `json:"lower"`
@@ -81,17 +91,20 @@ type CostSettings struct {
 	EmailEnabled bool `json:"emailEnabled"`
 }
 type CostFeed struct {
-	Version     string     `json:"version"`
-	ETag        string     `json:"etag"`
-	FullETag    string     `json:"fullEtag"`
-	LastCheck   *time.Time `json:"lastCheck"`
-	LastAttempt *time.Time `json:"lastAttempt"`
-	LastFull    *time.Time `json:"lastFull"`
-	NextAttempt *time.Time `json:"nextAttempt"`
-	LastDate    string     `json:"lastDate"`
-	LastError   string     `json:"lastError"`
-	Disabled    bool       `json:"disabled"`
-	Failures    int        `json:"failures"`
+	Version       string     `json:"version"`
+	ETag          string     `json:"etag"`
+	FullETag      string     `json:"fullEtag"`
+	LastCheck     *time.Time `json:"lastCheck"`
+	LastAttempt   *time.Time `json:"lastAttempt"`
+	LastFull      *time.Time `json:"lastFull"`
+	NextAttempt   *time.Time `json:"nextAttempt"`
+	LastDate      string     `json:"lastDate"`
+	LastError     string     `json:"lastError"`
+	Disabled      bool       `json:"disabled"`
+	Failures      int        `json:"failures"`
+	CostError     string     `json:"costError"`
+	PriceError    string     `json:"priceError"`
+	LastPriceDate string     `json:"lastPriceDate"`
 }
 
 func costDay(s string) (time.Time, error) {
@@ -277,7 +290,7 @@ func costZones(f CostFrame) []CostZone {
 	p := dec(f.Price)
 	k := decimal.NewFromInt(1000)
 	min, max := p.Mul(dec("0.8")), p.Mul(dec("1.2"))
-	for _, side := range []string{"above", "below"} {
+	for _, side := range []string{"inside", "above", "below"} {
 		var best *CostZone
 		bestDistance := decimal.Zero
 		for _, low := range starts {
@@ -285,7 +298,7 @@ func costZones(f CostFrame) []CostZone {
 			if low.LessThan(min) || high.GreaterThan(max) {
 				continue
 			}
-			if side == "above" && low.LessThan(p) || side == "below" && high.GreaterThan(p) {
+			if side == "inside" && (low.GreaterThan(p) || !high.GreaterThan(p)) || side == "above" && !low.GreaterThan(p) || side == "below" && high.GreaterThan(p) {
 				continue
 			}
 			sum := decimal.Zero
@@ -296,10 +309,13 @@ func costZones(f CostFrame) []CostZone {
 				continue
 			}
 			distance := low.Sub(p).Abs()
+			if side == "inside" {
+				distance = low.Add(high).Div(dec("2")).Sub(p).Abs()
+			}
 			if side == "below" {
 				distance = p.Sub(high).Abs()
 			}
-			if best == nil || sum.GreaterThan(dec(best.Supply)) || sum.Equal(dec(best.Supply)) && distance.LessThan(bestDistance) {
+			if best == nil || sum.GreaterThan(dec(best.Supply)) || sum.Equal(dec(best.Supply)) && (distance.LessThan(bestDistance) || distance.Equal(bestDistance) && low.LessThan(dec(best.Low))) {
 				best = &CostZone{side, low.String(), high.String(), sum.String()}
 				bestDistance = distance
 			}

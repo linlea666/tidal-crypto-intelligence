@@ -171,6 +171,7 @@ func (h *Hub) Run(ctx context.Context) {
 	if !h.offline {
 		if !h.onchainDisabled {
 			start(h.onchainCollector)
+			start(h.onchainEvaluator)
 		}
 		start(h.vixCollector)
 		start(h.vixDailyCollector)
@@ -373,6 +374,7 @@ func (h *Hub) fx(ctx context.Context) {
 			}
 			if len(p.Rates) == 2 {
 				sort.Slice(p.Rates, func(i, j int) bool { return p.Rates[i].Quote < p.Rates[j].Quote })
+				h.captureCostFX(ctx, p.Rates, time.Now().UTC())
 				o := Observation{Dataset: d.ID, Source: "kraken", FetchedAt: now, TimeBasis: "retrieval", Quality: "valid", Payload: p}
 				if now.Sub(lastSaved) >= time.Minute {
 					_, _ = h.Store.Ingest(d, o)

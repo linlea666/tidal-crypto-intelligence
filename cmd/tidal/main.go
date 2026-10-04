@@ -26,6 +26,16 @@ func env(k, def string) string {
 	return def
 }
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "prepare-onchain-restore" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := datahub.RestoreOnchainBoundary(ctx, os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "Onchain restore reconciliation failed:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if len(os.Args) == 3 && os.Args[1] == "quiesce-onchain" {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()

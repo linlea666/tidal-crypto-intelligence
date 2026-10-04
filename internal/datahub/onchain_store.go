@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,6 +21,7 @@ import (
 type costStore struct {
 	db        *sql.DB
 	mu        sync.Mutex
+	fetchMu   sync.Mutex
 	path      string
 	initError string
 	epoch     atomic.Uint64
@@ -36,12 +39,30 @@ func (w *Warehouse) initOnchain() {
 	_, e = db.Exec(`PRAGMA cache_size=-512; PRAGMA busy_timeout=1000; PRAGMA max_page_count=32768;
  CREATE TABLE IF NOT EXISTS frames(day TEXT,revision TEXT,first_seen INTEGER,origin TEXT,method TEXT,payload BLOB,summary BLOB,PRIMARY KEY(day,revision)) WITHOUT ROWID;
  CREATE INDEX IF NOT EXISTS frame_available ON frames(day,first_seen);
+ CREATE TABLE IF NOT EXISTS frames_v2(day TEXT,revision TEXT,first_seen INTEGER,origin TEXT,method TEXT,payload BLOB,summary BLOB,PRIMARY KEY(day,revision)) WITHOUT ROWID;
+ CREATE INDEX IF NOT EXISTS frame_v2_available ON frames_v2(day,first_seen);
  CREATE TABLE IF NOT EXISTS prices(day TEXT,revision TEXT,first_seen INTEGER,value TEXT,PRIMARY KEY(day,revision)) WITHOUT ROWID;
  CREATE TABLE IF NOT EXISTS state(key TEXT PRIMARY KEY,payload BLOB) WITHOUT ROWID;
  CREATE TABLE IF NOT EXISTS events(id TEXT PRIMARY KEY,detected INTEGER,kind TEXT,payload BLOB) WITHOUT ROWID;
  CREATE TABLE IF NOT EXISTS outbox(id TEXT PRIMARY KEY,created INTEGER,payload BLOB,status TEXT) WITHOUT ROWID;
  CREATE TABLE IF NOT EXISTS results(event_id TEXT,horizon INTEGER,payload BLOB,PRIMARY KEY(event_id,horizon)) WITHOUT ROWID;
- CREATE TABLE IF NOT EXISTS evidence(day TEXT,as_of INTEGER,payload BLOB,PRIMARY KEY(day,as_of)) WITHOUT ROWID;`)
+ CREATE TABLE IF NOT EXISTS evidence(day TEXT,as_of INTEGER,payload BLOB,PRIMARY KEY(day,as_of)) WITHOUT ROWID;
+ CREATE TABLE IF NOT EXISTS distributions(revision TEXT PRIMARY KEY,payload BLOB) WITHOUT ROWID;
+ CREATE TABLE IF NOT EXISTS price_meta(day TEXT,revision TEXT,payload BLOB,PRIMARY KEY(day,revision)) WITHOUT ROWID;
+ CREATE TABLE IF NOT EXISTS cases(id TEXT PRIMARY KEY,updated INTEGER,payload BLOB) WITHOUT ROWID;
+ CREATE TABLE IF NOT EXISTS daily(id TEXT PRIMARY KEY,day TEXT,seen INTEGER,payload BLOB) WITHOUT ROWID;
+ CREATE INDEX IF NOT EXISTS daily_day ON daily(day,seen);
+ CREATE TABLE IF NOT EXISTS trials(id TEXT PRIMARY KEY,detected INTEGER,group_name TEXT,payload BLOB) WITHOUT ROWID;
+ CREATE INDEX IF NOT EXISTS trials_time ON trials(detected,id);
+ CREATE TABLE IF NOT EXISTS trial_results(trial_id TEXT,horizon INTEGER,payload BLOB,PRIMARY KEY(trial_id,horizon)) WITHOUT ROWID;
+ CREATE TABLE IF NOT EXISTS fx_boundary(close_at INTEGER PRIMARY KEY,sampled INTEGER,available INTEGER,rate TEXT) WITHOUT ROWID;`)
+	var sqliteVersion string
+	if e == nil {
+		e = db.QueryRow("SELECT sqlite_version()").Scan(&sqliteVersion)
+	}
+	if e == nil && !costSQLiteSafe(sqliteVersion) {
+		e = errors.New("SQLite版本缺少所需WAL修复，链上模块已隔离")
+	}
 	if e != nil {
 		s.initError = e.Error()
 		db.Close()
@@ -99,6 +120,23 @@ func (s *costStore) commit(ctx context.Context, tx *sql.Tx) error {
 	return tx.Commit()
 }
 
+func (s *costStore) controlReady() error {
+	if e := s.available(); e != nil {
+		return e
+	}
+	if s.bytes()+(1<<20) >= onchainBudget {
+		return errors.New("链上控制记录保留空间不足")
+	}
+	return nil
+}
+func (s *costStore) controlExec(ctx context.Context, query string, args ...any) error {
+	if e := s.controlReady(); e != nil {
+		return e
+	}
+	_, e := s.db.ExecContext(ctx, query, args...)
+	return e
+}
+
 type costQuerier interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
@@ -123,7 +161,7 @@ func costSave(ctx context.Context, tx *sql.Tx, key string, value any) error {
 	return e
 }
 func (s *costStore) save(ctx context.Context, key string, value any) error {
-	if e := s.available(); e != nil {
+	if e := s.controlReady(); e != nil {
 		return e
 	}
 	tx, e := s.db.BeginTx(ctx, nil)
@@ -212,6 +250,18 @@ func (s *costStore) ingest(ctx context.Context, b costBundle, now time.Time, ini
 		if err != nil {
 			return err
 		}
+		if n > 0 {
+			end := costClose(p.Date)
+			p.Revision, p.FirstSeen, p.ValidatedAt, p.IntervalEnd = r, now, &now, &end
+			p.Role, p.Source, p.Completion = "daily_close", onchainSource, "completed"
+			raw, err := json.Marshal(p)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT INTO price_meta VALUES(?,?,?)", p.Date, r, raw); err != nil {
+				return err
+			}
+		}
 		estimated += n * 16384 // Includes tree/index/WAL growth, not only payload bytes.
 		if estimated >= onchainBudget*95/100 {
 			return errors.New("链上事务将触及95%容量保护线，已保留原数据")
@@ -220,7 +270,7 @@ func (s *costStore) ingest(ctx context.Context, b costBundle, now time.Time, ini
 	for _, f := range b.Frames {
 		f.Revision = costFrameRevision(f)
 		var exists int
-		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM frames WHERE day=? AND revision=?", f.Date, f.Revision).Scan(&exists); e != nil {
+		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM (SELECT * FROM frames UNION ALL SELECT * FROM frames_v2) WHERE day=? AND revision=?", f.Date, f.Revision).Scan(&exists); e != nil {
 			return e
 		}
 		if exists > 0 {
@@ -232,7 +282,20 @@ func (s *costStore) ingest(ctx context.Context, b costBundle, now time.Time, ini
 		if !initial && f.Date == costDate(now.AddDate(0, 0, -1)) {
 			f.Origin = "forward"
 		}
-		raw, e := costPack(f)
+		f.DistributionRevision = costDistributionRevision(f)
+		f.PriceRevision = costHash([]string{f.Date, f.Price})
+		end := costClose(f.Date)
+		f.IntervalEnd, f.ValidatedAt = &end, &now
+		distribution, e := costPack([]CostCohort{f.STH, f.LTH})
+		if e != nil {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT OR IGNORE INTO distributions VALUES(?,?)", f.DistributionRevision, distribution); e != nil {
+			return e
+		}
+		stored := f
+		stored.STH.Values, stored.LTH.Values = nil, nil
+		raw, e := costPack(stored)
 		if e != nil {
 			return e
 		}
@@ -244,16 +307,16 @@ func (s *costStore) ingest(ctx context.Context, b costBundle, now time.Time, ini
 		if e != nil {
 			return e
 		}
-		estimated += int64((len(raw)+len(summary)+4095)/4096+6) * 8192
+		estimated += int64((len(raw)+len(distribution)+len(summary)+4095)/4096+6) * 8192
 		if estimated >= onchainBudget*95/100 {
 			return errors.New("链上事务将触及95%容量保护线，已保留原数据")
 		}
-		if _, e = tx.ExecContext(ctx, "INSERT INTO frames VALUES(?,?,?,?,?,?,?)", f.Date, f.Revision, now.UnixNano(), f.Origin, f.Method, raw, summary); e != nil {
+		if _, e = tx.ExecContext(ctx, "INSERT INTO frames_v2 VALUES(?,?,?,?,?,?,?)", f.Date, f.Revision, now.UnixNano(), f.Origin, f.Method, raw, summary); e != nil {
 			return e
 		}
 		// Revisions are separate audit events; never rewrite already-frozen judgments.
 		var count int
-		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM frames WHERE day=?", f.Date).Scan(&count); e != nil {
+		if e = tx.QueryRowContext(ctx, "SELECT count(*) FROM (SELECT * FROM frames UNION ALL SELECT * FROM frames_v2) WHERE day=?", f.Date).Scan(&count); e != nil {
 			return e
 		}
 		if count > 1 {
@@ -280,7 +343,7 @@ func (s *costStore) frame(ctx context.Context, date string, asOf time.Time) (*Co
 		args = append(args, date)
 	}
 	var b []byte
-	e := s.db.QueryRowContext(ctx, "SELECT payload FROM frames WHERE "+where+" ORDER BY day DESC,first_seen DESC,revision DESC LIMIT 1", args...).Scan(&b)
+	e := s.db.QueryRowContext(ctx, "SELECT payload FROM (SELECT * FROM frames UNION ALL SELECT * FROM frames_v2) WHERE "+where+" ORDER BY day DESC,first_seen DESC,revision DESC LIMIT 1", args...).Scan(&b)
 	if e == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -290,6 +353,30 @@ func (s *costStore) frame(ctx context.Context, date string, asOf time.Time) (*Co
 	var f CostFrame
 	if e = costUnpack(b, &f); e != nil {
 		return nil, e
+	}
+	if f.DistributionRevision != "" && len(f.STH.Values) == 0 {
+		var raw []byte
+		var cohorts []CostCohort
+		if e = s.db.QueryRowContext(ctx, "SELECT payload FROM distributions WHERE revision=?", f.DistributionRevision).Scan(&raw); e != nil {
+			return nil, e
+		}
+		if e = costUnpack(raw, &cohorts); e != nil {
+			return nil, e
+		}
+		if len(cohorts) != 2 {
+			return nil, errors.New("成本分布引用不完整")
+		}
+		f.STH, f.LTH = cohorts[0], cohorts[1]
+	}
+	if f.DistributionRevision == "" {
+		f.DistributionRevision = costDistributionRevision(f)
+	}
+	if f.PriceRevision == "" {
+		f.PriceRevision = costHash([]string{f.Date, f.Price})
+	}
+	if f.IntervalEnd == nil {
+		end := costClose(f.Date)
+		f.IntervalEnd = &end
 	}
 	return &f, nil
 }
@@ -317,7 +404,7 @@ func (s *costStore) summaries(ctx context.Context, asOf time.Time) ([]costSummar
 	if e := s.available(); e != nil {
 		return out, e
 	}
-	rows, e := s.db.QueryContext(ctx, `SELECT summary FROM (SELECT summary,row_number() OVER(PARTITION BY day ORDER BY first_seen DESC,revision DESC) n FROM frames WHERE first_seen<=?) WHERE n=1 ORDER BY json_extract(summary,'$.date') LIMIT 5000`, asOf.UnixNano())
+	rows, e := s.db.QueryContext(ctx, `SELECT summary FROM (SELECT summary,row_number() OVER(PARTITION BY day ORDER BY first_seen DESC,revision DESC) n FROM (SELECT * FROM frames UNION ALL SELECT * FROM frames_v2) WHERE first_seen<=?) WHERE n=1 ORDER BY json_extract(summary,'$.date') LIMIT 5000`, asOf.UnixNano())
 	if e != nil {
 		return out, e
 	}
@@ -393,4 +480,18 @@ func costRanks(m *CostMetrics, date, method string, summaries []costSummary, pri
 		v := vr * 100 / float64(m.VolatilitySamples)
 		m.VolatilityRank = &v
 	}
+}
+
+func costSQLiteSafe(v string) bool {
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	a, e1 := strconv.Atoi(parts[0])
+	b, e2 := strconv.Atoi(parts[1])
+	c, e3 := strconv.Atoi(parts[2])
+	if e1 != nil || e2 != nil || e3 != nil {
+		return false
+	}
+	return a > 3 || a == 3 && (b > 51 || b == 51 && c >= 3 || b == 50 && c >= 7 || b == 44 && c >= 6)
 }
