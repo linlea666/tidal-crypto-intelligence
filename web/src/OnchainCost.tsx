@@ -8,6 +8,7 @@ import {
   Bell,
 } from "@phosphor-icons/react";
 import "./onchainCost.css";
+import { OnchainReview, type OnchainUpgrade } from "./OnchainReview";
 
 type Bounds = { lower: string; upper: string };
 type Supply = { sth: Bounds; lth: Bounds; total: Bounds };
@@ -46,6 +47,10 @@ type CostEvent = {
   zone: Zone | null;
   evidence: Evidence[] | null;
   noticeStatus?: string;
+  direction?: string; shadow?: boolean; priceSource?: string;
+  occurredAt?: string; firstSeen?: string; validatedAt?: string;
+  attemptedAt?: string; submittedAt?: string;
+  marketPriceAt?: string; discoveredMarketPrice?: string | null; marketPrice?: string | null; boundaryDistancePercent?: string | null; discoveryDistancePercent?: string | null; decisionDistancePercent?: string | null;
 };
 type Health = {
   eventsEnabled: boolean;
@@ -63,6 +68,7 @@ type Health = {
   };
 };
 type Board = {
+  upgrade?: OnchainUpgrade;
   frame: {
     date: string;
     price: string;
@@ -111,6 +117,7 @@ type Board = {
   };
   settings: { emailEnabled: boolean };
   mailConfigured: boolean;
+ mailReadiness?: {ready:boolean;reason:string};
   note: string;
 };
 type History = {
@@ -131,6 +138,7 @@ type History = {
   note: string;
 };
 type Result = {
+  directionalReturn?: number | null; volatilityRatio?: number | null; discoveryToAnchor?: number | null; anchorDate?: string; selected?: boolean;
   eventId: string;
   horizon: number;
   from: string;
@@ -146,7 +154,10 @@ type Research = {
   note: string;
   total: number;
   nextOffset: number | null;
+  dailyCount?: number;
+  daily?: { id: string; date: string; firstSeen: string; structure: string; price: string; reason: string }[];
   groups?: {
+    rateLabel?: string; median?: number | null; quartiles?: number[]; invalidatedRate?: number | null; invalidatedSamples?: number; attentionDelayMedianHours?: number | null;
     rulesVersion: string;
     kind: string;
     side: string;
@@ -181,14 +192,17 @@ export const costStatuses: Record<string, string> = {
 };
 const eventNames: Record<string, string> = {
   initialized: "开始观察",
-  pending: "突破待确认",
-  confirmed: "价格突破确认",
+  pending: "收盘越界待确认",
+  confirmed: "连续两日收于成本区外",
   invalidated: "确认失效",
   unconfirmed: "未延续确认",
   concentrated: "集中且波动偏低",
   expired: "观察到期",
   gap: "日快照缺口",
   revision: "来源修订",
+  discovery_expired: "发现窗口到期", pending_expired: "待确认到期", tracking_expired: "确认跟踪到期",
+  attention_near: "4小时接近边界", attention_outside: "4小时收于边界之外", attention_returned: "4小时参考价回到区间",
+  unconditional: "无条件基线", low_volatility: "仅低波动基线", price_only: "20日收盘通道", onchain: "筹码边界条件", structure: "集中且低波动", "onchain_buffer_0.5": "0.5%缓冲影子",
 };
 const watchNames: Record<string, string> = {
   watching: "等待越过边界",
@@ -197,7 +211,7 @@ const watchNames: Record<string, string> = {
   invalidated: "确认失效",
 };
 const qty = (v: string | number | null | undefined, digits = 2) =>
-  v == null || !Number.isFinite(Number(v)) ? "—" : price(Number(v), digits);
+  v == null || v === "" || !Number.isFinite(Number(v)) ? "—" : price(Number(v), digits);
 const bucketDigits = (step: string | number) =>
   Math.min(8, Math.max(0, Math.ceil(-Math.log10(Number(step)))));
 const compactBTC = (v: string) =>
@@ -431,12 +445,12 @@ export function OnchainCostPage() {
               </small>
             </article>
             <article>
-              <span>方向观察</span>
+              <span>日线价格条件</span>
               <strong>
                 {active.historical
                   ? "历史结构"
                   : error ||
-                      active.health.status !== "fresh" ||
+                      !active.upgrade?.capabilities.dailyPrice ||
                       !active.health.eventsEnabled
                     ? "判断暂停"
                     : active.observation.watches?.some(
@@ -445,7 +459,7 @@ export function OnchainCostPage() {
                       ? "价格条件确认"
                       : "方向未确认"}
               </strong>
-              <small>集中不等于吸筹 · 密集区不保证反应</small>
+              <small>集中不等于吸筹 · 候选窗口不保证反应</small>
             </article>
           </div>
           <div className="cost-toolbar">
@@ -469,7 +483,7 @@ export function OnchainCostPage() {
               <Bell size={16} />
               <button
                 className="secondary"
-                disabled={saving || !active.mailConfigured}
+                disabled={saving || (!active.mailConfigured && !(mailValue ?? active.settings.emailEnabled))}
                 onClick={toggleMail}
               >
                 {(mailValue ?? active.settings.emailEnabled)
@@ -477,10 +491,11 @@ export function OnchainCostPage() {
                   : "开启本页邮件"}
               </button>
               <small>
-                {active.mailConfigured ? "默认关闭 · 独立事件" : "SMTP尚未配置"}
+                {active.mailConfigured ? ((mailValue ?? active.settings.emailEnabled) ? `邮件已开启 · ${active.mailReadiness?.reason ?? "发送前独立核验条件"}` : "邮件已关闭 · 站内仍记录") : "SMTP尚未配置"}
               </small>
             </div>
           </div>
+          <OnchainReview data={active.upgrade} historical={active.historical} showCases={tab === "events"} />
           <nav className="cost-tabs" aria-label="链上筹码视图">
             {[
               ["structure", "成本结构"],
@@ -630,12 +645,13 @@ export function OnchainCostPage() {
                   {active.metrics.zones.map((z) => (
                     <article key={z.side}>
                       <span>
-                        {z.side === "above" ? "上方" : "下方"}成本密集观察区
+                        {z.side === "inside" ? "包含现价" : z.side === "above" ? "上方" : "下方"}供给最多的候选窗口
                       </span>
                       <strong>
                         ${qty(z.low, 0)}–${qty(z.high, 0)}
                       </strong>
-                      <p>{compactBTC(z.supply)} BTC · 当前结构候选</p>
+                      <p>{compactBTC(z.supply)} BTC · 占同源覆盖 {qty(Number(z.supply) / Number(active.metrics.denominator) * 100)}%</p>
+ <p>窗口宽度 / 参考价 {qty((Number(z.high) - Number(z.low)) / Number(active.frame!.price) * 100)}% · 距参考价 {qty(Math.max(Number(z.low) - Number(active.frame!.price), Number(active.frame!.price) - Number(z.high), 0) / Number(active.frame!.price) * 100)}%</p>
                       <small>新候选不移动已有观察轮次的冻结边界。</small>
                     </article>
                   ))}
@@ -753,14 +769,14 @@ export function OnchainCostPage() {
                 <article>
                   <h3>向上情景</h3>
                   <p>
-                    连续两个完整日收盘越过冻结上边界，记录价格确认；结合现货买卖是否支持。
+                    冻结后连续两个UTC日收盘位于上边界之外，记录“两日收于成本区上方”；交叉查看现货与杠杆事实。
                   </p>
                   <small>随后收盘回到边界以内，原确认失效。</small>
                 </article>
                 <article>
                   <h3>向下情景</h3>
                   <p>
-                    连续两个完整日收盘跌破冻结下边界，关注成交与去杠杆风险。
+                    冻结后连续两个UTC日收盘位于下边界之外，记录“两日收于成本区下方”；关注成交与去杠杆风险。
                   </p>
                   <small>下方供给多，不等于自动补仓条件。</small>
                 </article>
@@ -770,26 +786,6 @@ export function OnchainCostPage() {
                   <small>不从集中度直接推断主力意图。</small>
                 </article>
               </div>
-              {!active.historical && active.observation.from && (
-                <div className="cost-frozen">
-                  <strong>
-                    本轮冻结观察：{active.observation.from}–
-                    {active.observation.through} UTC
-                  </strong>
-                  <p>冻结于 {stamp(active.observation.frozenAt)}（北京时间）</p>
-                  {active.observation.watches?.map((w) => (
-                    <p key={w.zone.side}>
-                      {w.zone.side === "above" ? "上方" : "下方"} $
-                      {qty(w.zone.low, 0)}–${qty(w.zone.high, 0)} ·{" "}
-                      {watchNames[w.state]}
-                      {(error ||
-                        active.health.status !== "fresh" ||
-                        !active.health.eventsEnabled) &&
-                        "（最后已知状态，当前判断暂停）"}
-                    </p>
-                  ))}
-                </div>
-              )}
               <h3>事件账本 · 实际发现时间</h3>
               {events.error && <p role="alert">{events.error}</p>}
               {!events.data?.items.length && (
@@ -800,7 +796,7 @@ export function OnchainCostPage() {
               {events.data?.items.map((e) => (
                 <details className="cost-event" key={e.id}>
                   <summary>
-                    <strong>{eventNames[e.kind] ?? e.kind}</strong>
+                    <strong>{eventNames[e.kind] ?? e.kind}{e.direction ? (e.direction === "up" ? " · 向上" : " · 向下") : ""}{e.shadow ? " · 影子观察" : ""}</strong>
                     <span>
                       {e.date} · {stamp(e.detectedAt)} 发现
                     </span>
@@ -814,7 +810,10 @@ export function OnchainCostPage() {
                       冻结区间 ${qty(e.zone.low, 0)}–${qty(e.zone.high, 0)}
                     </p>
                   )}
-                  <p>邮件：{e.noticeStatus ?? "未申请发送"}</p>
+                  <p>邮件：{e.noticeStatus === "sent" ? "SMTP已接受（不等于已收到）" : e.noticeStatus ?? "未申请发送"}</p>
+                  <p>价格来源：{e.priceSource ?? "旧记录未单独保存"}；发生 {stamp(e.occurredAt)} · 首次取得 {stamp(e.firstSeen)} · 校验 {stamp(e.validatedAt)}。</p>
+                  <p>尝试发送 {stamp(e.attemptedAt)} · SMTP接受 {stamp(e.submittedAt)}。</p>
+                  <p>当前参考价 ${qty(e.marketPrice)}（{stamp(e.marketPriceAt)}）；距边界 {qty(e.boundaryDistancePercent)}%，距首次条件价 {qty(e.discoveryDistancePercent)}%，距事件发现时市场参考价 {qty(e.decisionDistancePercent)}%。</p>
                   <EvidencePanel items={e.evidence ?? []} />
                   <small>修订标识 {e.revision}</small>
                 </details>
@@ -849,21 +848,23 @@ export function OnchainCostPage() {
                 >
                   <option value="forward">前向观察 · 当时实际取得</option>
                   <option value="historical">历史探索 · 事后可得</option>
+                  <option value="legacy">旧版规则 · 原始结果</option>
                 </select>
               </div>
               {research.error && <p role="alert">{research.error}</p>}
               {research.data && (
                 <>
                   <p className="cost-notice">{research.data.note}</p>
+                  {research.data.daily && <details><summary>逐日评估 · 已记录 {research.data.dailyCount ?? 0} 日（含无信号及缺失）</summary><div className="cost-table-wrap"><table><thead><tr><th>UTC日期</th><th>结构 / 价格</th><th>说明</th><th>首次记录</th></tr></thead><tbody>{research.data.daily.map(d => <tr key={d.id}><td>{d.date}</td><td>{({ met: "满足", not_met: "不满足", uncertain: "不确定", missing: "缺失" } as Record<string,string>)[d.structure] ?? d.structure} / {d.price === "available" ? "可用" : "缺失"}</td><td>{d.reason}</td><td>{stamp(d.firstSeen)}</td></tr>)}</tbody></table></div></details>}
                   {research.data.groups && (
                     <div className="cost-table-wrap">
                       <table>
                         <thead>
                           <tr>
                             <th>规则 / 方向 / 期限</th>
-                            <th>完整 / 独立</th>
+                            <th>完整 / 去重完整</th>
                             <th>等待 / 缺失 / 重叠</th>
-                            <th>上涨占比 · 95%区间</th>
+                            <th>对应结果比例 · 95%区间</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -873,10 +874,10 @@ export function OnchainCostPage() {
                             >
                               <td>
                                 {g.rulesVersion || "规则未知"} ·{" "}
-                                {eventNames[g.kind]} ·{" "}
-                                {g.side === "above"
+                                {eventNames[g.kind] ?? g.kind} ·{" "}
+                                {(g.side === "above" || g.side === "up")
                                   ? "上方"
-                                  : g.side === "below"
+                                  : (g.side === "below" || g.side === "down")
                                     ? "下方"
                                     : "无方向"}{" "}
                                 · {g.horizon}日
@@ -888,9 +889,12 @@ export function OnchainCostPage() {
                                 {g.waiting} / {g.missing} / {g.overlapping}
                               </td>
                               <td>
+                                <small>{g.rateLabel ?? "旧版收盘上涨比例"}</small><br />
                                 {g.riseRate == null
-                                  ? "不足30个独立完整样本"
+                                  ? "不足30个去重完整可算样本"
                                   : `${qty(g.riseRate * 100)}% · ${g.confidenceInterval.map((x) => qty(x * 100)).join("–")}%`}
+                                {g.median != null && <small>中位数 {qty(g.median)} · 四分位 {g.quartiles?.map(x => qty(x)).join("–")}</small>}
+                                <small>7日失效 {g.invalidatedRate == null ? `样本不足（${g.invalidatedSamples ?? 0}）` : `${qty(g.invalidatedRate*100)}%`} · 关注至确认延迟中位数 {g.attentionDelayMedianHours == null ? "待积累" : `${qty(g.attentionDelayMedianHours)}小时`}</small>
                               </td>
                             </tr>
                           ))}
@@ -913,6 +917,7 @@ export function OnchainCostPage() {
                           <th>收盘收益</th>
                           <th>收盘路径最高 / 最低</th>
                           <th>后续年化波动</th>
+                          <th>方向调整收益 / 波动比</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1162,6 +1167,7 @@ function ResultRow({ r, label }: { r: Result; label: string }) {
         {r.pathMax == null ? "—" : `${qty(r.pathMax)}% / ${qty(r.pathMin)}%`}
       </td>
       <td>{r.volatility == null ? "—" : `${qty(r.volatility)}%`}</td>
+      <td>{r.directionalReturn == null ? "—" : `${qty(r.directionalReturn)}%`} / {r.volatilityRatio == null ? "—" : `${qty(r.volatilityRatio)}倍`}<small>锚点 {r.anchorDate ?? "原规则"}；发现至锚点 {r.discoveryToAnchor == null ? "未知" : `${qty(r.discoveryToAnchor)}%`}{r.selected === false ? " · 重叠样本" : ""}</small></td>
     </tr>
   );
 }

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -176,7 +178,7 @@ func TestCostRevisionAvailabilityAndTransaction(t *testing.T) {
 	if latest.Price != "86000" {
 		t.Fatal(latest)
 	}
-	_, e = h.Store.onchain.db.Exec("CREATE TRIGGER fail_frame BEFORE INSERT ON frames BEGIN SELECT RAISE(ABORT,'injected'); END")
+	_, e = h.Store.onchain.db.Exec("CREATE TRIGGER fail_frame BEFORE INSERT ON frames_v2 BEGIN SELECT RAISE(ABORT,'injected'); END")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -331,6 +333,7 @@ func TestCostMailOwnershipSharedLimitAndAtMostOnce(t *testing.T) {
 		return errors.New("uncertain transport")
 	}
 	event := CostEvent{ID: "new-cost", Kind: "confirmed", Date: costDate(now.AddDate(0, 0, -1)), DetectedAt: now, Rules: OnchainRules, Price: "85000"}
+	costPrepareNotice(t, h, &event, now)
 	tx, e := h.Store.onchain.db.BeginTx(ctx, nil)
 	if e != nil {
 		t.Fatal(e)
@@ -466,7 +469,7 @@ func TestCostSourceContractAndBoundedHTTP(t *testing.T) {
 	if e != nil || len(got.Frames) != 1 {
 		t.Fatal(e)
 	}
-	for _, bad := range [][]byte{[]byte(`{}`), append(append([]byte{}, b...), []byte(`{}`)...), bytes.Replace(b, []byte("155 most recent"), []byte("changed"), 1), bytes.Replace(b, []byte(`"n":1`), []byte(`"n":2`), 1)} {
+	for _, bad := range [][]byte{[]byte(`{}`), append(append([]byte{}, b...), []byte(`{}`)...), bytes.ReplaceAll(b, []byte(`"n":1`), []byte(`"n":2`))} {
 		if _, e = parseCostBundle(bytes.NewReader(bad), false, now); e == nil {
 			t.Fatal("malformed accepted")
 		}
@@ -511,6 +514,24 @@ func TestCostRealPublicContract(t *testing.T) {
 	path := os.Getenv("TIDAL_COST_CONTRACT")
 	if path == "" {
 		t.Skip("opt-in captured public contract; never committed")
+	}
+	raw, e := os.ReadFile(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	manifestRaw, e := os.ReadFile("testdata/onchain-contract-manifest.json")
+	if e != nil {
+		t.Fatal(e)
+	}
+	var manifest struct {
+		SHA256 string `json:"sha256"`
+	}
+	if e = json.Unmarshal(manifestRaw, &manifest); e != nil {
+		t.Fatal(e)
+	}
+	hash := sha256.Sum256(raw)
+	if hex.EncodeToString(hash[:]) != manifest.SHA256 {
+		t.Fatal("captured contract differs from the versioned provenance fixture")
 	}
 	f, e := os.Open(path)
 	if e != nil {
@@ -897,6 +918,7 @@ func TestCostSameSecondRestartAndDurableNoticeResult(t *testing.T) {
 	sends := 0
 	h.mailSend = func(context.Context, MailConfig, string, string) error { sends++; return nil }
 	event := CostEvent{ID: "new-same-second", Kind: "confirmed", DetectedAt: now, Date: costDate(now.AddDate(0, 0, -1)), Rules: OnchainRules}
+	costPrepareNotice(t, h, &event, now)
 	tx, _ := h.Store.onchain.db.BeginTx(ctx, nil)
 	if e := costInsertEvent(ctx, tx, event, true); e != nil {
 		t.Fatal(e)
@@ -990,7 +1012,7 @@ func TestCostStatisticsSeparateRulesAndMinimumSamples(t *testing.T) {
 	if e := tx.Commit(); e != nil {
 		t.Fatal(e)
 	}
-	view, e := h.costResearchView(ctx, now, "forward", 0, 10)
+	view, e := h.costLegacyResearchView(ctx, now, "forward", 0, 10)
 	if e != nil {
 		t.Fatal(e)
 	}

@@ -2,11 +2,16 @@ package datahub
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"modernc.org/sqlite"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // BackupFile uses SQLite's online backup API, including committed WAL pages.
@@ -28,7 +33,8 @@ func BackupFile(ctx context.Context, source, destination string) error {
 		return err
 	}
 	defer conn.Close()
-	return conn.Raw(func(driver any) error {
+	started := time.Now().UTC()
+	err = conn.Raw(func(driver any) error {
 		b, err := driver.(interface {
 			NewBackup(string) (*sqlite.Backup, error)
 		}).NewBackup(destination)
@@ -51,4 +57,23 @@ func BackupFile(ctx context.Context, source, destination string) error {
 		}
 		return b.Finish()
 	})
+	if err != nil {
+		return err
+	}
+	file, err := os.Open(destination)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	size, err := io.Copy(hash, file)
+	if err != nil {
+		return err
+	}
+	manifest := map[string]any{"source": filepath.Base(source), "file": filepath.Base(destination), "startedAt": started, "completedAt": time.Now().UTC(), "sha256": hex.EncodeToString(hash.Sum(nil)), "bytes": size, "batch": os.Getenv("TIDAL_BACKUP_BATCH"), "crossDatabaseAtomic": false, "restoreRequirement": "RestoreOnchainBoundary before restarting restored databases; pending is not proof of never sent"}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(destination+".manifest.json", raw, 0600)
 }

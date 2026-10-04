@@ -71,12 +71,12 @@ func costOutcome(event CostEvent, horizon int, prices map[string]string, now tim
 	r.Volatility = &vol
 	return r
 }
-func (h *Hub) processCostResearch(ctx context.Context, now time.Time) error {
+func (h *Hub) processCostLegacyResearch(ctx context.Context, now time.Time) error {
 	s := h.Store.onchain
 	if e := s.writable(); e != nil {
 		return e
 	}
-	rows, e := s.db.QueryContext(ctx, `SELECT e.payload,h.n FROM events e CROSS JOIN (SELECT 7 n UNION ALL SELECT 14 UNION ALL SELECT 30 UNION ALL SELECT 60) h WHERE e.kind IN ('confirmed','concentrated') AND (e.detected / 86400000000000 + h.n + 1) * 86400000000000 + 21600000000000 <= ? AND NOT EXISTS(SELECT 1 FROM results r WHERE r.event_id=e.id AND r.horizon=h.n) ORDER BY e.detected + h.n * 86400000000000,h.n LIMIT 64`, now.UnixNano())
+	rows, e := s.db.QueryContext(ctx, `SELECT e.payload,h.n FROM events e CROSS JOIN (SELECT 7 n UNION ALL SELECT 14 UNION ALL SELECT 30 UNION ALL SELECT 60) h WHERE e.kind IN ('confirmed','concentrated') AND NOT EXISTS(SELECT 1 FROM trials t WHERE t.id=e.id) AND (e.detected / 86400000000000 + h.n + 1) * 86400000000000 + 21600000000000 <= ? AND NOT EXISTS(SELECT 1 FROM results r WHERE r.event_id=e.id AND r.horizon=h.n) ORDER BY e.detected + h.n * 86400000000000,h.n LIMIT 64`, now.UnixNano())
 	if e != nil {
 		return e
 	}
@@ -117,7 +117,15 @@ func (h *Hub) processCostResearch(ctx context.Context, now time.Time) error {
 		}
 		r = costOutcome(task.event, task.n, prices, now)
 		b, _ := json.Marshal(r)
-		if _, e = s.db.ExecContext(ctx, "INSERT OR IGNORE INTO results VALUES(?,?,?)", task.event.ID, task.n, b); e != nil {
+		tx, e := s.db.BeginTx(ctx, nil)
+		if e != nil {
+			return e
+		}
+		if _, e = tx.ExecContext(ctx, "INSERT OR IGNORE INTO results VALUES(?,?,?)", task.event.ID, task.n, b); e == nil {
+			e = s.commit(ctx, tx)
+		}
+		tx.Rollback()
+		if e != nil {
 			return e
 		}
 	}
@@ -138,7 +146,7 @@ type costResearchGroup struct {
 	Interval    []float64 `json:"confidenceInterval"`
 }
 
-func (h *Hub) costResearchView(ctx context.Context, now time.Time, mode string, offset, limit int) (any, error) {
+func (h *Hub) costLegacyResearchView(ctx context.Context, now time.Time, mode string, offset, limit int) (any, error) {
 	s := h.Store.onchain
 	if mode == "historical" {
 		summaries, e := s.summaries(ctx, now)
@@ -170,7 +178,7 @@ func (h *Hub) costResearchView(ctx context.Context, now time.Time, mode string, 
 			return nil
 		}()}, nil
 	}
-	rows, e := s.db.QueryContext(ctx, "SELECT payload FROM events WHERE kind IN ('confirmed','concentrated') ORDER BY detected,id LIMIT 5000")
+	rows, e := s.db.QueryContext(ctx, "SELECT payload FROM events e WHERE kind IN ('confirmed','concentrated') AND NOT EXISTS(SELECT 1 FROM trials t WHERE t.id=e.id) ORDER BY detected,id LIMIT 5000")
 	if e != nil {
 		return nil, e
 	}

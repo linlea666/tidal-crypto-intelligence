@@ -46,7 +46,7 @@ func (h *Hub) costRead(ctx context.Context, path string, q url.Values) (json.Raw
 		if e != nil {
 			return nil, e
 		}
-		return costJSON(map[string]any{"emailEnabled": settings.EmailEnabled, "mailConfigured": h.mail != nil})
+		return costJSON(map[string]any{"emailEnabled": settings.EmailEnabled, "mailConfigured": h.mail != nil, "mailReadiness": h.costMailReadiness(ctx, now)})
 	}
 	if e := s.available(); e != nil {
 		if path == "onchain-cost" {
@@ -101,6 +101,15 @@ func (h *Hub) costReadLocal(ctx context.Context, path string, q url.Values, now 
 			out = out[:limit]
 		}
 		for i := range out {
+			var receipt []byte
+			if err := s.db.QueryRowContext(ctx, "SELECT payload FROM outbox WHERE id=?", out[i].ID).Scan(&receipt); err == nil {
+				var saved CostEvent
+				if json.Unmarshal(receipt, &saved) == nil {
+					out[i].AttemptedAt = saved.AttemptedAt
+					out[i].SubmittedAt = saved.SubmittedAt
+				}
+			}
+			h.decorateCostEvent(&out[i], now)
 			var status string
 			if e = h.Store.research.QueryRowContext(ctx, "SELECT status FROM notices WHERE id=?", "cost-"+out[i].ID).Scan(&status); e == nil {
 				out[i].NoticeStatus = status
@@ -118,7 +127,7 @@ func (h *Hub) costReadLocal(ctx context.Context, path string, q url.Values, now 
 	}
 	if path == "onchain-cost/research" {
 		mode := q.Get("mode")
-		if mode != "" && mode != "forward" && mode != "historical" {
+		if mode != "" && mode != "forward" && mode != "historical" && mode != "legacy" {
 			return nil, errors.New("无效研究模式")
 		}
 		v, e := h.costResearchView(ctx, now, mode, offset, limit)
@@ -252,9 +261,7 @@ func (h *Hub) costReadLocal(ctx context.Context, path string, q url.Values, now 
 		if e = costLoad(ctx, s.db, "observation", &observation); e != nil {
 			return nil, e
 		}
-		if observation.LastDate != f.Date {
-			observation = costState{}
-		}
+
 	}
 	settings, e := h.CostSettings(ctx)
 	if e != nil {
@@ -263,7 +270,7 @@ func (h *Hub) costReadLocal(ctx context.Context, path string, q url.Values, now 
 	meta := *f
 	meta.STH.Values = nil
 	meta.LTH.Values = nil
-	return costJSON(map[string]any{"frame": meta, "dates": dates, "health": h.onchainHealth(), "source": onchainSource, "sourceURL": "https://charts.blockhorizon.io/charts/cost-basis-distribution", "rulesVersion": OnchainRules, "methodNote": onchainMethodNote, "historical": date != "", "metrics": m, "bins": filtered, "requestedStep": step, "actualStep": actual, "scaleMaxBTC": scale, "selected": map[string]any{"low": l.String(), "high": r.String(), "supply": supply, "changes": changes}, "evidence": evidence, "observation": observation, "settings": settings, "mailConfigured": h.mail != nil, "note": "成本分布与集中度为来源最新修订；历史跨来源证据限制在所选日期次日06:00 UTC前实际可得的数据。冻结事件保留当时版本。"})
+	return costJSON(map[string]any{"frame": meta, "dates": dates, "health": h.onchainHealth(), "source": onchainSource, "sourceURL": "https://charts.blockhorizon.io/charts/cost-basis-distribution", "rulesVersion": OnchainRules, "methodNote": onchainMethodNote, "historical": date != "", "metrics": m, "bins": filtered, "requestedStep": step, "actualStep": actual, "scaleMaxBTC": scale, "selected": map[string]any{"low": l.String(), "high": r.String(), "supply": supply, "changes": changes}, "evidence": evidence, "observation": observation, "settings": settings, "upgrade": h.costUpgradeView(ctx, *f, observation, date != "", now), "mailConfigured": h.mail != nil, "mailReadiness": h.costMailReadiness(ctx, now), "note": "成本分布与集中度为来源最新修订；历史跨来源证据限制在所选日期次日06:00 UTC前实际可得的数据。冻结事件保留当时版本。"})
 }
 func (h *Hub) costHistory(ctx context.Context, q url.Values, f CostFrame, summaries []costSummary, prices map[string]string, low, high string, offset, limit int, now time.Time) (json.RawMessage, error) {
 	end, _ := costDay(f.Date)

@@ -1,0 +1,18 @@
+{
+  "source": "BlockHorizon public full_v2",
+  "captureDate": "2026-10-04",
+  "sourceDate": "2026-10-03",
+  "sha256": "94dac0d7c2e9398fb61d7db72e264dd48bb4a3f036123af0294c62cfc0aefa11",
+  "method": "blockhorizon-last-moved-positive-acquisition-cohorts-155-v1",
+  "priceUSD": "84746.87",
+  "snapshotCount": 347,
+  "dailyPriceCount": 5922,
+  "denominatorBTC": "20093057",
+  "expected": {
+    "STH[62000,65000)": "1075881",
+    "LTH[84000,87000)": "1007752",
+    "TOTAL[83000,85000)": "1514998",
+    "concentration+/-5%": "12.63139302297306"
+  },
+  "rawPolicy": "Captured public response stays in ignored local QA storage; no runtime database, credential, or raw upstream mirror committed."
+}

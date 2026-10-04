@@ -536,3 +536,6 @@
     font-size: 17px;
   }
 }
+.cost-review > details { margin-block: 12px; color: var(--muted, #a7b4b0); }
+.cost-review > details > summary { cursor: pointer; color: var(--text, #e6efeb); }
+.cost-review p, .cost-review small { overflow-wrap: anywhere; }

@@ -19,6 +19,9 @@ func costFeedStatus(f CostFeed, now time.Time) (string, string) {
 	if f.Disabled {
 		return "disabled", "来源鉴权、方法或接口契约变化，已停止自动请求"
 	}
+	if f.CostError != "" {
+		return "contract", f.CostError
+	}
 	if f.LastDate == "" {
 		return "missing", "等待首次有效链上快照"
 	}
@@ -54,18 +57,18 @@ func (h *Hub) onchainHealth() any {
 	if n >= onchainBudget*95/100 {
 		status, reason = "capacity", "链上容量保护，暂停新增记录和判断"
 	}
-	return map[string]any{"status": status, "reason": reason, "source": onchainSource, "feed": f, "usedBytes": n, "budgetBytes": onchainBudget, "capacityWarning": n >= onchainBudget*80/100, "rulesVersion": OnchainRules, "eventsEnabled": !h.onchainEventsDisabled && !h.onchainDisabled, "offline": h.offline}
+	var evaluation map[string]any
+	if s.available() == nil {
+		_ = costLoad(ctx, s.db, "evaluation-error", &evaluation)
+	}
+	return map[string]any{"evaluation": evaluation, "status": status, "reason": reason, "source": onchainSource, "feed": f, "usedBytes": n, "budgetBytes": onchainBudget, "capacityWarning": n >= onchainBudget*80/100, "rulesVersion": OnchainRules, "eventsEnabled": !h.onchainEventsDisabled && !h.onchainDisabled, "offline": h.offline, "storage": s.storageDetail(ctx, time.Now().UTC()), "capabilities": h.costCapabilities(ctx, time.Now().UTC())}
 }
 func (h *Hub) onchainCollector(ctx context.Context) {
 	client := &http.Client{Timeout: 30 * time.Second}
-	// A single worker owns source requests, state transitions and research updates.
+	// A single source worker owns upstream requests; local evaluation has its own bounded worker.
 	for ctx.Err() == nil {
 		now := time.Now().UTC()
 		_, _ = h.pollOnchain(ctx, client, onchainURL, now)
-		mailCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		_ = h.processCostResearch(mailCtx, time.Now().UTC())
-		cancel()
-		_ = h.processCostNotices(ctx, time.Now().UTC())
 		delay := time.Hour
 		if f, e := h.costFeed(ctx); e == nil && f.NextAttempt != nil {
 			delay = time.Until(*f.NextAttempt)
@@ -83,8 +86,8 @@ func (h *Hub) pollOnchain(ctx context.Context, client *http.Client, base string,
 	if e := s.available(); e != nil {
 		return false, e
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.fetchMu.Lock()
+	defer s.fetchMu.Unlock()
 	defer s.epoch.Add(1)
 	f, e := h.costFeed(ctx)
 	if e != nil {
@@ -97,7 +100,7 @@ func (h *Hub) pollOnchain(ctx context.Context, client *http.Client, base string,
 		return false, nil
 	}
 	f.LastAttempt = &now
-	initial := f.LastDate == ""
+	initial := f.LastDate == "" && f.LastPriceDate == ""
 	err := func() error {
 		if h.Store.Status().Paused {
 			return errors.New("项目磁盘容量保护，链上采集暂停")
@@ -112,6 +115,9 @@ func (h *Hub) pollOnchain(ctx context.Context, client *http.Client, base string,
 			return e
 		}
 		full := initial
+		if !initial && now.UTC().Hour() >= 6 && (f.LastFull == nil || costDate(*f.LastFull) != costDate(now)) {
+			full = true
+		}
 		if !initial && (f.LastFull == nil || costDate(*f.LastFull) != costDate(now)) {
 			prices, e := s.prices(ctx, now)
 			if e != nil {
@@ -146,8 +152,17 @@ func (h *Hub) pollOnchain(ctx context.Context, client *http.Client, base string,
 				return &costProtocolError{"首次采集返回304但本地无数据"}
 			}
 		} else {
-			if e = s.ingest(ctx, bundle, now, initial); e != nil {
+			s.mu.Lock()
+			e = s.ingest(ctx, bundle, now, initial)
+			s.mu.Unlock()
+			if e != nil {
 				return e
+			}
+			f.CostError, f.PriceError = bundle.CostError, bundle.PriceError
+			for _, p := range bundle.Prices {
+				if p.Date > f.LastPriceDate {
+					f.LastPriceDate = p.Date
+				}
 			}
 			if full {
 				f.FullETag = bundle.ETag
@@ -194,13 +209,20 @@ func (h *Hub) pollOnchain(ctx context.Context, client *http.Client, base string,
 	if err != nil {
 		return false, err
 	}
-	status, _ := costFeedStatus(f, now)
-	if status == "fresh" && !h.onchainEventsDisabled {
+	if !h.onchainEventsDisabled {
 		if e = h.evaluateCostDay(ctx, now, initial); e != nil {
-			f.LastError = "链上分析未完成：" + e.Error()
-			_ = s.save(ctx, "feed", f)
 			return false, e
 		}
 	}
+	var baseline struct {
+		At    time.Time `json:"at"`
+		Bytes int64     `json:"bytes"`
+	}
+	if costLoad(ctx, s.db, "growth-baseline", &baseline) == nil && baseline.At.IsZero() {
+		baseline.At = now
+		baseline.Bytes = s.bytes()
+		_ = s.save(ctx, "growth-baseline", baseline)
+	}
+
 	return true, nil
 }

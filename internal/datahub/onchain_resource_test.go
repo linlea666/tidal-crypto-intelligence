@@ -2,6 +2,7 @@ package datahub
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -58,11 +59,40 @@ func costReplaySeed(t *testing.T, h *Hub, now time.Time) {
 	if e = tx.Commit(); e != nil {
 		t.Fatal(e)
 	}
+	for i := 0; i < 2; i++ {
+		trial := costTrial{ID: fmt.Sprint("v2-resource-", i), Rules: OnchainRules, Group: "unconditional", DetectedAt: now.AddDate(0, 0, -80-i), EpisodeID: fmt.Sprint(i)}
+		raw, _ := json.Marshal(trial)
+		if _, e = h.Store.onchain.db.Exec("INSERT INTO trials VALUES(?,?,?,?)", trial.ID, trial.DetectedAt.UnixNano(), trial.Group, raw); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if e = h.processCostResearch(ctx, now); e != nil {
 		t.Fatal(e)
+	}
+	var modern int
+	if e = h.Store.onchain.db.QueryRow("SELECT count(*) FROM trial_results").Scan(&modern); e != nil || modern != 8 {
+		t.Fatal("v2 results not advanced", modern, e)
 	}
 	var count int
 	if e = h.Store.onchain.db.QueryRow("SELECT count(*) FROM results").Scan(&count); e != nil || count != 16 {
 		t.Fatal("onchain outcomes did not advance", count, e)
 	}
+}
+
+// Run under concurrent page queries and the unchanged container budget. A price
+// correction changes the snapshot revision but must reuse the raw distribution.
+func costReplayRevision(ctx context.Context, h *Hub, now time.Time) error {
+	s := h.Store.onchain
+	f, e := s.frame(ctx, "", now)
+	if e != nil || f == nil {
+		return e
+	}
+	f.Price = dec(f.Price).Add(dec("0.01")).String()
+	s.mu.Lock()
+	e = s.ingest(ctx, costBundle{Frames: []CostFrame{*f}, Prices: []CostPrice{{Date: f.Date, Value: f.Price}}}, now, false)
+	s.mu.Unlock()
+	if e != nil {
+		return e
+	}
+	return h.evaluateCostDay(ctx, now, false)
 }

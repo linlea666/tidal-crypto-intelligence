@@ -36,10 +36,12 @@ type costSourceChart struct {
 	Series      []costSourceSeries `json:"series"`
 }
 type costBundle struct {
-	Frames  []CostFrame
-	Prices  []CostPrice
-	ETag    string
-	BuiltAt *time.Time
+	Frames     []CostFrame
+	Prices     []CostPrice
+	ETag       string
+	BuiltAt    *time.Time
+	CostError  string
+	PriceError string
 }
 type costProtocolError struct{ message string }
 
@@ -140,7 +142,12 @@ func parseCostBundle(reader io.Reader, full bool, now time.Time) (costBundle, er
 		if header.ID == 1056 || header.ID == 118 {
 			var c costSourceChart
 			if json.Unmarshal(raw, &c) != nil {
-				return out, &costProtocolError{"目标图表契约变化"}
+				if header.ID == 1056 {
+					out.CostError = "成本图结构变化"
+				} else {
+					out.PriceError = "价格图结构变化"
+				}
+				continue
 			}
 			selected = append(selected, c)
 		}
@@ -163,23 +170,32 @@ func parseCostBundle(reader io.Reader, full bool, now time.Time) (costBundle, er
 		if c.ID == 1056 {
 			var description string
 			if json.Unmarshal(c.Description, &description) != nil || strings.Join(strings.Fields(description), " ") != onchainSourceDescription {
-				return out, &costProtocolError{"来源成本方法变化，需核对后更新适配器"}
+				out.CostError = "来源成本方法变化，需核对后更新适配器"
+				continue
 			}
 		}
+		priceSeen := false
 		for _, s := range c.Series {
 			p := s.PD
 			if full && s.PF != nil {
 				p = s.PF
 			}
 			if c.ID == 118 && s.Key == "price" {
-				dates, e := costDates(p, now)
-				if e != nil {
-					return out, &costProtocolError{e.Error()}
+				if priceSeen {
+					out.PriceError = "重复价格序列"
+					continue
+				}
+				priceSeen = true
+				dates, err := costDates(p, now)
+				if err != nil {
+					out.PriceError = err.Error()
+					continue
 				}
 				for i, date := range dates {
-					v, e := costNumber(p.V[i].String(), true)
-					if e != nil {
-						return out, &costProtocolError{e.Error()}
+					v, err := costNumber(p.V[i].String(), true)
+					if err != nil {
+						out.PriceError = err.Error()
+						break
 					}
 					prices[date] = v.String()
 					out.Prices = append(out.Prices, CostPrice{Date: date, Value: v.String()})
@@ -187,31 +203,51 @@ func parseCostBundle(reader io.Reader, full bool, now time.Time) (costBundle, er
 			}
 			if c.ID == 1056 && (s.Key == "sth_supply" || s.Key == "lth_supply") {
 				if cohorts[s.Key] != nil {
-					return out, &costProtocolError{"重复成本序列"}
+					out.CostError = "重复成本序列"
+					continue
 				}
-				v, e := costDecodeCohorts(p, now)
-				if e != nil {
-					return out, &costProtocolError{e.Error()}
+				v, err := costDecodeCohorts(p, now)
+				if err != nil {
+					out.CostError = err.Error()
+					continue
 				}
 				cohorts[s.Key] = v
 			}
 		}
 	}
-	if len(prices) == 0 || len(cohorts["sth_supply"]) == 0 || len(cohorts["sth_supply"]) != len(cohorts["lth_supply"]) {
-		return out, &costProtocolError{"缺少价格或两类成本供给"}
+	if len(prices) == 0 {
+		out.PriceError = "缺少完成日价格"
 	}
-	for date, sth := range cohorts["sth_supply"] {
-		lth, ok := cohorts["lth_supply"][date]
-		price, pok := prices[date]
-		if !ok || !pok {
-			return out, &costProtocolError{"两类供给与同日价格未对齐"}
-		}
-		f := CostFrame{Date: date, STH: sth, LTH: lth, Price: price, Method: onchainMethod}
-		if e := validateCostFrame(f); e != nil {
-			return out, &costProtocolError{e.Error()}
-		}
-		out.Frames = append(out.Frames, f)
+	if out.PriceError != "" {
+		out.Prices = nil
+		prices = nil
 	}
+	if len(cohorts["sth_supply"]) == 0 || len(cohorts["sth_supply"]) != len(cohorts["lth_supply"]) {
+		out.CostError = "缺少两类成本供给或日期未对齐"
+	}
+	if out.CostError == "" && out.PriceError == "" {
+		for date, sth := range cohorts["sth_supply"] {
+			lth, ok := cohorts["lth_supply"][date]
+			price, pok := prices[date]
+			if !ok || !pok {
+				out.CostError = "两类供给与同日价格未对齐"
+				break
+			}
+			f := CostFrame{Date: date, STH: sth, LTH: lth, Price: price, Method: onchainMethod}
+			if err := validateCostFrame(f); err != nil {
+				out.CostError = err.Error()
+				break
+			}
+			out.Frames = append(out.Frames, f)
+		}
+	}
+	if out.CostError != "" || out.PriceError != "" {
+		out.Frames = nil
+	}
+	if len(out.Frames) == 0 && len(out.Prices) == 0 {
+		return out, &costProtocolError{"目标数据均不可用：" + out.CostError + "; " + out.PriceError}
+	}
+
 	return out, nil
 }
 func costRequest(ctx context.Context, client *http.Client, url, etag string) (*http.Response, error) {

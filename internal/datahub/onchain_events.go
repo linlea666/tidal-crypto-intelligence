@@ -10,19 +10,39 @@ import (
 )
 
 type CostEvent struct {
-	ID           string         `json:"id"`
-	Kind         string         `json:"kind"`
-	Date         string         `json:"date"`
-	DetectedAt   time.Time      `json:"detectedAt"`
-	Rules        string         `json:"rulesVersion"`
-	Revision     string         `json:"revision"`
-	Price        string         `json:"price"`
-	Cycle        string         `json:"cycle"`
-	Zone         *CostZone      `json:"zone"`
-	Metrics      *CostMetrics   `json:"metrics"`
-	Evidence     []CostEvidence `json:"evidence"`
-	Note         string         `json:"note"`
-	NoticeStatus string         `json:"noticeStatus,omitempty"`
+	MarketPriceAt         *time.Time     `json:"marketPriceAt"`
+	DiscoveredMarketPrice *string        `json:"discoveredMarketPrice"`
+	PriceRevision         string         `json:"priceRevision,omitempty"`
+	FirstConditionPrice   string         `json:"firstConditionPrice,omitempty"`
+	ID                    string         `json:"id"`
+	Kind                  string         `json:"kind"`
+	Date                  string         `json:"date"`
+	DetectedAt            time.Time      `json:"detectedAt"`
+	Rules                 string         `json:"rulesVersion"`
+	Revision              string         `json:"revision"`
+	Price                 string         `json:"price"`
+	Cycle                 string         `json:"cycle"`
+	Zone                  *CostZone      `json:"zone"`
+	Metrics               *CostMetrics   `json:"metrics"`
+	Evidence              []CostEvidence `json:"evidence"`
+	Note                  string         `json:"note"`
+	NoticeStatus          string         `json:"noticeStatus,omitempty"`
+	CaseID                string         `json:"caseId,omitempty"`
+	EpisodeID             string         `json:"episodeId,omitempty"`
+	Direction             string         `json:"direction,omitempty"`
+	Group                 string         `json:"group,omitempty"`
+	OccurredAt            *time.Time     `json:"occurredAt"`
+	FirstSeen             *time.Time     `json:"firstSeen"`
+	ValidatedAt           *time.Time     `json:"validatedAt"`
+	PriceSource           string         `json:"priceSource,omitempty"`
+	Shadow                bool           `json:"shadow"`
+	FrozenAt              *time.Time     `json:"frozenAt"`
+	SubmittedAt           *time.Time     `json:"submittedAt"`
+	AttemptedAt           *time.Time     `json:"attemptedAt"`
+	MarketPrice           *string        `json:"marketPrice"`
+	BoundaryDistance      *string        `json:"boundaryDistancePercent"`
+	DecisionDistance      *string        `json:"decisionDistancePercent"`
+	DiscoveryDistance     *string        `json:"discoveryDistancePercent"`
 }
 type costWatch struct {
 	Zone  CostZone `json:"zone"`
@@ -30,18 +50,29 @@ type costWatch struct {
 	Count int      `json:"count"`
 }
 type costState struct {
-	Rules       string      `json:"rulesVersion"`
-	LastDate    string      `json:"lastDate"`
-	Cycle       string      `json:"cycle"`
-	FrozenAt    time.Time   `json:"frozenAt"`
-	From        string      `json:"from"`
-	Through     string      `json:"through"`
-	Revision    string      `json:"revision"`
-	Watches     []costWatch `json:"watches"`
-	Compression bool        `json:"compression"`
-	Meet        int         `json:"meet"`
-	Clear       int         `json:"clear"`
-	Initial     bool        `json:"initial"`
+	InputKey          string      `json:"inputKey"`
+	Rules             string      `json:"rulesVersion"`
+	LastDate          string      `json:"lastDate"`
+	Cycle             string      `json:"cycle"`
+	FrozenAt          time.Time   `json:"frozenAt"`
+	From              string      `json:"from"`
+	Through           string      `json:"through"`
+	Revision          string      `json:"revision"`
+	Watches           []costWatch `json:"watches"`
+	Compression       bool        `json:"compression"`
+	Meet              int         `json:"meet"`
+	Clear             int         `json:"clear"`
+	Initial           bool        `json:"initial"`
+	Cases             []CostCase  `json:"cases"`
+	EpisodeID         string      `json:"episodeId"`
+	StructureLastDate string      `json:"structureLastDate"`
+	BaselineThrough   string      `json:"baselineThrough"`
+	LowMeet           int         `json:"lowMeet"`
+	LowClear          int         `json:"lowClear"`
+	LowActive         bool        `json:"lowActive"`
+	LowEpisode        string      `json:"lowEpisode"`
+	LowLastDate       string      `json:"lowLastDate"`
+	EnabledAt         time.Time   `json:"enabledAt"`
 }
 
 func costInsertEvent(ctx context.Context, tx *sql.Tx, event CostEvent, mail bool) error {
@@ -63,8 +94,8 @@ func costInsertEvent(ctx context.Context, tx *sql.Tx, event CostEvent, mail bool
 	return e
 }
 func costStartCycle(s *costState, f CostFrame, m CostMetrics, now time.Time) {
-	s.Rules = OnchainRules
-	s.Cycle = costHash([]string{OnchainRules, now.Format(time.RFC3339Nano), f.Revision})
+	s.Rules = onchainLegacyRules
+	s.Cycle = costHash([]string{onchainLegacyRules, now.Format(time.RFC3339Nano), f.Revision})
 	s.FrozenAt = now
 	s.From = costDate(now.UTC().Truncate(24*time.Hour).AddDate(0, 0, 1))
 	from, _ := costDay(s.From)
@@ -90,15 +121,15 @@ func costCompressed(m CostMetrics) *bool {
 func costAdvance(s *costState, f CostFrame, m CostMetrics, now time.Time, initial bool) []CostEvent {
 	events := []CostEvent{}
 	makeEvent := func(kind string, z *CostZone, note string) {
-		id := costHash([]string{OnchainRules, s.Cycle, kind, f.Date, func() string {
+		id := costHash([]string{onchainLegacyRules, s.Cycle, kind, f.Date, func() string {
 			if z != nil {
 				return z.Side
 			}
 			return ""
 		}()})
-		events = append(events, CostEvent{ID: id, Kind: kind, Date: f.Date, DetectedAt: now, Rules: OnchainRules, Revision: f.Revision, Price: f.Price, Cycle: s.Cycle, Zone: z, Metrics: &m, Note: note})
+		events = append(events, CostEvent{ID: id, Kind: kind, Date: f.Date, DetectedAt: now, Rules: onchainLegacyRules, Revision: f.Revision, Price: f.Price, Cycle: s.Cycle, Zone: z, Metrics: &m, Note: note})
 	}
-	if s.LastDate == "" || initial || s.Rules != "" && s.Rules != OnchainRules {
+	if s.LastDate == "" || initial || s.Rules != "" && s.Rules != onchainLegacyRules {
 		s.Meet, s.Clear, s.Compression = 0, 0, false
 		costStartCycle(s, f, m, now)
 		s.LastDate = f.Date
@@ -186,65 +217,6 @@ func costAdvance(s *costState, f CostFrame, m CostMetrics, now time.Time, initia
 	s.Initial = false
 	return events
 }
-func (h *Hub) evaluateCostDay(ctx context.Context, now time.Time, initial bool) error {
-	s := h.Store.onchain
-	if e := s.writable(); e != nil {
-		return e
-	}
-	f, e := s.frame(ctx, "", now)
-	if e != nil || f == nil {
-		return e
-	}
-	if f.Date != costDate(now.AddDate(0, 0, -1)) {
-		return nil
-	}
-	var state costState
-	if e = costLoad(ctx, s.db, "observation", &state); e != nil {
-		return e
-	}
-	if state.LastDate >= f.Date {
-		return nil
-	}
-	// A date retrieved after its live day is history, never a new live event.
-	if f.Origin != "forward" && state.LastDate != "" {
-		return nil
-	}
-	metrics, e := s.metrics(ctx, *f, now)
-	if e != nil {
-		return e
-	}
-	events := costAdvance(&state, *f, metrics, now, initial)
-	evidence := h.costEvidence(ctx, f.Date, now)
-	for i := range events {
-		events[i].Evidence = evidence
-	}
-	var settings CostSettings
-	if e = costLoad(ctx, s.db, "settings", &settings); e != nil {
-		return e
-	}
-	tx, e := s.db.BeginTx(ctx, nil)
-	if e != nil {
-		return e
-	}
-	defer tx.Rollback()
-	if e = costSave(ctx, tx, "observation", state); e != nil {
-		return e
-	}
-	raw, e := json.Marshal(evidence)
-	if e != nil {
-		return e
-	}
-	if _, e = tx.ExecContext(ctx, "INSERT OR IGNORE INTO evidence VALUES(?,?,?)", f.Date, now.UnixNano(), raw); e != nil {
-		return e
-	}
-	for _, event := range events {
-		send := settings.EmailEnabled && (event.Kind == "confirmed" || event.Kind == "invalidated" || event.Kind == "concentrated")
-		if e = costInsertEvent(ctx, tx, event, send); e != nil {
-			return e
-		}
-	}
-	return s.commit(ctx, tx)
-}
 func (h *Hub) CostSettings(ctx context.Context) (CostSettings, error) {
 	var s CostSettings
 	if e := h.Store.onchain.available(); e != nil {
@@ -266,16 +238,29 @@ func (h *Hub) SetCostSettings(ctx context.Context, s CostSettings, now time.Time
 			return s, e
 		}
 	}
+	if e := st.controlReady(); e != nil {
+		return s, e
+	}
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	h.noticeMu.Lock()
 	defer h.noticeMu.Unlock()
+	var previous CostSettings
+	if e := costLoad(ctx, st.db, "settings", &previous); e != nil {
+		return s, e
+	}
+	if previous.EmailEnabled == s.EmailEnabled {
+		return s, nil
+	}
 	tx, e := st.db.BeginTx(ctx, nil)
 	if e != nil {
 		return s, e
 	}
 	defer tx.Rollback()
 	if e = costSave(ctx, tx, "settings", s); e != nil {
+		return s, e
+	}
+	if e = costSave(ctx, tx, "settings-boundary", map[string]any{"at": now}); e != nil {
 		return s, e
 	}
 	// Toggle never replays earlier observations, including queued handoff intents.
@@ -301,120 +286,212 @@ func (h *Hub) processCostNotices(ctx context.Context, now time.Time) (result err
 			result = e
 		}
 	}()
-	// The shared queue is authoritative after handoff; restart suppresses both sides.
-	_, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE kind LIKE 'onchain-cost:%' AND status='sending' AND attempted<=?", h.boot.Unix())
-	if e != nil {
+	if e := st.controlReady(); e != nil {
 		return e
 	}
-	if _, e = st.db.ExecContext(ctx, "UPDATE outbox SET status='suppressed_restart' WHERE status='pending' AND created<=?", h.boot.UnixNano()); e != nil {
+	_, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE kind LIKE 'onchain-cost:%' AND status='sending' AND attempted<=?", h.boot.Unix())
+	if e != nil {
 		return e
 	}
 	settings, e := h.CostSettings(ctx)
 	if e != nil {
 		return e
 	}
-	feed, e := h.costFeed(ctx)
-	if e != nil {
-		return e
-	}
-	status, _ := costFeedStatus(feed, now)
-	if st.writable() != nil {
-		status = "capacity"
-	}
-	rows, e := st.db.QueryContext(ctx, "SELECT id,payload FROM outbox WHERE status='pending' ORDER BY created,id LIMIT 50")
+	rows, e := st.db.QueryContext(ctx, "SELECT payload FROM outbox WHERE status='pending' ORDER BY CASE json_extract(payload,'$.kind') WHEN 'invalidated' THEN 0 WHEN 'confirmed' THEN 1 ELSE 2 END,created,id LIMIT 50")
 	if e != nil {
 		return e
 	}
 	events := []CostEvent{}
 	for rows.Next() {
-		var id string
 		var b []byte
-		if e = rows.Scan(&id, &b); e != nil {
-			rows.Close()
-			return e
-		}
 		var event CostEvent
+		if e = rows.Scan(&b); e != nil {
+			break
+		}
 		if e = json.Unmarshal(b, &event); e != nil {
-			rows.Close()
-			return e
+			break
 		}
 		events = append(events, event)
 	}
-	e = rows.Err()
+	re := rows.Err()
 	rows.Close()
 	if e != nil {
 		return e
 	}
+	if re != nil {
+		return re
+	}
 	for _, event := range events {
-		target := "pending"
-		if !settings.EmailEnabled || h.onchainDisabled || h.onchainEventsDisabled {
-			target = "suppressed_setting"
-		} else if status != "fresh" || now.Sub(event.DetectedAt) > 6*time.Hour {
-			target = "suppressed_stale"
+		target, e := h.costNoticeEligibility(ctx, event, settings, now)
+		if e != nil {
+			return e
+		}
+		if target == "waiting_price" {
+			continue
 		}
 		raw, _ := json.Marshal(event)
 		if _, e = h.Store.research.ExecContext(ctx, "INSERT OR IGNORE INTO notices(id,signal_id,kind,created,status,payload) VALUES(?,?,?,?,?,?)", "cost-"+event.ID, event.ID, "onchain-cost:"+event.Kind, event.DetectedAt.Unix(), target, raw); e != nil {
 			return e
 		}
-		if _, e = st.db.ExecContext(ctx, "UPDATE outbox SET status='handed_off' WHERE id=? AND status='pending'", event.ID); e != nil {
+		if e = st.controlExec(ctx, "UPDATE outbox SET status='handed_off' WHERE id=? AND status='pending'", event.ID); e != nil {
 			return e
 		}
 	}
-	rows, e = h.Store.research.QueryContext(ctx, "SELECT id,payload FROM notices WHERE kind LIKE 'onchain-cost:%' AND status='pending' ORDER BY created,id LIMIT 50")
+	rows, e = h.Store.research.QueryContext(ctx, "SELECT id,payload,attempted FROM notices WHERE kind LIKE 'onchain-cost:%' AND status='pending' ORDER BY CASE kind WHEN 'onchain-cost:invalidated' THEN 0 WHEN 'onchain-cost:confirmed' THEN 1 ELSE 2 END,created,id LIMIT 50")
 	if e != nil {
 		return e
 	}
-	ids := []string{}
-	bodies := ""
-	suppressed := map[string]string{}
-	for rows.Next() {
-		var id string
-		var raw []byte
-		if e = rows.Scan(&id, &raw); e != nil {
-			rows.Close()
-			return e
-		}
-		var event CostEvent
-		if e = json.Unmarshal(raw, &event); e != nil {
-			rows.Close()
-			return e
-		}
-		if !event.DetectedAt.After(h.boot) {
-			suppressed[id] = "suppressed_restart"
-			continue
-		}
-		if !settings.EmailEnabled || h.onchainDisabled || h.onchainEventsDisabled || status != "fresh" || now.Sub(event.DetectedAt) > 6*time.Hour {
-			suppressed[id] = "suppressed_stale_or_setting"
-			continue
-		}
-		ids = append(ids, id)
-		bodies += fmt.Sprintf("%s · %s\r\n同日收盘：$%s\r\n发现：%s\r\n规则：%s\r\n%s\r\n\r\n", costEventName(event.Kind), event.Date, event.Price, event.DetectedAt.UTC().Format(time.RFC3339), event.Rules, event.Note)
-		if event.Zone != nil {
-			bodies += fmt.Sprintf("冻结观察区：$%s–$%s（%s）；收盘返回外侧边界以内则原确认失效。\r\n", event.Zone.Low, event.Zone.High, event.Zone.Side)
-		}
-		for _, evidence := range event.Evidence {
-			bodies += fmt.Sprintf("%s：%s；%s UTC日；%s\r\n", evidence.Title, evidence.Status, evidence.From, evidence.Note)
-		}
+	type queued struct {
+		id        string
+		event     CostEvent
+		attempted int64
 	}
-	e = rows.Err()
+	queue := []queued{}
+	for rows.Next() {
+		var q queued
+		var raw []byte
+		if e = rows.Scan(&q.id, &raw, &q.attempted); e != nil {
+			break
+		}
+		if e = json.Unmarshal(raw, &q.event); e != nil {
+			break
+		}
+		queue = append(queue, q)
+	}
+	re = rows.Err()
 	rows.Close()
 	if e != nil {
 		return e
 	}
-	for id, reason := range suppressed {
-		if _, e = h.Store.research.ExecContext(ctx, "UPDATE notices SET status=? WHERE id=? AND status='pending'", reason, id); e != nil {
+	if re != nil {
+		return re
+	}
+	ids := []string{}
+	bodies := ""
+	for _, q := range queue {
+		target, e := h.costNoticeEligibility(ctx, q.event, settings, now)
+		if e != nil {
 			return e
+		}
+		if q.attempted != 0 {
+			target = "unknown_previous_attempt"
+		}
+		if target == "waiting_price" {
+			continue
+		}
+		if target != "pending" {
+			if _, e = h.Store.research.ExecContext(ctx, "UPDATE notices SET status=? WHERE id=? AND status='pending'", target, q.id); e != nil {
+				return e
+			}
+			continue
+		}
+		event := q.event
+		h.decorateCostEvent(&event, now)
+		ids = append(ids, q.id)
+		bodies += fmt.Sprintf("%s · %s · %s\r\n已完成日收盘：$%s（%s）\r\n判定：%s\r\n规则：%s\r\n%s\r\n", costEventName(event.Kind), event.Direction, event.Date, event.Price, event.PriceSource, event.DetectedAt.UTC().Format(time.RFC3339), event.Rules, event.Note)
+		if event.Zone != nil {
+			bodies += fmt.Sprintf("冻结成本区：$%s–$%s；完成日收盘返回边界以内或等于边界时失效。\r\n", event.Zone.Low, event.Zone.High)
+		}
+		if event.MarketPrice != nil {
+			bodies += "当前美元折算参考价：$" + *event.MarketPrice + "\r\n"
+		}
+		if event.BoundaryDistance != nil {
+			bodies += "距冻结区边界：" + *event.BoundaryDistance + "%\r\n"
+		}
+		if event.DiscoveryDistance != nil {
+			bodies += "距首次条件价格：" + *event.DiscoveryDistance + "%\r\n"
+		}
+		for _, ev := range event.Evidence {
+			bodies += fmt.Sprintf("%s：%s；%s UTC日；%s\r\n", ev.Title, ev.Status, ev.From, ev.Note)
 		}
 	}
 	if len(ids) == 0 {
 		return nil
 	}
-	bodies += "链上最后移动成本观察，不是交易成本、确定性方向或交易建议。"
+	bodies += "价格条件不等于趋势或交易有效性；辅助证据缺失不代表零。SMTP接受不等于收件人收到。"
 	if h.mail != nil && h.mail.DashboardURL != "" {
 		bodies += "\r\n" + h.mail.DashboardURL + "#onchain-cost"
 	}
-	_, e = h.deliverNoticeBatch(ctx, now, ids, "TIDAL BTC 链上筹码观察", bodies)
+	_, e = h.deliverNoticeBatch(ctx, now, ids, "TIDAL BTC 链上成本条件观察", bodies)
 	return e
+}
+func (h *Hub) costNoticeEligibility(ctx context.Context, event CostEvent, settings CostSettings, now time.Time) (string, error) {
+	if !settings.EmailEnabled || h.onchainDisabled || h.onchainEventsDisabled {
+		return "suppressed_setting", nil
+	}
+	if event.Shadow {
+		return "suppressed_shadow", nil
+	}
+	if now.Sub(event.DetectedAt) > 6*time.Hour || event.DetectedAt.After(now) {
+		return "suppressed_expired", nil
+	}
+	s := h.Store.onchain
+	var recovered struct {
+		At time.Time `json:"at"`
+	}
+	if e := costLoad(ctx, s.db, "restore-boundary", &recovered); e != nil {
+		return "", e
+	}
+	if !recovered.At.IsZero() && !event.DetectedAt.After(recovered.At) {
+		return "suppressed_restore", nil
+	}
+	var changed struct {
+		At time.Time `json:"at"`
+	}
+	if e := costLoad(ctx, s.db, "settings-boundary", &changed); e != nil {
+		return "", e
+	}
+	if !changed.At.IsZero() && !event.DetectedAt.After(changed.At) {
+		return "suppressed_setting", nil
+	}
+	if event.Rules != OnchainRules && event.CaseID == "" {
+		return "suppressed_legacy_upgrade", nil
+	}
+	if s.writable() != nil {
+		return "waiting_price", nil
+	}
+	if event.Kind == "concentrated" {
+		feed, e := h.costFeed(ctx)
+		if e != nil {
+			return "", e
+		}
+		status, _ := costFeedStatus(feed, now)
+		var state costState
+		if e = costLoad(ctx, s.db, "observation", &state); e != nil {
+			return "", e
+		}
+		if !state.Compression || state.EpisodeID != event.EpisodeID {
+			return "suppressed_superseded", nil
+		}
+		if status != "fresh" {
+			return "waiting_price", nil
+		}
+		return "pending", nil
+	}
+	if event.Kind != "confirmed" && event.Kind != "invalidated" {
+		return "suppressed_nonmail", nil
+	}
+	c, e := s.caseByID(ctx, event.CaseID)
+	if e != nil {
+		return "", e
+	}
+	if c == nil {
+		return "suppressed_missing_case", nil
+	}
+	if c.State != event.Kind {
+		return "suppressed_superseded", nil
+	}
+	price, e := s.price(ctx, costDate(now.AddDate(0, 0, -1)), now)
+	if e != nil {
+		return "", e
+	}
+	if price == nil {
+		return "waiting_price", nil
+	}
+	if event.Kind == "confirmed" && !costBeyond(*c, price.Value) {
+		return "suppressed_superseded", nil
+	}
+	return "pending", nil
 }
 
 // Preserve delivery outcomes in the long-lived audit store before the shared
@@ -441,7 +518,9 @@ func (h *Hub) archiveCostNoticeResults(ctx context.Context) error {
 	}
 	for _, id := range ids {
 		var status string
-		e = h.Store.research.QueryRowContext(ctx, "SELECT status FROM notices WHERE id=?", "cost-"+id).Scan(&status)
+		var attempted int64
+		var completed sql.NullInt64
+		e = h.Store.research.QueryRowContext(ctx, `SELECT n.status,n.attempted,r.completed FROM notices n LEFT JOIN mail_batch_items i ON i.notice_id=n.id LEFT JOIN mail_results r ON r.batch_id=i.batch_id WHERE n.id=?`, "cost-"+id).Scan(&status, &attempted, &completed)
 		if e == sql.ErrNoRows {
 			status = "unknown_delivery_record_missing"
 		} else if e != nil {
@@ -450,14 +529,33 @@ func (h *Hub) archiveCostNoticeResults(ctx context.Context) error {
 		if status == "pending" || status == "sending" {
 			continue
 		}
-		if _, e = st.db.ExecContext(ctx, "UPDATE outbox SET status=? WHERE id=? AND status='handed_off'", status, id); e != nil {
+		var raw []byte
+		var event CostEvent
+		if e = st.db.QueryRowContext(ctx, "SELECT payload FROM outbox WHERE id=?", id).Scan(&raw); e != nil {
+			return e
+		}
+		if e = json.Unmarshal(raw, &event); e != nil {
+			return e
+		}
+		if attempted > 0 {
+			at := time.Unix(attempted, 0).UTC()
+			event.AttemptedAt = &at
+		}
+		if status == "sent" && completed.Valid {
+			at := time.Unix(0, completed.Int64).UTC()
+			event.SubmittedAt = &at
+		}
+		event.NoticeStatus = status
+		raw, _ = json.Marshal(event)
+		if e = st.controlExec(ctx, "UPDATE outbox SET status=?,payload=? WHERE id=? AND status='handed_off'", status, raw, id); e != nil {
 			return e
 		}
 	}
+
 	return nil
 }
 func costEventName(kind string) string {
-	if s, ok := map[string]string{"initialized": "开始观察", "pending": "突破待确认", "confirmed": "价格突破确认", "invalidated": "确认失效", "unconfirmed": "未延续确认", "concentrated": "集中且波动偏低", "expired": "观察轮次到期", "gap": "日快照缺口", "revision": "来源修订"}[kind]; ok {
+	if s, ok := map[string]string{"initialized": "开始观察", "pending": "收盘越界待确认", "confirmed": "连续两日收于成本区外", "invalidated": "确认失效", "unconfirmed": "未延续确认", "concentrated": "集中且波动偏低", "expired": "观察轮次到期", "gap": "日快照缺口", "revision": "来源修订", "discovery_expired": "发现窗口到期", "pending_expired": "待确认到期", "tracking_expired": "确认跟踪到期", "attention_near": "4小时接近边界", "attention_outside": "4小时收于边界之外", "attention_returned": "4小时参考价回到区间"}[kind]; ok {
 		return s
 	}
 	return kind

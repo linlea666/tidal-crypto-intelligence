@@ -31,7 +31,7 @@ func (h *Hub) costEvidence(ctx context.Context, date string, asOf time.Time) []C
 	// Each result remains independent; missing futures/ETF cannot invent a spot fact.
 	for _, spec := range []struct{ kind, title, id string }{
 		{"flow", "已完成日现货主动成交", ID("flow", "BTC", "", "spot")},
-		{"oi", "BTC数量OI变化", ID("oi-coin-history", "BTC", "", "futures")},
+		{"oi", "BTC折算OI变化", ID("oi-coin-history", "BTC", "", "futures")},
 		{"oi_usd", "OI美元名义价值变化", ID("oi-history", "BTC", "", "futures")},
 		{"funding", "资金费率（按类型和周期）", ID("funding", "ALL", "", "futures")},
 		{"liquidations", "已发生清算", ID("liquidations", "BTC", "", "futures")},
@@ -123,11 +123,22 @@ func (h *Hub) costEvidence(ctx context.Context, date string, asOf time.Time) []C
 					covered++
 				}
 			}
+			longest, gap := 0, 0
+			for ts := day.Unix(); ts < end.Unix(); ts += 300 {
+				if _, ok := bars[ts]; !ok {
+					gap++
+					if gap > longest {
+						longest = gap
+					}
+				} else {
+					gap = 0
+				}
+			}
 			coverage := float64(covered) / 288
 			v.Coverage = &coverage
 			if covered > 0 {
 				v.Status = "partial"
-				v.Data = map[string]any{"buyUsd": buy.Div(dec("100")).String(), "sellUsd": sell.Div(dec("100")).String(), "netUsd": buy.Sub(sell).Div(dec("100")).String()}
+				v.Data = map[string]any{"buyUsd": buy.Div(dec("100")).String(), "sellUsd": sell.Div(dec("100")).String(), "netUsd": buy.Sub(sell).Div(dec("100")).String(), "timeCoverage": coverage, "longestGapMinutes": longest * 5, "actualSources": nil, "sourceCoverage": nil, "messageCompleteness": nil, "sourceSetChanged": nil}
 				if coverage >= .95 {
 					v.Status = "available"
 				}
@@ -147,8 +158,8 @@ func (h *Hub) costEvidence(ctx context.Context, date string, asOf time.Time) []C
 		case "oi", "oi_usd":
 			if oiStart != nil && oiEnd != nil {
 				v.Status = "available"
-				v.Data = map[string]any{"startBTC": *oiStart, "endBTC": *oiEnd, "changeBTC": dec(*oiEnd).Sub(dec(*oiStart)).String()}
-				v.Note = "同来源、同口径、两个完整日边界；不将美元估值变化当成增仓"
+				v.Data = map[string]any{"startBTC": *oiStart, "endBTC": *oiEnd, "changeBTC": dec(*oiEnd).Sub(dec(*oiStart)).String(), "nativeContracts": nil, "contractType": nil, "contractSize": nil, "unit": "BTC-equivalent"}
+				v.Note = "BTC折算OI；原生合约数量、合约类型与面值未核实，不能单独推断增减仓；两日来源可比性仅限此聚合序列"
 				if spec.kind == "oi_usd" {
 					v.Data = map[string]any{"startUsd": *oiStart, "endUsd": *oiEnd, "changeUsd": dec(*oiEnd).Sub(dec(*oiStart)).String()}
 					v.Note = "美元名义价值同时受价格和合约数量影响，独立展示，不作为BTC增减仓证据"
