@@ -141,6 +141,9 @@ func TestResourceReplay(t *testing.T) {
 			t.Fatal(e)
 		}
 	}
+	// Onchain history shares the production process and total disk budget, but
+	// retains its own database and never consumes the CoinGlass request queue.
+	costReplaySeed(t, h, now)
 	if e = h.advanceLiquidationStudy(ctx, time.Now().UTC()); e != nil {
 		t.Fatal(e)
 	}
@@ -266,7 +269,7 @@ func TestResourceReplay(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study"} {
+				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research"} {
 					for n := 0; n < 4; n++ {
 						if _, err := h.Read(ctx, path, url.Values{"asset": {"BTC"}, "hours": {"1"}, "layout": {"split"}}); err != nil {
 							t.Error(err)
@@ -279,6 +282,9 @@ func TestResourceReplay(t *testing.T) {
 			h.maintain(ctx)
 			h.processLiquidations(ctx, time.Now().UTC())
 			if e = h.processSignals(ctx, time.Now().UTC()); e != nil {
+				t.Fatal(e)
+			}
+			if e = h.processCostResearch(ctx, time.Now().UTC()); e != nil {
 				t.Fatal(e)
 			}
 			lastMaintenance = current

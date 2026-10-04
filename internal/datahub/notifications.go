@@ -186,10 +186,10 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	}
 	// Crash-after-send is intentionally at-most-once: never repeat an ambiguous
 	// SMTP delivery. Persisted in-flight notices become unknown on restart.
-	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE (kind IS NULL OR kind NOT LIKE 'vix:%') AND status='sending' AND attempted<=?", h.boot.Unix()); e != nil {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'onchain-cost:%')) AND status='sending' AND attempted<=?", h.boot.Unix()); e != nil {
 		return e
 	}
-	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_restart' WHERE (kind IS NULL OR kind NOT LIKE 'vix:%') AND status='pending' AND created<=?", h.boot.Unix()); e != nil {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_restart' WHERE (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'onchain-cost:%')) AND status='pending' AND created<=?", h.boot.Unix()); e != nil {
 		return e
 	}
 	attempts, e := h.mailAttempts(ctx, now)
@@ -202,7 +202,7 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	candidateAllowed := h.candidateMailAllowed(ctx, now)
 	var cutover time.Time
 	cutoverActive := h.Store.LoadState("signals/multifactor-cutover", &cutover)
-	rows, e := h.Store.research.QueryContext(ctx, "SELECT id,payload FROM notices WHERE status='pending' AND (kind IS NULL OR kind NOT LIKE 'vix:%') ORDER BY created LIMIT 100")
+	rows, e := h.Store.research.QueryContext(ctx, "SELECT id,payload FROM notices WHERE status='pending' AND (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'onchain-cost:%')) ORDER BY created LIMIT 100")
 	if e != nil {
 		return e
 	}

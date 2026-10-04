@@ -116,7 +116,7 @@ export function api<T>(url: string, options: RequestInit = {}): Promise<T> {
     if (url === "logout") clearDataCache();
     return data as T;
   };
-  const serialVIX = method === "GET" && /^(?:vix|liquidations|liquidation-study|liquidation-zones|large-order-zones)(?:[/?]|$)/.test(url);
+  const serialVIX = method === "GET" && /^(?:onchain-cost|vix|liquidations|liquidation-study|liquidation-zones|large-order-zones)(?:[/?]|$)/.test(url);
   const promise = serialVIX ? vixReadQueue.then(request, request) : request();
   if (serialVIX) vixReadQueue = promise.catch(() => {});
   if (method === "GET" && !options.signal) {

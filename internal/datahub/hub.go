@@ -20,9 +20,11 @@ import (
 )
 
 type Config struct {
-	Mail               *MailConfig
-	Root, BaseURL, Key string
-	Offline            bool
+	DisableOnchain       bool
+	DisableOnchainEvents bool
+	Mail                 *MailConfig
+	Root, BaseURL, Key   string
+	Offline              bool
 }
 type cachedView struct {
 	Raw   json.RawMessage
@@ -35,28 +37,30 @@ type viewFlight struct {
 	err  error
 }
 type Hub struct {
-	mail       *MailConfig
-	mailSend   func(context.Context, MailConfig, string, string) error
-	noticeMu   sync.Mutex
-	vixMu      sync.Mutex
-	vixWake    chan struct{}
-	vixFetch   func(context.Context, string) ([]byte, error)
-	Store      *Warehouse
-	Scheduler  *Scheduler
-	registry   map[string]Dataset
-	mu         sync.RWMutex
-	viewMu     sync.Mutex
-	studyMu    sync.Mutex
-	views      map[string]cachedView
-	flights    map[string]*viewFlight
-	viewBytes  int
-	baselineMu sync.RWMutex
-	baselines  map[string]Baseline
-	wallMu     sync.RWMutex
-	walls      wallHistory
-	continuity map[string]wallContinuity
-	boot       time.Time
-	offline    bool
+	onchainDisabled       bool
+	onchainEventsDisabled bool
+	mail                  *MailConfig
+	mailSend              func(context.Context, MailConfig, string, string) error
+	noticeMu              sync.Mutex
+	vixMu                 sync.Mutex
+	vixWake               chan struct{}
+	vixFetch              func(context.Context, string) ([]byte, error)
+	Store                 *Warehouse
+	Scheduler             *Scheduler
+	registry              map[string]Dataset
+	mu                    sync.RWMutex
+	viewMu                sync.Mutex
+	studyMu               sync.Mutex
+	views                 map[string]cachedView
+	flights               map[string]*viewFlight
+	viewBytes             int
+	baselineMu            sync.RWMutex
+	baselines             map[string]Baseline
+	wallMu                sync.RWMutex
+	walls                 wallHistory
+	continuity            map[string]wallContinuity
+	boot                  time.Time
+	offline               bool
 }
 
 func Open(cfg Config) (*Hub, error) {
@@ -73,6 +77,7 @@ func Open(cfg Config) (*Hub, error) {
 		return nil, errors.New("CoinGlass base URL must use HTTPS")
 	}
 	h := &Hub{Store: w, registry: map[string]Dataset{}, views: map[string]cachedView{}, flights: map[string]*viewFlight{}, baselines: map[string]Baseline{}, boot: time.Now().UTC(), offline: cfg.Offline, mail: cfg.Mail}
+	h.onchainDisabled, h.onchainEventsDisabled = cfg.DisableOnchain, cfg.DisableOnchainEvents
 	h.mailSend, h.vixFetch, h.vixWake = sendMail, fetchVIX, make(chan struct{}, 1)
 	w.LoadState("baselines", &h.baselines)
 	w.LoadState("wallHistory", &h.walls)
@@ -164,6 +169,9 @@ func (h *Hub) Run(ctx context.Context) {
 	start(h.liquidationWorker)
 	start(h.shortFlowWorker)
 	if !h.offline {
+		if !h.onchainDisabled {
+			start(h.onchainCollector)
+		}
 		start(h.vixCollector)
 		start(h.vixDailyCollector)
 		start(h.vixMailWorker)
