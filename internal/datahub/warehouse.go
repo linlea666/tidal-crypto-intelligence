@@ -41,6 +41,7 @@ type StorageStatus struct {
 	HotBytes       int       `json:"hotBytes"`
 }
 type Warehouse struct {
+	onchain                    *costStore
 	research                   *sql.DB
 	shortResearch              *sql.DB
 	shortRuntime               *ShortRuntime
@@ -126,11 +127,16 @@ CREATE TABLE IF NOT EXISTS rollups(dataset TEXT,res INTEGER,through_ts INTEGER,P
 		}
 		w.putHot(id, o)
 	}
+	w.initOnchain()
 	return w, rows.Err()
 }
 func (w *Warehouse) Close() error {
 	w.write.Lock()
 	defer w.write.Unlock()
+	if w.onchain != nil && w.onchain.db != nil {
+		_, _ = w.onchain.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+		_ = w.onchain.db.Close()
+	}
 	if w.shortResearch != nil {
 		_ = w.shortResearch.Close()
 	}

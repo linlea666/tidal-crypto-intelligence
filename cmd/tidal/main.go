@@ -26,6 +26,15 @@ func env(k, def string) string {
 	return def
 }
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == "quiesce-onchain" {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := datahub.QuiesceOnchain(ctx, os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, "Onchain rollback preparation failed:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(os.Args) == 4 && os.Args[1] == "backup-db" {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -86,7 +95,7 @@ func main() {
 		slog.Error(mailErr.Error())
 		os.Exit(1)
 	}
-	hub, err := datahub.Open(datahub.Config{Root: env("TIDAL_DATA", "data") + "/v2", BaseURL: env("COINGLASS_BASE_URL", "https://proxy.keystore.com.cn/api/v1/proxy/coinglass"), Key: key, Offline: os.Getenv("TIDAL_OFFLINE") == "true", Mail: mailConfig})
+	hub, err := datahub.Open(datahub.Config{DisableOnchain: os.Getenv("TIDAL_ONCHAIN_DISABLED") == "true", DisableOnchainEvents: os.Getenv("TIDAL_ONCHAIN_EVENTS_DISABLED") == "true", Root: env("TIDAL_DATA", "data") + "/v2", BaseURL: env("COINGLASS_BASE_URL", "https://proxy.keystore.com.cn/api/v1/proxy/coinglass"), Key: key, Offline: os.Getenv("TIDAL_OFFLINE") == "true", Mail: mailConfig})
 	if err != nil {
 		panic(err)
 	}

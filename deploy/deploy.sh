@@ -54,15 +54,34 @@ fi
 if [[ -f "$root/data/v2/research.sqlite" ]]; then
   docker run --rm --user 0:0 -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/research.sqlite "/backup/research-$version-$(date -u +%s).sqlite"
 fi
+if [[ -f "$root/data/v2/onchain.sqlite" ]]; then
+  docker run --rm --user 0:0 -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/onchain.sqlite "/backup/onchain-$version-$(date -u +%s).sqlite"
+fi
 [[ ! -f "$root/state.env" ]] || cp "$root/state.env" "$root/backups/state-$version.env"
 ln -sfn "$release" "$root/current.next"
 mv -Tf "$root/current.next" "$root/current"
-printf 'TIDAL_IMAGE=%s\n' "$image" > "$root/state.env"
+{
+  printf 'TIDAL_IMAGE=%s\n' "$image"
+  # Preserve explicit feature stops across stable upgrades, without copying
+  # secrets or arbitrary environment variables into release configuration.
+  if [[ -f "$root/state.env" ]]; then
+    sed -n -E '/^TIDAL_ONCHAIN_(DISABLED|EVENTS_DISABLED)=(true|false)$/p' "$root/state.env"
+  fi
+} > "$root/state.env.next"
+mv "$root/state.env.next" "$root/state.env"
 compose=(docker compose --env-file "$root/state.env" -f "$root/current/compose.yaml")
 rollback() {
   echo 'Health check failed; restoring previous application and configuration.'
   if [[ -n "$old_image" && -n "$old_release" ]]; then
-    printf 'TIDAL_IMAGE=%s\n' "$old_image" > "$root/state.env"
+    "${compose[@]}" stop app || return 1
+    # The new image knows its notification types; preserve records but terminate
+    # queued intents before the old version's generic worker can see them.
+    docker run --rm --user 0:0 -v "$root/data:/data" "$image" quiesce-onchain /data/v2 || return 1
+    if [[ -f "$root/backups/state-$version.env" ]]; then
+      cp "$root/backups/state-$version.env" "$root/state.env"
+    else
+      printf 'TIDAL_IMAGE=%s\n' "$old_image" > "$root/state.env"
+    fi
     ln -sfn "$old_release" "$root/current.next"; mv -Tf "$root/current.next" "$root/current"
     "${compose[@]}" up -d --force-recreate app gateway
     for attempt in $(seq 1 30); do

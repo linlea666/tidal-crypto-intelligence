@@ -25,3 +25,5 @@ V2.8: liquidation map uses mint short-liquidation risk above, coral long-liquida
 V2.9: BTC funds alerts add independent 5m pulse / 10m continuation cards, six non-overlapping 5m bars, explicit formal blockers and the latest formal event. Formal 15m/1h thresholds and mail remain unchanged. Mobile uses two short cards then vertical longer windows. Flow-only timestamps, delayed price/ATR unknowns, stale snapshots and missing coverage remain explicit; short research is separate and BTC only.
 
 V2.10: 大额挂单 defaults to BTC/ETH price zones (±10%, BTC $250 / ETH $10, closed 4h footprint). Shared USD scale; strongest3+nearest3 each side; support/resistance candidates and observation interval only. Original split board stays under 大单明细. Source tracking age and local observations are separate. Frozen amounts never change with later FX. Advanced book inventory and tracked-order samples stay separate, preserve missing time/price cells, and never draw backward from source creation.
+
+BTC 链上筹码：独立 #onchain-cost，放在巨鲸之后，保留离开前的BTC/ETH选择；不加载现货总览WS或覆盖状态。成本桶用BTC线性数量轴，STH橙/LTH蓝，薄荷绿与珊瑚红仍只表示买卖方向。快照同日价格、真实日期回放、部分桶上下限、固定美元区间与来源分母必须保留；缺日留空，历史不借用今天证据。事件边界冻结，过期数据暂停判断，邮件默认关闭。

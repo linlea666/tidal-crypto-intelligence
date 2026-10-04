@@ -30,7 +30,7 @@ func TestV21ReadOnlyHTTPAndAuth(t *testing.T) {
 		t.Fatal("login failed")
 	}
 	cookie := login.Result().Cookies()[0]
-	paths := []string{"activity?asset=BTC&hours=1", "activity?asset=ETH&hours=24", "levels?asset=ETH&step=5", "large-orders?asset=BTC&history=1", "large-orders?asset=ETH"}
+	paths := []string{"activity?asset=BTC&hours=1", "activity?asset=ETH&hours=24", "levels?asset=ETH&step=5", "large-orders?asset=BTC&history=1", "large-orders?asset=ETH", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research", "onchain-cost/settings"}
 	for i := 0; i < 100; i++ {
 		req := httptest.NewRequest("GET", "/api/v2/"+paths[i%len(paths)], nil)
 		req.AddCookie(cookie)
@@ -51,5 +51,25 @@ func TestV21ReadOnlyHTTPAndAuth(t *testing.T) {
 	handler.ServeHTTP(r, httptest.NewRequest("GET", "/api/v2/activity", nil))
 	if r.Code != 401 {
 		t.Fatal("activity leaked before auth")
+	}
+	for _, body := range []string{`{"emailEnabled":false}`, `{}`, `{"emailEnabled":"false"}`, `{"emailEnabled":false,"unknown":true}`, `{"emailEnabled":false}{}`} {
+		req := httptest.NewRequest("PUT", "/api/v2/onchain-cost/settings", strings.NewReader(body))
+		req.AddCookie(cookie)
+		r := httptest.NewRecorder()
+		handler.ServeHTTP(r, req)
+		want := 400
+		if body == `{"emailEnabled":false}` {
+			want = 200
+		}
+		if r.Code != want {
+			t.Fatalf("settings body %s returned %d: %s", body, r.Code, r.Body.String())
+		}
+	}
+	for _, method := range []string{"GET", "PUT"} {
+		r := httptest.NewRecorder()
+		handler.ServeHTTP(r, httptest.NewRequest(method, "/api/v2/onchain-cost/settings", strings.NewReader(`{"emailEnabled":false}`)))
+		if r.Code != 401 {
+			t.Fatal("onchain settings lack authentication", method, r.Code)
+		}
 	}
 }

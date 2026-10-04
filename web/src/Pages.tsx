@@ -1,3 +1,4 @@
+import { OnchainCostPage, costStatuses } from "./OnchainCost";
 import { LiquidationPage } from "./Liquidations";
 import { LargeOrderZones } from "./LargeOrderZones";
 import { ActivityPage } from "./Activity";
@@ -93,7 +94,7 @@ type Job = {
   calls: number;
 };
 type DataStatus = {
-  externalFeeds?: { vix: { status: string; reason: string; daily?: { lastDate?: string; error: string } } };
+  externalFeeds?: { onchainCost?: { status: string; reason: string; usedBytes: number; budgetBytes: number; feed: {lastDate: string; lastError: string} }; vix: { status: string; reason: string; daily?: { lastDate?: string; error: string } } };
   datasets: {
     dataset: Dataset;
     status: string;
@@ -274,6 +275,7 @@ function Backfill({
   );
 }
 export function MarketPages(p: Props) {
+  if (p.view === "onchain-cost") return <OnchainCostPage />;
   if (p.view === "vix") return <VIXPage />;
   if(p.view==="large-orders")return <LargeOrderZones key={p.asset} asset={p.asset}/>;
   if (p.view === "etf") return <ETFPage key={p.asset} asset={p.asset}/>;
@@ -974,6 +976,7 @@ function HealthPage({ health, frame }: Props) {
           上游认证失败，采集已暂停。请检查代理密钥和订阅期限。
         </div>
       )}
+      {data?.externalFeeds?.onchainCost && <section className="data-section"><h2>BTC链上独立来源 · {costStatuses[data.externalFeeds.onchainCost.status] ?? "未知"}</h2><p className="helper">{data.externalFeeds.onchainCost.reason} · 快照日期 {data.externalFeeds.onchainCost.feed.lastDate || "暂无"} · {(data.externalFeeds.onchainCost.usedBytes / 1048576).toFixed(2)} / {(data.externalFeeds.onchainCost.budgetBytes / 1048576).toFixed(0)} MiB。独立于CoinGlass额度。</p>{data.externalFeeds.onchainCost.feed.lastError && <p className="sell">{data.externalFeeds.onchainCost.feed.lastError}</p>}</section>}
       {data?.externalFeeds?.vix && <section className="data-section">
         <h2>VIX独立数据源 · {vixStatuses[data.externalFeeds.vix.status] ?? "未知"}</h2>
         <p className="helper">{data.externalFeeds.vix.reason} · Cboe日线截至 {data.externalFeeds.vix.daily?.lastDate || "暂无"}。独立于CoinGlass额度和BTC/ETH就绪检查。</p>
