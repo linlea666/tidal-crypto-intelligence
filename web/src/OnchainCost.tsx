@@ -238,9 +238,9 @@ const labels: Record<string, string> = {
   netUsd: "主动净买入 USD",
   longUsd: "多头已清算 USD",
   shortUsd: "空头已清算 USD",
-  startBTC: "期初 OI · BTC",
-  endBTC: "期末 OI · BTC",
-  changeBTC: "变化 · BTC",
+  startBTC: "期初折算 OI · BTC",
+  endBTC: "期末折算 OI · BTC",
+  changeBTC: "折算 OI 变化 · BTC",
   flowUsd: "净流入 USD",
 };
 const dayMs = 86400000;
@@ -1107,7 +1107,7 @@ function EvidencePanel({ items }: { items: Evidence[] }) {
         {items.map((e) => (
           <article key={e.kind}>
             <div>
-              <h3>{e.title}</h3>
+              <h3>{e.kind === "oi" ? "BTC折算OI变化" : e.title}</h3>
               <span className={e.status === "available" ? "" : "amber"}>
                 {e.status === "available"
                   ? "可用"
@@ -1145,7 +1145,20 @@ function EvidencePanel({ items }: { items: Evidence[] }) {
                   {f.intervalHours ?? "未知"}小时 · {f.rateKind || "类型未知"}
                 </p>
               ))}
-            <p className="cost-helper">{e.note}</p>
+            {e.kind === "flow" && (
+              <p className="cost-helper">
+                最长连续缺口：{e.data?.longestGapMinutes == null ? "未知（原记录未保存）" : `${qty(String(e.data.longestGapMinutes))}分钟`}；实际共同来源集合与来源变化未核实，时间覆盖不能代替来源完整性。
+              </p>
+            )}
+            {e.kind === "oi" ? (
+              <>
+                <p className="cost-helper">BTC折算OI；原生合约数量、合约类型与面值未核实，不能单独推断增减仓。该说明同样适用于旧版保存的数值，原始证据不改写。</p>
+                <details>
+                  <summary>查看采集时原始说明（不作为当前口径）</summary>
+                  <p className="cost-helper">{e.note}</p>
+                </details>
+              </>
+            ) : <p className="cost-helper">{e.note}</p>}
             <small>证据截至 {stamp(e.asOf)}（北京时间）</small>
           </article>
         ))}
