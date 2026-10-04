@@ -26,7 +26,7 @@ func costFeedStatus(f CostFeed, now time.Time) (string, string) {
 		return "missing", "等待首次有效链上快照"
 	}
 	if f.LastCheck == nil || now.Sub(*f.LastCheck) > 3*time.Hour || f.LastCheck.After(now.Add(time.Minute)) {
-		return "unreachable", "超过3小时未成功检查来源，暂停新判断"
+		return "unreachable", "超过3小时未成功检查来源，暂停建立新结构；已有冻结区按独立价格继续判断"
 	}
 	today := now.UTC().Truncate(24 * time.Hour)
 	expected := costDate(today.AddDate(0, 0, -1))
@@ -37,7 +37,7 @@ func costFeedStatus(f CostFeed, now time.Time) (string, string) {
 		return "delayed", "最新完成UTC日超过6小时宽限仍未更新"
 	}
 	if f.LastError != "" {
-		return "error", "最近采集失败，保留最后有效快照并暂停提醒"
+		return "error", "最近采集失败，保留最后有效快照；结构判断暂停，价格条件按各自输入核验"
 	}
 	return "fresh", "日线快照有效；不是实时持仓或成交数据"
 }
