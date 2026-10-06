@@ -56,6 +56,32 @@ func TestPaperReadonlySnapshotAPIAndSourcePublication(t *testing.T) {
 		t.Fatal("paper reads used CoinGlass quota")
 	}
 }
+
+func TestPaperPublicWireCaseSensitiveFields(t *testing.T) {
+	p, now := paperFixture(t)
+	ctx := context.Background()
+	candles := map[int64]Candle{}
+	// Exact Binance event/clock and price/estimated-price keys must coexist.
+	mark := []byte(fmt.Sprintf(`{"stream":"btcusdt@markPrice@1s","data":{"e":"markPriceUpdate","E":%d,"s":"BTCUSDT","st":1,"p":"10000","P":"0","i":"10000","r":"0.0001","T":%d}}`, now.UnixMilli(), now.Add(time.Hour).UnixMilli()))
+	if err := p.streamMessage(ctx, paperMessage{At: now, Raw: mark}, candles, false); err != nil {
+		t.Fatal("valid p rejected because P or E overwrote a different wire field:", err)
+	}
+	paperSignal(t, p, 1, now, "buy")
+	at := now.Add(time.Second)
+	quote := []byte(fmt.Sprintf(`{"e":"bookTicker","u":2,"E":%d,"T":%d,"s":"BTCUSDT","st":1,"b":"9999","B":"1","a":"10000","A":"1"}`, at.UnixMilli(), at.UnixMilli()))
+	if err := p.streamMessage(ctx, paperMessage{At: at, Raw: quote}, candles, false); err != nil {
+		t.Fatal("valid e/E public quote rejected:", err)
+	}
+	for _, a := range p.snapshot().Accounts {
+		if a.Position == nil {
+			t.Fatal("valid public wire quote did not execute the delayed paper entry")
+		}
+		paperAssertDecimal(t, a.Position.Entry, "10002")
+	}
+	if p.quote.EventAt.UnixMilli() != at.UnixMilli() {
+		t.Fatal("lost the uppercase exchange event clock")
+	}
+}
 func TestPaperCapacityAndRecoveryMismatch(t *testing.T) {
 	p, now := paperFixture(t)
 	ctx := context.Background()

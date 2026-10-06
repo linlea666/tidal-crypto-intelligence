@@ -87,3 +87,28 @@ func paperResourceStart(t *testing.T, h *Hub) func() {
 		t.Logf("paper replay bytes=%d cursor=%d", p.size(), p.snapshot().Cursor)
 	}
 }
+
+func TestPaperResourceActorRecordsFills(t *testing.T) {
+	h, err := Open(Config{Root: t.TempDir(), Offline: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Store.Close()
+	stop := paperResourceStart(t, h)
+	defer stop()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	poll := time.NewTicker(20 * time.Millisecond)
+	defer poll.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatal("public-wire resource actor did not consume and fill its first signal")
+		case <-poll.C:
+			s := h.Store.paper.snapshot()
+			if s.Cursor > 0 && s.Accounts[0].Position != nil && s.Accounts[1].Position != nil {
+				return
+			}
+		}
+	}
+}

@@ -39,6 +39,16 @@ type paperMessage struct {
 	Err     error
 }
 
+// Binance wire keys are case-sensitive, while encoding/json also matches
+// struct fields case-insensitively. Both e/E must have exact destinations so
+// the numeric event clock cannot be decoded as the event-name string.
+type paperStreamHeader struct {
+	Event   string `json:"e"`
+	EventAt int64  `json:"E"`
+	Symbol  string `json:"s"`
+	Type    int    `json:"st"`
+}
+
 // Independent limiter: one in-flight request, >=2s between requests. Upstream
 // 429/418 carries a cooldown; it never consumes CoinGlass's request budget.
 type paperHTTP struct {
@@ -542,11 +552,7 @@ func (p *paperStore) streamMessage(ctx context.Context, msg paperMessage, candle
 	if len(envelope.Data) > 0 {
 		raw = envelope.Data
 	}
-	var head struct {
-		Event  string `json:"e"`
-		Symbol string `json:"s"`
-		Type   int    `json:"st"`
-	}
+	var head paperStreamHeader
 	if err := json.Unmarshal(raw, &head); err != nil {
 		return err
 	}
@@ -556,8 +562,8 @@ func (p *paperStore) streamMessage(ctx context.Context, msg paperMessage, candle
 	switch head.Event {
 	case "bookTicker":
 		var v struct {
+			paperStreamHeader
 			ID     int64  `json:"u"`
-			Event  int64  `json:"E"`
 			Bid    string `json:"b"`
 			Ask    string `json:"a"`
 			BidQty string `json:"B"`
@@ -566,7 +572,7 @@ func (p *paperStore) streamMessage(ctx context.Context, msg paperMessage, candle
 		if err := json.Unmarshal(raw, &v); err != nil {
 			return err
 		}
-		q := paperQuote{ID: v.ID, At: msg.At, EventAt: time.UnixMilli(v.Event).UTC()}
+		q := paperQuote{ID: v.ID, At: msg.At, EventAt: time.UnixMilli(v.EventAt).UTC()}
 		var err error
 		q.Bid, err = paperDecimal(v.Bid, true)
 		if err != nil {
@@ -587,9 +593,10 @@ func (p *paperStore) streamMessage(ctx context.Context, msg paperMessage, candle
 		return p.onQuote(ctx, q, protected)
 	case "markPriceUpdate":
 		var v struct {
-			At    int64  `json:"E"`
-			Next  int64  `json:"T"`
-			Price string `json:"p"`
+			paperStreamHeader
+			Next      int64           `json:"T"`
+			Price     string          `json:"p"`
+			Estimated json.RawMessage `json:"P"` // Distinct from the mark price p.
 		}
 		if err := json.Unmarshal(raw, &v); err != nil {
 			return err
@@ -597,7 +604,7 @@ func (p *paperStore) streamMessage(ctx context.Context, msg paperMessage, candle
 		if _, err := paperDecimal(v.Price, true); err != nil {
 			return err
 		}
-		if msg.At.Sub(time.UnixMilli(v.At)) > 5*time.Second || time.UnixMilli(v.At).After(msg.At.Add(time.Second)) {
+		if msg.At.Sub(time.UnixMilli(v.EventAt)) > 5*time.Second || time.UnixMilli(v.EventAt).After(msg.At.Add(time.Second)) {
 			return errors.New("stale mark price")
 		}
 		p.markAt = msg.At
