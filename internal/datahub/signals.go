@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"time"
 )
 
@@ -130,17 +129,6 @@ func normalizeSignalDocuments(rows []json.RawMessage) ([]json.RawMessage, error)
 		rows[i] = b
 	}
 	return rows, nil
-}
-
-func percentile(a []float64, p float64) float64 {
-	if len(a) == 0 {
-		return 0
-	}
-	sort.Float64s(a)
-	f := float64(len(a)-1) * p
-	i := int(f)
-	j := min(i+1, len(a)-1)
-	return a[i] + (a[j]-a[i])*(f-float64(i))
 }
 
 type flowAccumulator struct {
@@ -374,33 +362,6 @@ func candleBounds(c map[int64]Candle, to time.Time) (float64, float64, float64, 
 		last = v.Close
 	}
 	return high, low, last, true
-}
-func hourlyATR(c map[int64]Candle, to time.Time) *float64 {
-	// Fourteen completed hourly true ranges, requiring the prior close.
-	to = to.Truncate(time.Hour)
-	sum := 0.0
-	prev, ok := c[to.Add(-14*time.Hour-5*time.Minute).Unix()]
-	if !ok {
-		return nil
-	}
-	last := prev.Close
-	for i := 14; i > 0; i-- {
-		end := to.Add(-time.Duration(i-1) * time.Hour)
-		hi, lo, cl := 0.0, math.Inf(1), 0.0
-		for j := 12; j > 0; j-- {
-			v, ok := c[end.Add(-time.Duration(j)*5*time.Minute).Unix()]
-			if !ok {
-				return nil
-			}
-			hi = max(hi, v.High)
-			lo = min(lo, v.Low)
-			cl = v.Close
-		}
-		sum += max(hi-lo, max(math.Abs(hi-last), math.Abs(lo-last)))
-		last = cl
-	}
-	v := sum / 14
-	return &v
 }
 func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 	if h.Store.Status().ResearchPaused || h.Store.Status().Paused {
@@ -637,6 +598,15 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 			return e
 		}
 		kind := notices[s.ID]
+		if s.Asset == "BTC" && s.Rules == MultifactorRules && kind == "anomaly" {
+			b, err := json.Marshal(s)
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO signal_publications(id,at,payload) VALUES(?,?,?)", s.Rules+"/"+s.ID, now.UnixMilli(), b); err != nil {
+				return err
+			}
+		}
 		allowed := s.Rules != CandidateRules || candidateAllowed && s.Level == "strong" && (kind == "strong" || kind == "confirmed")
 		var cutover time.Time
 		if h.Store.LoadState("signals/multifactor-cutover", &cutover) {

@@ -71,6 +71,14 @@ func BackupFile(ctx context.Context, source, destination string) error {
 		return err
 	}
 	manifest := map[string]any{"source": filepath.Base(source), "file": filepath.Base(destination), "startedAt": started, "completedAt": time.Now().UTC(), "sha256": hex.EncodeToString(hash.Sum(nil)), "bytes": size, "batch": os.Getenv("TIDAL_BACKUP_BATCH"), "crossDatabaseAtomic": false, "restoreRequirement": "RestoreOnchainBoundary before restarting restored databases; pending is not proof of never sent"}
+	if filepath.Base(source) == "paper.sqlite" {
+		metadata, e := paperBackupMetadata(ctx, destination)
+		if e != nil {
+			return e
+		}
+		manifest["paper"] = metadata
+		manifest["restoreRequirement"] = "Restore paper and research from the same batch; startup checks source/cursor and enters recovery, never replay missing fills"
+	}
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		return err

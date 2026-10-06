@@ -32,14 +32,6 @@ func selectedCase(t time.Time) bool {
 	}
 	return false
 }
-func completeCandles(c map[int64]Candle, from, to time.Time) bool {
-	for t := from; t.Before(to); t = t.Add(5 * time.Minute) {
-		if v, ok := c[t.Unix()]; !ok || v.Close <= 0 {
-			return false
-		}
-	}
-	return true
-}
 func candidateTrial(rule string, signals []Signal, episodes []PriceEpisode, c map[int64]Candle, delay int) CandidateTrial {
 	shifted := append([]Signal(nil), signals...)
 	events := []StudyEvent{}
