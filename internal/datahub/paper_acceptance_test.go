@@ -82,6 +82,61 @@ func TestPaperPublicWireCaseSensitiveFields(t *testing.T) {
 		t.Fatal("lost the uppercase exchange event clock")
 	}
 }
+
+func TestPaperKlinePublicWireCaseSensitiveFields(t *testing.T) {
+	p, now := paperFixture(t)
+	candles := map[int64]Candle{}
+	start := now.Truncate(5 * time.Minute).Add(-5 * time.Minute)
+	for _, closed := range []bool{false, true} {
+		// Include the entire documented kline shape: L is a trade ID, l is
+		// the low price. Check both key orders to forbid overwrite by folding.
+		for _, low := range []string{`"l":"9990","L":12345`, `"L":12345,"l":"9990"`} {
+			raw := []byte(fmt.Sprintf(`{"stream":"btcusdt@kline_5m","data":{"e":"kline","E":%d,"s":"BTCUSDT","st":1,"k":{"t":%d,"T":%d,"s":"BTCUSDT","i":"5m","f":12000,%s,"o":"10000","c":"10005","h":"10010","v":"100","n":346,"x":%t,"q":"1000000","V":"40","Q":"400000","B":"0"}}}`, now.UnixMilli(), start.UnixMilli(), now.UnixMilli()-1, low, closed))
+			if err := p.streamMessage(context.Background(), paperMessage{At: now, Raw: raw}, candles, false); err != nil {
+				t.Fatal("public kline rejected:", err)
+			}
+			if !closed && len(candles) != 0 {
+				t.Fatal("incomplete kline entered ATR inputs")
+			}
+		}
+	}
+	if len(candles) != 1 || candles[start.Unix()].Low != 9990 {
+		t.Fatal("kline low was overwritten by trade ID", candles)
+	}
+}
+
+func TestPaperFundingPollingFreshnessAndAdmission(t *testing.T) {
+	p, now := paperFixture(t)
+	s := p.snapshot()
+	// A normal response is already older than the two-minute history lag
+	// when it arrives. The next poll is thirty seconds later.
+	s.FundingThrough = now.Add(-150 * time.Second)
+	s.ExpectedFunding = []int64{now.Add(time.Hour).UnixMilli()}
+	if !paperFundingKnown(s, now, true) {
+		t.Fatal("healthy funding poll can never become current")
+	}
+	if paperFundingKnown(s, now, false) {
+		t.Fatal("poll tolerance incorrectly finalized a closed trade")
+	}
+	if paperFundingKnown(s, now.Add(31*time.Second), true) {
+		t.Fatal("funding poll stale beyond bounded tolerance accepted")
+	}
+	s.ExpectedFunding = append(s.ExpectedFunding, now.UnixMilli())
+	if paperFundingKnown(s, now, true) {
+		t.Fatal("poll tolerance hid an overdue settlement")
+	}
+	s.ExpectedFunding = s.ExpectedFunding[:1]
+	if err := p.commit(context.Background(), s, paperBatch{}); err != nil {
+		t.Fatal(err)
+	}
+	paperSignal(t, p, 1, now, "buy")
+	paperTick(t, p, 2, now.Add(time.Second), "9999", "10000", "1")
+	for _, a := range p.snapshot().Accounts {
+		if a.Position == nil {
+			t.Fatal("normal funding polling blocked entry", a)
+		}
+	}
+}
 func TestPaperCapacityAndRecoveryMismatch(t *testing.T) {
 	p, now := paperFixture(t)
 	ctx := context.Background()

@@ -10,6 +10,15 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+const (
+	paperFundingHistoryDelay = 2 * time.Minute
+	// History intentionally stops two minutes behind wall time. Allow one
+	// bounded poll/request cycle beyond that boundary for live admission;
+	// overdue announced settlements still block below, and closed trades
+	// require complete coverage through their exact exit instant.
+	paperFundingPollTolerance = time.Minute
+)
+
 // Funding attribution uses the quantity actually held at the settlement
 // instant, including partial exits: open <= settlement < close.
 func paperFundingQuantity(fills []paperFill, at time.Time) decimal.Decimal {
@@ -53,7 +62,7 @@ func paperFundingKnown(s paperState, at time.Time, open bool) bool {
 	}
 	through := at
 	if open {
-		through = at.Add(-2 * time.Minute)
+		through = at.Add(-paperFundingHistoryDelay - paperFundingPollTolerance)
 	}
 	if s.FundingThrough.Before(through) {
 		return false
