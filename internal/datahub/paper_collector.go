@@ -223,11 +223,11 @@ func paperFundingWindow(s paperState, now time.Time) (time.Time, time.Time) {
 	}
 	for _, due := range s.ExpectedFunding {
 		at := time.UnixMilli(due).UTC()
-		if at.Before(now.Add(-2*time.Minute)) && !paperSettlementObserved(s, due) && at.Before(from) {
+		if at.Before(now.Add(-paperFundingHistoryDelay)) && !paperSettlementObserved(s, due) && at.Before(from) {
 			from = at.Add(-time.Second)
 		}
 	}
-	return from, minTime(now.Add(-2*time.Minute), from.Add(24*time.Hour))
+	return from, minTime(now.Add(-paperFundingHistoryDelay), from.Add(24*time.Hour))
 }
 func parsePaperInstrument(raw []byte, at time.Time) (paperInstrument, error) {
 	var doc struct {
@@ -623,6 +623,7 @@ func (p *paperStore) streamMessage(ctx context.Context, msg paperMessage, candle
 				Open     string `json:"o"`
 				High     string `json:"h"`
 				Low      string `json:"l"`
+				LastID   int64  `json:"L"` // Exact destination prevents L from matching price l.
 				Close    string `json:"c"`
 			} `json:"k"`
 		}
