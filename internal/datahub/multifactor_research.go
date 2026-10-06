@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -226,10 +227,20 @@ func (h *Hub) evaluateMultifactor(ctx context.Context, study Study, bars map[int
 	r := &MultifactorStudy{Rules: MultifactorRules, State: "calculating", Groups: []MultifactorStudyGroup{}, Note: "历史关联研究，不证明数据当时可获得。旧规则、价格突破、新资金核心与逐项过滤使用各组共同有效窗口；买卖分开。30天基线、随后30天开发、最后30天留出，已知案例及其邻近窗口排除留出。0分钟延迟也从发现后下一根完整5分钟开盘计算，5/10分钟再延后。等提醒预算按各UTC日各方向的共同最小数量，保留最早提醒，属事后归一而非线上策略。Funding无可比历史时相应组留空。"}
 	start := study.From.Add(30*24*time.Hour + time.Hour)
 	stop := study.To.Add(-4*time.Hour - 15*time.Minute)
-	version := h.studyInputVersion(ctx, study)
+	version, e := h.studyInputVersion(ctx, study)
+	if e != nil {
+		return nil, e
+	}
 	p := multiCheckpoint{Version: version, Cursor: start, Active: map[string]bool{}, Clear: map[string]*time.Time{}, Ticks: []multiResearchTick{}, Signals: []multiResearchSignal{}}
 	var saved multiCheckpoint
-	if study.ID != "" && h.Store.document(ctx, "multifactor-study-progress", study.ID, &saved) == nil && saved.Version == version && !saved.Cursor.Before(start) {
+	savedErr := sql.ErrNoRows
+	if study.ID != "" {
+		savedErr = h.Store.document(ctx, "multifactor-study-progress", study.ID, &saved)
+	}
+	if savedErr != nil && savedErr != sql.ErrNoRows {
+		return nil, savedErr
+	}
+	if savedErr == nil && saved.Version == version && !saved.Cursor.Before(start) {
 		p = saved
 	}
 	until := stop

@@ -434,7 +434,10 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 		_ = h.Store.LoadState("signals/baseline/"+a, &baseline)
 		to := end.Truncate(time.Hour).Add(-time.Hour)
 		from := to.Add(-30 * 24 * time.Hour)
-		baseVersion := h.Store.datasetRangeVersion(ctx, fd.ID, from, to)
+		baseVersion, err := h.Store.datasetRangeVersion(ctx, fd.ID, from, to)
+		if err != nil {
+			return err
+		}
 		if baseline.At.IsZero() || !baseline.To.Equal(to) || baseline.InputVersion != baseVersion || baseline.P95Hour == nil || baseline.Directional == nil {
 			acc := newFlowAccumulator(300)
 			if e := h.Store.FactsAsOf(ctx, fd.ID, from, to, now, func(o Observation) error { acc.add(o); return nil }); e != nil {
@@ -454,7 +457,10 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 		if !fresh {
 			reason = "数据不足 / 当前成交或价格过期"
 		}
-		version := h.Store.factVersion(ctx, a)
+		version, err := h.Store.factVersion(ctx, a)
+		if err != nil {
+			return err
+		}
 		state.InputVersion = version
 		bars, candles, e := h.signalInput(ctx, a, end.Add(-16*time.Hour), end, now)
 		if e != nil {

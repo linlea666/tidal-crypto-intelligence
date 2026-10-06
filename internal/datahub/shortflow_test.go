@@ -418,7 +418,11 @@ func TestShortBaselineCheckpointAndHourlyReuse(t *testing.T) {
 	ctx := context.Background()
 	to := end.Add(-time.Hour)
 	from := to.Add(-30 * 24 * time.Hour)
-	w := shortBaselineWork{From: from, To: to, Cursor: to.Add(-time.Hour), AsOf: end, Version: h.Store.datasetRangeVersion(ctx, ID("flow", "BTC", "", "spot"), from, to), Bars: []shortStoredBar{}}
+	version, err := h.Store.datasetRangeVersion(ctx, ID("flow", "BTC", "", "spot"), from, to)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := shortBaselineWork{From: from, To: to, Cursor: to.Add(-time.Hour), AsOf: end, Version: version, Bars: []shortStoredBar{}}
 	for at := from; at.Before(w.Cursor); at = at.Add(5 * time.Minute) {
 		w.Bars = append(w.Bars, storeShortBar(FlowBar{At: at, Buy: 20, Sell: 10}))
 	}
@@ -589,7 +593,11 @@ func TestShortHourlyRolloverPreparesBeforeFirstObservation(t *testing.T) {
 	}
 	oldTo := end.Add(-2 * time.Hour)
 	from := oldTo.Add(-30 * 24 * time.Hour)
-	work := shortBaselineWork{From: from, To: oldTo, Cursor: oldTo, AsOf: end.Add(-10 * time.Minute), Version: h.Store.datasetRangeVersion(ctx, fd.ID, from, oldTo)}
+	version, err := h.Store.datasetRangeVersion(ctx, fd.ID, from, oldTo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := shortBaselineWork{From: from, To: oldTo, Cursor: oldTo, AsOf: end.Add(-10 * time.Minute), Version: version}
 	baselineBars := make(map[int64]FlowBar, 8640)
 	for at := from; at.Before(oldTo); at = at.Add(5 * time.Minute) {
 		b := FlowBar{At: at, Buy: 200000000, Sell: 100000000}

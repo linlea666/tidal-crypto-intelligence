@@ -34,6 +34,10 @@ func (w *Warehouse) initResearch() error {
 		return e
 	}
 	w.research = db
+	if e = w.initStudySnapshots(); e != nil {
+		db.Close()
+		return e
+	}
 	// Optional research must not take the original market service down.
 	if e = w.initShortFlow(); e != nil {
 		w.shortGap(time.Now().UTC(), e)
@@ -131,6 +135,9 @@ func (w *Warehouse) researchGap(at time.Time) {
 // FactsAsOf reads the newest version actually available by asOf. Passing a
 // present-day asOf for old market times is association analysis, never a replay.
 func (w *Warehouse) FactsAsOf(ctx context.Context, id string, from, to, asOf time.Time, fn func(Observation) error) error {
+	if snapshot, ok := ctx.Value(studySnapshotKey{}).(string); ok {
+		return w.snapshotFacts(ctx, snapshot, id, from, to, asOf, fn)
+	}
 	return factsAsOf(ctx, w.research, id, from, to, asOf, fn)
 }
 
@@ -198,8 +205,11 @@ func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days in
 	}
 	// Native research facts are retained up to the selected policy (90 days are
 	// necessary for the explicit 30/30/30 study); budget protection takes priority.
+	if err := w.pruneStudySnapshots(ctx, now); err != nil {
+		return err
+	}
 	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour).Unix()
-	for _, q := range []string{"DELETE FROM facts WHERE ts<?", "DELETE FROM documents WHERE at<?", "DELETE FROM notices WHERE created<? AND (kind IS NULL OR kind NOT LIKE 'vix:%')", "DELETE FROM gaps WHERE end<?", "DELETE FROM shadow WHERE ts<?"} {
+	for _, q := range []string{"DELETE FROM facts WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND facts.ts>=i.from_ts AND facts.ts<i.to_ts)", "DELETE FROM documents WHERE at<?", "DELETE FROM notices WHERE created<? AND (kind IS NULL OR kind NOT LIKE 'vix:%')", "DELETE FROM gaps WHERE end<?", "DELETE FROM shadow WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND shadow.ts>=i.from_ts AND shadow.ts<i.to_ts)"} {
 		if _, e := w.research.ExecContext(ctx, q, cutoff); e != nil {
 			return e
 		}
@@ -230,16 +240,22 @@ func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days in
 }
 
 // Includes corrections and newly acquired facts, without reacting to price ticks.
-func (w *Warehouse) factVersion(ctx context.Context, a string) string {
+func (w *Warehouse) factVersion(ctx context.Context, a string) (string, error) {
 	var n, last int64
-	_ = w.research.QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE dataset IN (?,?,?)", ID("flow", a, "", "spot"), ID("candles", a, "Binance", "spot"), ID("oi-history", a, "", "futures")).Scan(&n, &last)
-	return fmt.Sprintf("%d/%d", n, last)
+	err := w.research.QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE dataset IN (?,?,?)", ID("flow", a, "", "spot"), ID("candles", a, "Binance", "spot"), ID("oi-history", a, "", "futures")).Scan(&n, &last)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d/%d", n, last), nil
 }
 
-func (w *Warehouse) researchVersion(ctx context.Context, a string, from, to time.Time) string {
+func (w *Warehouse) researchVersion(ctx context.Context, a string, from, to time.Time) (string, error) {
 	var n, last int64
-	_ = w.research.QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE ts>=? AND ts<? AND dataset LIKE ?", from.Unix(), to.Unix(), "%."+strings.ToLower(a)+".%").Scan(&n, &last)
-	return fmt.Sprintf("%d/%d", n, last)
+	err := w.research.QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE ts>=? AND ts<? AND dataset LIKE ?", from.Unix(), to.Unix(), "%."+strings.ToLower(a)+".%").Scan(&n, &last)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d/%d", n, last), nil
 }
 
 func (w *Warehouse) nativeCursor(ctx context.Context, d Dataset, from, to, now time.Time) (time.Time, error) {
@@ -260,8 +276,11 @@ func (w *Warehouse) completeNativeWindow(ctx context.Context, d Dataset, from, t
 	return e == nil && !cursor.Before(to)
 }
 
-func (w *Warehouse) datasetRangeVersion(ctx context.Context, id string, from, to time.Time) string {
+func (w *Warehouse) datasetRangeVersion(ctx context.Context, id string, from, to time.Time) (string, error) {
 	var n, last int64
-	_ = w.research.QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE dataset=? AND ts>=? AND ts<?", id, from.Unix(), to.Unix()).Scan(&n, &last)
-	return fmt.Sprintf("%d/%d", n, last)
+	err := w.research.QueryRowContext(ctx, "SELECT count(*),coalesce(max(available),0) FROM facts WHERE dataset=? AND ts>=? AND ts<?", id, from.Unix(), to.Unix()).Scan(&n, &last)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%d/%d", n, last), nil
 }

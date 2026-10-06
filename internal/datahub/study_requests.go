@@ -2,10 +2,11 @@ package datahub
 
 import (
 	"context"
+	"fmt"
 	"time"
 )
 
-const studyPipeline = "research-2.5"
+const studyPipeline = "research-3.0"
 
 func studyRequests(s Study, now time.Time) []DataRequest {
 	out := []DataRequest{}
@@ -71,6 +72,9 @@ func (h *Hub) queueStudy(s *Study, now time.Time) {
 	}
 }
 func (h *Hub) studyCoverage(s Study) []map[string]any {
+	if s.FrozenCoverage != nil {
+		return s.FrozenCoverage
+	}
 	h.Scheduler.mu.Lock()
 	defer h.Scheduler.mu.Unlock()
 	out := []map[string]any{}
@@ -104,6 +108,24 @@ func (h *Hub) studyCoverage(s Study) []map[string]any {
 	}
 	return out
 }
-func (h *Hub) studyInputVersion(ctx context.Context, s Study) string {
-	return EvaluationVersion + "/" + MultifactorRules + "/" + h.Store.researchVersion(ctx, s.Asset, s.From, s.To) + "/" + h.Store.datasetRangeVersion(ctx, ID("funding", "ALL", "", "futures"), s.From, s.To)
+func (h *Hub) studyInputVersion(ctx context.Context, s Study) (string, error) {
+	if s.InputSnapshotID != "" {
+		m, err := h.Store.studySnapshot(ctx, s.InputSnapshotID)
+		if err != nil {
+			return "", err
+		}
+		if m.State != "ready" {
+			return "", fmt.Errorf("研究输入未冻结: %s", m.State)
+		}
+		return EvaluationVersion + "/" + MultifactorRules + "/" + m.ID + "/" + m.Hash, nil
+	}
+	v, err := h.Store.researchVersion(ctx, s.Asset, s.From, s.To)
+	if err != nil {
+		return "", err
+	}
+	funding, err := h.Store.datasetRangeVersion(ctx, ID("funding", "ALL", "", "futures"), s.From, s.To)
+	if err != nil {
+		return "", err
+	}
+	return EvaluationVersion + "/" + MultifactorRules + "/" + v + "/" + funding, nil
 }

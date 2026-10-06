@@ -346,7 +346,7 @@ ON CONFLICT(dataset,side,step,ts) DO UPDATE SET payload=excluded.payload`, cut)
 		return err
 	}
 	var bytes int64
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT sum(length(payload)+length(k)+length(order_key)+128) FROM order_events),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM tracked_orders),0)+coalesce((SELECT sum(length(payload)+64) FROM order_hours),0)+coalesce((SELECT sum(length(payload)+length(k)+128) FROM liquidity_events),0)+coalesce((SELECT sum(length(payload)+length(dataset)+128) FROM liquidity_hours),0)+coalesce((SELECT bytes FROM order_zone_storage WHERE id=1),0)`).Scan(&bytes); err != nil {
+	if err = tx.QueryRowContext(ctx, "SELECT bytes FROM order_storage WHERE id=1").Scan(&bytes); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {

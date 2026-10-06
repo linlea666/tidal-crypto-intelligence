@@ -300,7 +300,11 @@ func (h *Hub) currentDerivativeContext(ctx context.Context, a string, end, now t
 		if kind == "funding" {
 			asset = "ALL"
 		}
-		version += h.Store.datasetRangeVersion(ctx, ID(kind, asset, "", "futures"), from, to) + "/"
+		v, err := h.Store.datasetRangeVersion(ctx, ID(kind, asset, "", "futures"), from, to)
+		if err != nil {
+			return DerivativeContext{}, err
+		}
+		version += v + "/"
 	}
 	var baseline contextBaseline
 	key := "signals/context-baseline/" + a
