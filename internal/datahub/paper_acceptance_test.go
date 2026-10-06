@@ -3,6 +3,7 @@ package datahub
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -135,6 +136,79 @@ func TestPaperFundingPollingFreshnessAndAdmission(t *testing.T) {
 		if a.Position == nil {
 			t.Fatal("normal funding polling blocked entry", a)
 		}
+	}
+}
+
+func TestPaperPublicationReadDoesNotQueueBehindResearchWriter(t *testing.T) {
+	h, err := Open(Config{Root: t.TempDir(), Offline: true, PaperMode: "collect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Store.Close()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	sig := Signal{ID: "committed-before-write", Asset: "BTC", Direction: "buy", Rules: MultifactorRules, At: now}
+	if err = h.commitSignals(ctx, "BTC", signalState{}, []Signal{sig}, map[string]string{sig.ID: "anomaly"}, now); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openPaperPublicationReader(h.Store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	writer, err := h.Store.research.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Rollback()
+	if _, err = writer.Exec("UPDATE paper_source SET generation='uncommitted-generation' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	blocked, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	_, _, _, err = h.Store.paperPublications(blocked, 0)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("test did not reproduce writer-connection contention", err)
+	}
+	read, stop := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer stop()
+	pubs, source, end, err := readPaperPublications(read, reader, 0)
+	if err != nil || len(pubs) != 1 || end != pubs[0].Seq || source == "uncommitted-generation" || pubs[0].Signal.ID != sig.ID {
+		t.Fatal("live reader blocked or exposed uncommitted facts", pubs, source, end, err)
+	}
+	if _, err = reader.ExecContext(ctx, "DELETE FROM paper_source"); err == nil {
+		t.Fatal("publication reader permits writes")
+	}
+	if reader.Stats().MaxOpenConnections != 1 || h.Store.research.Stats().MaxOpenConnections != 1 || h.Store.shortResearch.Stats().MaxOpenConnections != 1 {
+		t.Fatal("source isolation changed existing connection limits")
+	}
+}
+
+func TestPaperLiveHeartbeatDoesNotBackdateFreshQuotes(t *testing.T) {
+	p, _ := paperFixture(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	s := p.snapshot()
+	s.Origin = nil
+	s.LastTick = now.Add(-time.Second)
+	s.GoodSince = now.Add(-time.Minute)
+	s.Gap = true
+	if err := p.commit(ctx, s, paperBatch{}); err != nil {
+		t.Fatal(err)
+	}
+	// Quote arrived after the queued tick, but before processing. Comparing
+	// it to the old scheduled tick would reset this entire recovery streak.
+	p.quote.At, p.quote.EventAt, p.markAt = now, now, now
+	if p.quote.valid(now.Add(-time.Millisecond)) {
+		t.Fatal("test lacks the queued-tick/fresh-quote ordering")
+	}
+	at, err := p.liveHeartbeat(ctx, false)
+	if err != nil || at.Before(now) || p.snapshot().Gap || !p.snapshot().GoodSince.Equal(s.GoodSince) {
+		t.Fatal("live heartbeat reset healthy recovery using an old clock", at, p.snapshot(), err)
+	}
+	p.quote.At, p.quote.EventAt = now.Add(-6*time.Second), now.Add(-6*time.Second)
+	if _, err := p.liveHeartbeat(ctx, false); err != nil || !p.snapshot().Gap {
+		t.Fatal("current clock accepted stale quotes", err)
 	}
 }
 func TestPaperCapacityAndRecoveryMismatch(t *testing.T) {

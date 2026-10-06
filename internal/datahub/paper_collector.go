@@ -372,6 +372,12 @@ func (h *Hub) paperWorker(ctx context.Context) {
 	if p == nil || p.mode == "off" || h.offline {
 		return
 	}
+	sourceReader, err := openPaperPublicationReader(h.Store.root)
+	if err != nil {
+		p.failure(err, time.Now().UTC())
+		return
+	}
+	defer sourceReader.Close()
 	out := make(chan paperMessage, 256)
 	child, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
@@ -403,6 +409,9 @@ func (h *Hub) paperWorker(ctx context.Context) {
 				err = msg.Err
 				if msg.Kind == "gap" {
 					err = p.discontinuity(ctx, now, "stream_disconnect")
+					if err == nil {
+						err = p.recordFailure(ctx, msg.Err, now, "stream")
+					}
 				}
 				break
 			}
@@ -474,8 +483,8 @@ func (h *Hub) paperWorker(ctx context.Context) {
 				}
 				err = p.streamMessage(ctx, msg, candles, protected)
 			}
-		case now = <-tick.C:
-			now = now.UTC()
+		case <-tick.C:
+			now = time.Now().UTC()
 			protected = h.Store.Status().Paused || p.size() >= PaperBudget-paperReserve
 			for ts := range candles {
 				if ts < now.Add(-17*time.Hour).Unix() {
@@ -486,12 +495,13 @@ func (h *Hub) paperWorker(ctx context.Context) {
 			if atr := hourlyATR(candles, now); atr != nil && *atr > 0 && completeCandles(candles, now.Truncate(time.Hour).Add(-14*time.Hour-5*time.Minute), now.Truncate(time.Hour)) {
 				p.atr = &paperIntent{ATR: decimal.NewFromFloat(*atr).Round(12), ATRThrough: now.Truncate(time.Hour)}
 			}
-			err = p.heartbeat(ctx, now, protected)
+			now, err = p.liveHeartbeat(ctx, protected)
 			if err == nil {
 				s := p.snapshot()
 				read, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
-				pubs, source, end, e := h.Store.paperPublications(read, s.Cursor)
+				pubs, source, end, e := readPaperPublications(read, sourceReader, s.Cursor)
 				cancel()
+				now = time.Now().UTC() // First actionable read completion, not tick time.
 				err = e
 				if err == nil {
 					p.sourceAt = now

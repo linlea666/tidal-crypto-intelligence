@@ -297,15 +297,42 @@ type paperPublication struct {
 }
 
 func (w *Warehouse) paperPublications(ctx context.Context, after int64) ([]paperPublication, string, int64, error) {
+	return readPaperPublications(ctx, w.research, after)
+}
+
+// The live paper actor must not queue behind the research writer's sole
+// connection. One bounded WAL reader sees only committed publication facts;
+// it changes neither the research nor short-observation connection pools.
+func openPaperPublicationReader(root string) (*sql.DB, error) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(root, "research.sqlite")+"?mode=ro&_pragma=busy_timeout(100)&_pragma=query_only(1)")
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err = db.PingContext(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func readPaperPublications(ctx context.Context, db *sql.DB, after int64) ([]paperPublication, string, int64, error) {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, "", 0, err
+	}
+	defer tx.Rollback()
 	var source string
 	var end int64
-	if err := w.research.QueryRowContext(ctx, "SELECT generation FROM paper_source WHERE id=1").Scan(&source); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT generation FROM paper_source WHERE id=1").Scan(&source); err != nil {
 		return nil, "", 0, err
 	}
-	if err := w.research.QueryRowContext(ctx, "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='signal_publications'),0)").Scan(&end); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name='signal_publications'),0)").Scan(&end); err != nil {
 		return nil, "", 0, err
 	}
-	r, err := w.research.QueryContext(ctx, "SELECT seq,at,payload FROM signal_publications WHERE seq>? ORDER BY seq LIMIT 32", after)
+	r, err := tx.QueryContext(ctx, "SELECT seq,at,payload FROM signal_publications WHERE seq>? ORDER BY seq LIMIT 32", after)
 	if err != nil {
 		return nil, "", 0, err
 	}
