@@ -13,6 +13,7 @@ const stamp = (s?: string | null) =>
       })
     : "尚未获取";
 const labels: Record<string, string> = {
+ freezing: "正在冻结研究输入",
   unfinished: "交易日未结束",
   non_trading_day: "非交易日",
   unreported: "尚未披露",
@@ -456,6 +457,7 @@ function ComparisonTable({items}: {items: RuleComparison[]}) {
   </tbody></table></div>;
 }
 type StudyItem = {
+ parentStudyId?: string; inputSnapshotId?: string; inputFrozenAt?: string; inputIntegrity?: string; terminalReason?: string;
   validationId?: string;
   id: string;
   asset: Asset;
@@ -577,15 +579,18 @@ export function StudiesPage({ asset }: { asset: Asset }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [id, setId] = useState("");
-  const d = q.data?.items.find((s) => s.id === id) ?? q.data?.items[0];
-  const start = async () => {
+  const [created, setCreated] = useState<StudyItem | null>(null);
+  const items = created && !q.data?.items.some((s) => s.id === created.id) ? [created, ...(q.data?.items ?? [])] : (q.data?.items ?? []);
+  const d = items.find((s) => s.id === id) ?? items[0];
+  const start = async (parentStudyId?: string) => {
     setBusy(true);
     setError("");
     try {
       const s = await api<StudyItem>("studies", {
         method: "POST",
-        body: JSON.stringify({ asset }),
+        body: JSON.stringify({ asset, parentStudyId }),
       });
+      setCreated(s);
       setId(s.id);
       q.refresh();
     } catch (e) {
@@ -608,12 +613,14 @@ export function StudiesPage({ asset }: { asset: Asset }) {
         <button
           className="action"
           disabled={busy || asset !== "BTC"}
-          onClick={start}
+          onClick={() => start()}
         >
           {busy ? "正在排队…" : "创建90天研究"}
         </button>
       </div>
       <LoadError error={error || q.error} />
+      {d && <section className="data-section"><h3>研究输入与版本</h3><p>输入状态：{d.inputIntegrity || (d.inputSnapshotId ? "正在冻结" : "尚未冻结")}</p>{d.inputFrozenAt && <p>采集截止 {stamp(d.inputFrozenAt)} · 快照 {d.inputSnapshotId}</p>}{d.parentStudyId && <p>原研究 {d.parentStudyId}</p>}{d.terminalReason && <p>{d.terminalReason}</p>}<p className="helper">缺失范围保留；冻结结果不随滚动清理或后续补采改变。历史关联、行情覆盖率与交易胜率分别统计。</p><button className="action" disabled={busy || asset !== "BTC"} onClick={() => start(d.id)}>基于当前数据创建新版本</button></section>}
+
 	  {q.data?.forward?.multifactor && <section className="data-section"><h3>新双向规则 · {q.data.forward.multifactor.reviewReady ? "达到阶段审查样本门槛" : "效果验证中"}</h3><p>{q.data.forward.multifactor.days.toFixed(1)} 天 / {(q.data.forward.multifactor.coverage*100).toFixed(1)}%覆盖 / {q.data.forward.multifactor.episodes}个独立行情事件</p><p className="helper">{q.data.forward.multifactor.note}</p><details><summary>分买卖方向查看前向与延迟对照</summary><ComparisonTable items={q.data.forward.multifactor.comparisons}/><h4>相同提醒数量对照</h4><ComparisonTable items={q.data.forward.multifactor.equalBudget ?? []}/></details></section>}
       <section className="data-section">
         <h3>
@@ -649,11 +656,11 @@ export function StudiesPage({ asset }: { asset: Asset }) {
         30天基线 → 30天开发 →
         30天留出。补采走共享队列，不挤占当前行情；可能需要数小时至数天。记录首次获取与修订版本，未知历史发布时间的数据只能做关联分析。
       </p>
-      {!!q.data?.items.length && (
+      {!!items.length && (
         <label>
           研究记录{" "}
           <select value={d?.id ?? ""} onChange={(e) => setId(e.target.value)}>
-            {q.data.items.map((s) => (
+            {items.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.asset} · {stamp(s.updatedAt)} · {labels[s.state] ?? s.state}
               </option>

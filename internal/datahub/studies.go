@@ -3,6 +3,7 @@ package datahub
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,30 +15,37 @@ import (
 )
 
 type StudyRequest struct {
-	Asset string     `json:"asset"`
-	From  *time.Time `json:"from"`
-	To    *time.Time `json:"to"`
+	ParentStudyID string     `json:"parentStudyId,omitempty"`
+	Asset         string     `json:"asset"`
+	From          *time.Time `json:"from"`
+	To            *time.Time `json:"to"`
 }
 type Study struct {
-	ValidationID        string        `json:"validationId,omitempty"`
-	UnavailableRequests []DataRequest `json:"unavailableRequests,omitempty"`
-	Pipeline            string        `json:"pipeline,omitempty"`
-	QueueCursor         int           `json:"queueCursor"`
-	InputVersion        string        `json:"inputVersion,omitempty"`
-	ID                  string        `json:"id"`
-	Asset               string        `json:"asset"`
-	From                time.Time     `json:"from"`
-	To                  time.Time     `json:"to"`
-	Created             time.Time     `json:"createdAt"`
-	Updated             time.Time     `json:"updatedAt"`
-	State               string        `json:"state"`
-	Rules               string        `json:"rulesVersion"`
-	Mode                string        `json:"mode"`
-	Error               string        `json:"error,omitempty"`
-	Jobs                []string      `json:"jobs"`
-	CandleCursor        time.Time     `json:"candleCursor"`
-	LastRun             *time.Time    `json:"lastRun"`
-	Result              *StudyResult  `json:"result"`
+	ParentStudyID       string           `json:"parentStudyId,omitempty"`
+	InputSnapshotID     string           `json:"inputSnapshotId,omitempty"`
+	InputFrozenAt       *time.Time       `json:"inputFrozenAt,omitempty"`
+	InputIntegrity      string           `json:"inputIntegrity,omitempty"`
+	TerminalReason      string           `json:"terminalReason,omitempty"`
+	FrozenCoverage      []map[string]any `json:"frozenCoverage,omitempty"`
+	ValidationID        string           `json:"validationId,omitempty"`
+	UnavailableRequests []DataRequest    `json:"unavailableRequests,omitempty"`
+	Pipeline            string           `json:"pipeline,omitempty"`
+	QueueCursor         int              `json:"queueCursor"`
+	InputVersion        string           `json:"inputVersion,omitempty"`
+	ID                  string           `json:"id"`
+	Asset               string           `json:"asset"`
+	From                time.Time        `json:"from"`
+	To                  time.Time        `json:"to"`
+	Created             time.Time        `json:"createdAt"`
+	Updated             time.Time        `json:"updatedAt"`
+	State               string           `json:"state"`
+	Rules               string           `json:"rulesVersion"`
+	Mode                string           `json:"mode"`
+	Error               string           `json:"error,omitempty"`
+	Jobs                []string         `json:"jobs"`
+	CandleCursor        time.Time        `json:"candleCursor"`
+	LastRun             *time.Time       `json:"lastRun"`
+	Result              *StudyResult     `json:"result"`
 }
 type studyCheckpoint struct {
 	Version string                `json:"version"`
@@ -108,6 +116,23 @@ func (h *Hub) CreateStudy(req StudyRequest) (Study, error) {
 	if !researchAsset(req.Asset) {
 		return Study{}, errors.New("预警与新建研究仅支持BTC；ETH日常行情保留")
 	}
+	if req.ParentStudyID != "" {
+		var parent Study
+		if err := h.Store.document(context.Background(), "study", req.ParentStudyID, &parent); err != nil {
+			return Study{}, err
+		}
+		if parent.Asset != req.Asset {
+			return Study{}, errors.New("研究币种与原版本不符")
+		}
+		if req.From == nil {
+			v := maxTime(parent.From, now.Add(-90*24*time.Hour).Truncate(time.Hour).Add(time.Hour))
+			req.From = &v
+		}
+		if req.To == nil {
+			v := parent.To
+			req.To = &v
+		}
+	}
 	to := now.Truncate(time.Hour)
 	if req.To != nil {
 		to = req.To.UTC().Truncate(time.Hour)
@@ -122,11 +147,17 @@ func (h *Hub) CreateStudy(req StudyRequest) (Study, error) {
 	if h.Store.Status().Paused || h.Store.Status().ResearchPaused {
 		return Study{}, errors.New("容量保护：暂停研究补采")
 	}
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%s/%s", req.Asset, from.Format(time.RFC3339), to.Format(time.RFC3339), SignalRules+"/"+studyPipeline)))
+	revision := SignalRules + "/" + studyPipeline + "/" + req.ParentStudyID
+	if req.ParentStudyID != "" {
+		revision += "/" + now.Truncate(time.Minute).Format(time.RFC3339)
+	}
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s/%s/%s/%s", req.Asset, from.Format(time.RFC3339), to.Format(time.RFC3339), revision)))
 	id := fmt.Sprintf("study-%x", hash[:10])
 	var existing Study
 	if e := h.Store.document(context.Background(), "study", id, &existing); e == nil {
 		return existing, nil
+	} else if e != sql.ErrNoRows {
+		return Study{}, e
 	}
 	all, e := h.Store.documents(context.Background(), "study", "", 100)
 	if e != nil {
@@ -144,14 +175,14 @@ func (h *Hub) CreateStudy(req StudyRequest) (Study, error) {
 	for _, b := range all {
 		var s Study
 		_ = json.Unmarshal(b, &s)
-		if researchAsset(s.Asset) && (s.State == "queued" || s.State == "collecting" || s.State == "partial_queue" || s.State == "calculating") {
+		if researchAsset(s.Asset) && (s.State == "queued" || s.State == "collecting" || s.State == "partial_queue" || s.State == "calculating" || s.State == "freezing") {
 			active++
 		}
 	}
 	if active >= 4 {
 		return Study{}, errors.New("最多同时进行4个研究任务")
 	}
-	s := Study{Pipeline: studyPipeline, ID: id, Asset: req.Asset, From: from, To: to, Created: now, Updated: now, State: "queued", Rules: SignalRules, Mode: "association_only", Jobs: []string{}, CandleCursor: from}
+	s := Study{ParentStudyID: req.ParentStudyID, Pipeline: studyPipeline, ID: id, Asset: req.Asset, From: from, To: to, Created: now, Updated: now, State: "queued", Rules: SignalRules, Mode: "association_only", Jobs: []string{}, CandleCursor: from}
 	h.queueStudy(&s, now)
 	if e := h.Store.saveDocument("study", id, req.Asset, now, s); e != nil {
 		return s, e
@@ -325,6 +356,13 @@ func summarizeExperiment(name string, events []StudyEvent, pick func(StudyEvent)
 	return x
 }
 func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*StudyResult, error) {
+	if s.InputSnapshotID != "" {
+		ctx = context.WithValue(ctx, studySnapshotKey{}, s.InputSnapshotID)
+	}
+	version, e := h.studyInputVersion(ctx, s)
+	if e != nil {
+		return nil, e
+	}
 	bars, candles, e := h.signalInput(ctx, s.Asset, s.From, s.To, now)
 	if e != nil {
 		return nil, e
@@ -360,7 +398,7 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 	// The new comparison takes smaller steps than the legacy control. Once
 	// that control has completed on this exact fact version, preserve it while
 	// advancing the new checkpoint instead of restarting the old calculation.
-	if s.Result != nil && s.Result.CoreCalculated && s.InputVersion == h.studyInputVersion(ctx, s) {
+	if s.Result != nil && s.Result.CoreCalculated && s.InputVersion == version {
 		previous := *s.Result
 		previous.MultifactorComparison = r.MultifactorComparison
 		previous.Coverage = r.Coverage
@@ -373,7 +411,9 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 	r.DevelopmentDays = 30
 	r.HoldoutDays = 30
 	balances := []Observation{}
-	_ = h.Store.FactsAsOf(ctx, ID("balance-history", s.Asset, "", "chain"), s.From, s.To, now, func(o Observation) error { balances = append(balances, o); return nil })
+	if e := h.Store.FactsAsOf(ctx, ID("balance-history", s.Asset, "", "chain"), s.From, s.To, now, func(o Observation) error { balances = append(balances, o); return nil }); e != nil {
+		return nil, e
+	}
 	oi, e := h.closedScalars(ctx, ID("oi-history", s.Asset, "", "futures"), s.From, s.To, now)
 	if e != nil {
 		return nil, e
@@ -402,9 +442,15 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 		book[v.At.Truncate(5*time.Minute).Unix()] = v.BookPressure
 	}
 	cursor := baselineTo
-	version := h.studyInputVersion(ctx, s)
 	var checkpoint studyCheckpoint
-	if s.ID != "" && h.Store.document(ctx, "study-progress", s.ID, &checkpoint) == nil && checkpoint.Version == version && !checkpoint.Cursor.Before(baselineTo) && checkpoint.Cursor.Before(s.To) {
+	checkpointErr := sql.ErrNoRows
+	if s.ID != "" {
+		checkpointErr = h.Store.document(ctx, "study-progress", s.ID, &checkpoint)
+	}
+	if checkpointErr != nil && checkpointErr != sql.ErrNoRows {
+		return nil, checkpointErr
+	}
+	if checkpointErr == nil && checkpoint.Version == version && !checkpoint.Cursor.Before(baselineTo) && checkpoint.Cursor.Before(s.To) {
 		cursor = checkpoint.Cursor
 		active = checkpoint.Active
 		clear = checkpoint.Clear
@@ -579,100 +625,153 @@ func (h *Hub) evaluateStudy(ctx context.Context, s Study, now time.Time) (*Study
 	return r, nil
 }
 func (h *Hub) processStudies(ctx context.Context, now time.Time) error {
-	list, e := h.Store.documents(ctx, "study", "", 20)
+	list, e := h.Store.documents(ctx, "study", "", 100)
 	if e != nil {
 		return e
 	}
-	sort.Slice(list, func(i, j int) bool { return string(list[i]) < string(list[j]) })
+	// Old mutable studies are archived once; their results and checkpoints remain.
 	for _, raw := range list {
 		var s Study
-		if json.Unmarshal(raw, &s) != nil {
+		if e = json.Unmarshal(raw, &s); e != nil {
+			return e
+		}
+		if !researchAsset(s.Asset) {
 			continue
 		}
-		if !researchAsset(s.Asset) || s.Pipeline != studyPipeline {
-			continue
-		}
-		if s.LastRun != nil && now.Sub(*s.LastRun) < time.Minute && s.CandleCursor.After(s.To.Add(-time.Second)) {
-			continue
-		}
-		if s.Pipeline == studyPipeline {
-			h.queueStudy(&s, now)
-		}
-		s.State = "collecting"
-		s.Updated = now
-		if !h.offline && s.CandleCursor.Before(s.To) {
-			cd, _ := h.Dataset(ID("candles", s.Asset, "Binance", "spot"))
-			cd.Resolution = 300
-			if next, e := h.Store.nativeCursor(ctx, cd, s.CandleCursor, s.To, now); e == nil {
-				s.CandleCursor = next
+		if s.Pipeline != studyPipeline {
+			if s.State == "complete" || s.State == "incomplete" || s.TerminalReason != "" {
+				continue
 			}
-			if e := h.studyCandles(ctx, &s, now); e != nil {
-				s.Error = e.Error()
+			if e = h.Store.saveDocument("study-legacy", s.ID, s.Asset, now, s); e != nil {
+				return e
 			}
-			return h.Store.saveDocument("study", s.ID, s.Asset, s.Created, s)
-		}
-		jobsDone, jobFailed := s.Pipeline != studyPipeline || s.QueueCursor >= len(studyRequests(s, s.Created)), false
-		h.Scheduler.mu.Lock()
-		for _, id := range s.Jobs {
-			j, ok := h.Scheduler.historyJobLocked(id)
-			if !ok {
-				jobFailed = true
-			}
-			if ok && !j.Completed && !j.Disabled {
-				jobsDone = false
-			}
-			if ok && j.Disabled {
-				jobFailed = true
-			}
-		}
-		if len(s.Jobs) < 3 {
-			jobFailed = true
-		}
-		h.Scheduler.mu.Unlock()
-		version := h.studyInputVersion(ctx, s)
-		if s.InputVersion == version && s.Result != nil && s.Result.StrategyState != "calculating" && s.Result.MultifactorComparison != nil && s.Result.MultifactorComparison.State != "calculating" {
-			s.Result.Coverage = h.studyCoverage(s)
-			if s.Result.CoreCalculated && s.ValidationID == "" {
-				s.ValidationID, e = h.freezeStudyValidation(ctx, s, now)
-				if e != nil {
-					return e
-				}
-			}
-			if !jobsDone {
-				s.State = "collecting"
-			} else if s.Result.CoreCalculated && !jobFailed {
-				s.State = "complete"
-			} else {
-				s.State = "incomplete"
-			}
+			s.State = "incomplete"
+			s.TerminalReason = "旧版可变输入研究已停止；原检查点与结果保留"
+			s.Updated = now
 			if e = h.Store.saveDocument("study", s.ID, s.Asset, s.Created, s); e != nil {
 				return e
 			}
+			_, e = h.CreateStudy(StudyRequest{Asset: s.Asset, ParentStudyID: s.ID})
+			return e
+		}
+	}
+	// The oldest eligible task goes first, preventing a new task starving a lease.
+	sort.SliceStable(list, func(i, j int) bool {
+		var a, b Study
+		_ = json.Unmarshal(list[i], &a)
+		_ = json.Unmarshal(list[j], &b)
+		return a.Created.Before(b.Created)
+	})
+	for _, raw := range list {
+		var s Study
+		if e = json.Unmarshal(raw, &s); e != nil {
+			return e
+		}
+		if !researchAsset(s.Asset) || s.Pipeline != studyPipeline || s.State == "complete" || s.State == "incomplete" {
 			continue
 		}
-		s.Result, e = h.evaluateStudy(ctx, s, now)
-		if e == nil {
-			s.InputVersion = version
-			if s.Result != nil && s.Result.CoreCalculated && (s.Result.MultifactorComparison == nil || s.Result.MultifactorComparison.State != "calculating") {
-				s.ValidationID, e = h.freezeStudyValidation(ctx, s, now)
-			}
+		if s.LastRun != nil && now.Sub(*s.LastRun) < time.Minute {
+			continue
 		}
-		if e != nil {
-			s.Error = e.Error()
-		} else {
-			s.Error = ""
-		}
+		s.Updated = now
 		s.LastRun = &now
-		if s.Result != nil && (s.Result.StrategyState == "calculating" || (s.Result.MultifactorComparison != nil && s.Result.MultifactorComparison.State == "calculating")) {
-			s.State = "calculating"
+		save := func() error { return h.Store.saveDocument("study", s.ID, s.Asset, s.Created, s) }
+		if s.InputSnapshotID == "" {
+			deadline := !now.Before(s.Created.Add(24 * time.Hour))
+			if !deadline {
+				h.queueStudy(&s, now)
+			}
+			if !deadline && !h.offline && s.CandleCursor.Before(s.To) {
+				cd, _ := h.Dataset(ID("candles", s.Asset, "Binance", "spot"))
+				cd.Resolution = 300
+				next, err := h.Store.nativeCursor(ctx, cd, s.CandleCursor, s.To, now)
+				if err != nil {
+					s.Error = err.Error()
+					return save()
+				}
+				s.CandleCursor = next
+				if err = h.studyCandles(ctx, &s, now); err != nil {
+					s.Error = err.Error()
+				}
+				s.State = "collecting"
+				return save()
+			}
+			done := s.QueueCursor >= len(studyRequests(s, s.Created))
+			h.Scheduler.mu.Lock()
+			for _, id := range s.Jobs {
+				if j, ok := h.Scheduler.historyJobLocked(id); ok && !j.Completed && !j.Disabled {
+					done = false
+				}
+			}
+			h.Scheduler.mu.Unlock()
+			if !done && !deadline {
+				s.State = "collecting"
+				return save()
+			}
+			m, err := h.Store.beginStudySnapshot(ctx, s, now)
+			if err != nil {
+				s.Error = err.Error()
+				return save()
+			}
+			s.InputSnapshotID = m.ID
+			s.InputFrozenAt = &m.AsOf
+			s.FrozenCoverage = h.studyCoverage(s)
+			s.State = "freezing"
+			s.Error = ""
+			return save()
 		}
-		if jobsDone && s.State != "calculating" {
-			s.State = "incomplete"
-			if e == nil && !jobFailed && s.Result != nil && s.Result.CoreCalculated && s.Result.FlowCoverage >= .95 && s.Result.CandleCoverage >= .95 && s.Result.BaselineDays == 30 && s.Result.DevelopmentDays == 30 && s.Result.HoldoutDays == 30 {
-				s.State = "complete"
+		m, err := h.Store.studySnapshot(ctx, s.InputSnapshotID)
+		if err != nil {
+			return err
+		}
+		started := time.Now()
+		for m.State == "building" && time.Since(started) < time.Second {
+			m, err = h.Store.advanceStudySnapshot(ctx, m, now)
+			if err != nil {
+				s.Error = err.Error()
+				return save()
 			}
 		}
-		return h.Store.saveDocument("study", s.ID, s.Asset, s.Created, s)
+		if m.State == "failed" {
+			s.State = "incomplete"
+			s.InputIntegrity = "unavailable"
+			s.TerminalReason = m.Reason
+			return save()
+		}
+		if m.State != "ready" {
+			s.State = "freezing"
+			return save()
+		}
+		s.InputVersion, err = h.studyInputVersion(ctx, s)
+		if err != nil {
+			s.Error = err.Error()
+			return save()
+		}
+		s.Result, err = h.evaluateStudy(ctx, s, m.AsOf)
+		if err != nil {
+			s.Error = err.Error()
+			return save()
+		}
+		s.Error = ""
+		s.State = "calculating"
+		s.InputIntegrity = "frozen"
+		r := s.Result
+		if r != nil && r.StrategyState != "calculating" && (r.MultifactorComparison == nil || r.MultifactorComparison.State != "calculating") {
+			s.State = "incomplete"
+			s.TerminalReason = "冻结输入未达到完整研究门槛"
+			if r.CoreCalculated && r.FlowCoverage >= .95 && r.CandleCoverage >= .95 && r.BaselineDays == 30 && r.DevelopmentDays == 30 && r.HoldoutDays == 30 {
+				s.State = "complete"
+				s.TerminalReason = ""
+				s.InputIntegrity = "complete"
+				s.ValidationID, err = h.freezeStudyValidation(ctx, s, now)
+				if err != nil {
+					return err
+				}
+			} else {
+				s.InputIntegrity = "partial"
+			}
+		}
+		return save()
 	}
 	return nil
 }

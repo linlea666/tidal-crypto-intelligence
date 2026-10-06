@@ -70,6 +70,7 @@ func (w *Warehouse) shortLoad(ctx context.Context, kind, id string, v any) error
 }
 
 func (w *Warehouse) shortSaveState(ctx context.Context, key string, v any) error {
+	defer shortMeasure(ctx, "current_write", time.Now())
 	b, e := json.Marshal(v)
 	if e != nil {
 		return e
@@ -77,7 +78,7 @@ func (w *Warehouse) shortSaveState(ctx context.Context, key string, v any) error
 	if len(b) > shortFlowRowLimit {
 		return errors.New("短周期状态工作集超限")
 	}
-	_, e = w.db.ExecContext(ctx, "INSERT INTO state(key,payload) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", key, b)
+	_, e = boundedExec(ctx, w.db, 5000, "INSERT INTO state(key,payload) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", key, b)
 	return shortWriteError(e)
 }
 func (w *Warehouse) shortState(ctx context.Context, key string, v any) bool {
@@ -105,7 +106,7 @@ func (w *Warehouse) shortPut(ctx context.Context, kind, id string, at time.Time,
 	if len(b) > shortFlowRowLimit || ((kind == "episode" || kind == "control") && len(b) > shortFlowEventLimit) {
 		return errors.New("短周期研究行超过写入上限")
 	}
-	_, e = w.shortDB().ExecContext(ctx, "INSERT INTO sf_records VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET at=excluded.at,payload=excluded.payload", kind, id, at.Unix(), b)
+	_, e = boundedExec(ctx, w.shortDB(), 1500, "INSERT INTO sf_records VALUES(?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET at=excluded.at,payload=excluded.payload", kind, id, at.Unix(), b)
 	return shortWriteError(e)
 }
 
@@ -280,11 +281,9 @@ func (h *Hub) shortObservationStep(ctx context.Context, now time.Time) error {
 	s.Refreshed = flowPtr(s.At)
 	publication, pubErr := h.shortPublication(ctx, &s, s.At)
 	// Current observations remain available when research storage is full.
-	persistStart := time.Now()
 	if e = h.Store.shortSaveState(ctx, "short-flow/current", s); e != nil {
 		return e
 	}
-	shortMeasure(ctx, "current_write", persistStart)
 	if pubErr != nil {
 		return pubErr
 	}
@@ -338,20 +337,26 @@ func (h *Hub) shortZones(ctx context.Context, s *ShortObservation, now time.Time
 }
 
 func (h *Hub) shortObservationView(now time.Time) any {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
 	var s ShortObservation
-	if !h.Store.LoadState("short-flow/current", &s) {
+	if h.Store.shortStateResult(ctx, "short-flow/current", &s) != nil {
 		return nil
 	}
 	s.age(now)
 	s.Diagnostics = h.Store.shortRuntimeView()
 	var g shortGap
-	h.Store.LoadState("short-flow/gap", &g)
+	gapErr := h.Store.shortStateResult(ctx, "short-flow/gap", &g)
 	s.ResearchPaused = g.Paused || h.Store.Status().ResearchPaused || h.Store.Status().Paused
 	if s.ResearchPaused {
 		s.ResearchReason = g.Reason
 	}
 	if h.Store.Status().ResearchPaused || h.Store.Status().Paused {
 		s.ResearchReason = "研究总容量保护"
+	}
+	if gapErr != nil && gapErr != sql.ErrNoRows {
+		s.ResearchPaused = true
+		s.ResearchReason = "研究暂停状态暂不可核验"
 	}
 	return s
 }

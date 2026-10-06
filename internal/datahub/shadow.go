@@ -66,6 +66,19 @@ func (h *Hub) recordShadow(ctx context.Context, a string, now, through time.Time
 }
 
 func (w *Warehouse) shadowSamples(ctx context.Context, a string, from, to time.Time) ([]ShadowSample, error) {
+	if id, ok := ctx.Value(studySnapshotKey{}).(string); ok {
+		out := []ShadowSample{}
+		err := w.snapshotRows(ctx, id, "@shadow/"+a, from, to, func(f snapshotFact) error {
+			var v ShadowSample
+			if e := json.Unmarshal(f.Payload, &v); e != nil {
+				return e
+			}
+			out = append(out, v)
+			return nil
+		})
+		return out, err
+	}
+
 	rows, e := w.research.QueryContext(ctx, "SELECT payload FROM shadow WHERE asset=? AND ts>=? AND ts<? ORDER BY ts", a, from.Unix(), to.Unix())
 	if e != nil {
 		return nil, e

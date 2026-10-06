@@ -104,6 +104,23 @@ func TestResourceReplay(t *testing.T) {
 	}
 	t.Log("phase: checkpointed full strategy computation")
 	s := Study{ID: "resource-replay", Asset: "BTC", From: now.Add(-90 * 24 * time.Hour), To: now, Created: now, Pipeline: studyPipeline}
+	frozenInput, e := h.Store.beginStudySnapshot(ctx, s, time.Now().UTC())
+	if e != nil {
+		t.Fatal(e)
+	}
+	for frozenInput.State == "building" {
+		frozenInput, e = h.Store.advanceStudySnapshot(ctx, frozenInput, time.Now().UTC())
+		if e != nil {
+			t.Fatal(e)
+		}
+	}
+	if frozenInput.State != "ready" {
+		t.Fatal("input freeze failed", frozenInput.Reason)
+	}
+	s.InputSnapshotID = frozenInput.ID
+	s.InputFrozenAt = &frozenInput.AsOf
+	t.Logf("frozen study input: %d rows, %d chunks, %d bytes", frozenInput.Rows, frozenInput.Chunks, frozenInput.Bytes)
+
 	for i := 0; i < 40; i++ {
 		r, e := h.evaluateStudy(ctx, s, time.Now())
 		if e != nil {
@@ -112,7 +129,11 @@ func TestResourceReplay(t *testing.T) {
 		if s.Result != nil && s.Result.CoreCalculated && !r.CoreCalculated {
 			t.Fatal("finished control restarted while multifactor checkpoint advanced")
 		}
-		s.Result, s.InputVersion = r, h.studyInputVersion(ctx, s)
+		s.Result = r
+		s.InputVersion, e = h.studyInputVersion(ctx, s)
+		if e != nil {
+			t.Fatal(e)
+		}
 		if r.CoreCalculated && r.MultifactorComparison != nil && r.MultifactorComparison.State == "association_calculated" {
 			s.Result = r
 			s.State = "complete"

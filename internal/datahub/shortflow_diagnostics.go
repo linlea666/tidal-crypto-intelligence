@@ -17,14 +17,18 @@ type ShortOperation struct {
 	MaxMS  float64 `json:"maxMs"`
 }
 type ShortStage struct {
-	State      string                    `json:"state"`
-	At         time.Time                 `json:"at"`
-	Success    *time.Time                `json:"lastSuccessAt"`
-	Errors     int                       `json:"errors"`
-	Error      string                    `json:"error,omitempty"`
-	Class      string                    `json:"errorClass,omitempty"`
-	DurationMS float64                   `json:"durationMs"`
-	Operations map[string]ShortOperation `json:"operations"`
+	LastFailureAt        *time.Time                `json:"lastFailureAt,omitempty"`
+	LastFailure          string                    `json:"lastFailure,omitempty"`
+	LastFailureClass     string                    `json:"lastFailureClass,omitempty"`
+	LastFailureOperation string                    `json:"lastFailureOperation,omitempty"`
+	State                string                    `json:"state"`
+	At                   time.Time                 `json:"at"`
+	Success              *time.Time                `json:"lastSuccessAt"`
+	Errors               int                       `json:"errors"`
+	Error                string                    `json:"error,omitempty"`
+	Class                string                    `json:"errorClass,omitempty"`
+	DurationMS           float64                   `json:"durationMs"`
+	Operations           map[string]ShortOperation `json:"operations"`
 }
 type ShortRuntime struct {
 	Version          string                `json:"pipelineVersion"`
@@ -35,13 +39,15 @@ type ShortRuntime struct {
 }
 type shortTraceKey struct{}
 type shortTrace struct {
-	Operations map[string]time.Duration
-	Yielded    bool
+	Operations    map[string]time.Duration
+	LastOperation string
+	Yielded       bool
 }
 
 func shortMeasure(ctx context.Context, name string, start time.Time) {
 	if v, ok := ctx.Value(shortTraceKey{}).(*shortTrace); ok {
 		v.Operations[name] += time.Since(start)
+		v.LastOperation = name
 	}
 }
 func shortYield(ctx context.Context) {
@@ -120,6 +126,8 @@ func (w *Warehouse) recordShortRuntime(name string, now time.Time, elapsed time.
 		s.Errors++
 		s.Error = e.Error()
 		s.Class = shortErrorClass(e)
+		s.LastFailureAt, s.LastFailure, s.LastFailureClass = flowPtr(now), e.Error(), s.Class
+		s.LastFailureOperation = trace.LastOperation
 	} else if trace.Yielded {
 		s.State = "yielded"
 	} else {
@@ -161,7 +169,8 @@ func (h *Hub) shortPublication(ctx context.Context, s *ShortObservation, now tim
 	if e != nil && e != sql.ErrNoRows {
 		return nil, e
 	}
-	if e == sql.ErrNoRows {
+	fresh := e == sql.ErrNoRows
+	if fresh {
 		p = shortPublication{Input: s.InputVersion, Available: s.InputAvailable}
 		var origin time.Time
 		if err := h.Store.shortLoad(ctx, "pipeline-origin", ShortPipeline, &origin); err != nil {
@@ -182,6 +191,9 @@ func (h *Hub) shortPublication(ctx context.Context, s *ShortObservation, now tim
 	}
 	if s.Available != nil {
 		s.ArrivalDelay = flowPtr(max(0, s.Available.Sub(s.Through).Seconds()))
+	}
+	if !fresh {
+		return nil, nil
 	}
 	return &p, nil
 }
