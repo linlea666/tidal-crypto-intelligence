@@ -109,6 +109,7 @@ CREATE TABLE IF NOT EXISTS paper_equity(group_id TEXT,at INTEGER,payload BLOB NO
 		return nil, err
 	}
 	p.readDB.SetMaxOpenConns(1)
+	p.lastQuoteID = p.state.LastQuoteID
 	return p, nil
 }
 

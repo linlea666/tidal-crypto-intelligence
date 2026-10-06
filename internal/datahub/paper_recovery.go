@@ -56,6 +56,9 @@ func (p *paperStore) reconcile(ctx context.Context) error {
 		if err := json.Unmarshal(raw, &f); err != nil {
 			return err
 		}
+		if f.Quote.ID <= 0 || f.Quote.ID > p.state.LastQuoteID {
+			return errors.New("paper quote consumption cursor does not cover committed fill")
+		}
 		v, ok := trades[f.TradeID]
 		if !ok {
 			return errors.New("orphan paper fill")

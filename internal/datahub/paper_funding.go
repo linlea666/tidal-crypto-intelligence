@@ -34,6 +34,19 @@ func paperHasTime(times []int64, at int64) bool {
 	}
 	return false
 }
+
+// The mark stream announces a schedule, not the authoritative settlement
+// timestamp. Public funding history can report that settlement a millisecond
+// later. Match the announcement within one second, while attribution and
+// accounting continue to use the exact official Funding.At without rounding.
+func paperSettlementObserved(s paperState, due int64) bool {
+	for _, at := range s.SettledFunding {
+		if at >= due-1000 && at <= due+1000 {
+			return true
+		}
+	}
+	return false
+}
 func paperFundingKnown(s paperState, at time.Time, open bool) bool {
 	if s.FundingConflict != nil && !at.Before(*s.FundingConflict) {
 		return false
@@ -46,7 +59,7 @@ func paperFundingKnown(s paperState, at time.Time, open bool) bool {
 		return false
 	}
 	for _, due := range s.ExpectedFunding {
-		if due <= at.UnixMilli() && !paperHasTime(s.SettledFunding, due) {
+		if due <= at.UnixMilli() && !paperSettlementObserved(s, due) {
 			return false
 		}
 	}
@@ -127,7 +140,7 @@ func (p *paperStore) settle(ctx context.Context, records []paperFunding, through
 	expected := []int64{}
 	settled := []int64{}
 	for _, at := range s.ExpectedFunding {
-		if at > through.Add(-24*time.Hour).UnixMilli() || !paperHasTime(s.SettledFunding, at) {
+		if at > through.Add(-24*time.Hour).UnixMilli() || !paperSettlementObserved(s, at) {
 			expected = append(expected, at)
 		}
 	}
@@ -156,5 +169,5 @@ func paperBackupMetadata(ctx context.Context, dbPath string) (map[string]any, er
 	if err = json.Unmarshal(raw, &s); err != nil {
 		return nil, err
 	}
-	return map[string]any{"version": s.Version, "generation": s.Generation, "sourceGeneration": s.Source, "cursor": s.Cursor, "at": s.At, "recoveryRequired": true}, nil
+	return map[string]any{"version": s.Version, "generation": s.Generation, "sourceGeneration": s.Source, "cursor": s.Cursor, "lastQuoteId": s.LastQuoteID, "at": s.At, "recoveryRequired": true}, nil
 }

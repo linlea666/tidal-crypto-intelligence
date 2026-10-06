@@ -213,8 +213,8 @@ func paperFundingWindow(s paperState, now time.Time) (time.Time, time.Time) {
 	}
 	for _, due := range s.ExpectedFunding {
 		at := time.UnixMilli(due).UTC()
-		if at.Before(now.Add(-2*time.Minute)) && !paperHasTime(s.SettledFunding, due) && at.Before(from) {
-			from = at.Add(-time.Millisecond)
+		if at.Before(now.Add(-2*time.Minute)) && !paperSettlementObserved(s, due) && at.Before(from) {
+			from = at.Add(-time.Second)
 		}
 	}
 	return from, minTime(now.Add(-2*time.Minute), from.Add(24*time.Hour))

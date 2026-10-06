@@ -151,6 +151,7 @@ type paperState struct {
 	Generation      string          `json:"generation"`
 	Origin          *time.Time      `json:"origin"`
 	Cursor          int64           `json:"cursor"`
+	LastQuoteID     int64           `json:"lastQuoteId"`
 	Source          string          `json:"sourceGeneration"`
 	At              time.Time       `json:"at"`
 	Accounts        []paperAccount  `json:"accounts"`

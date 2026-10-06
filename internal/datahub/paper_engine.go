@@ -185,6 +185,9 @@ func (p *paperStore) onQuote(ctx context.Context, q paperQuote, protected bool) 
 	p.lastQuoteID = q.ID
 	p.quote = &q
 	s := p.snapshot()
+	// Persist the quote identity in the same transaction as fills. Restarting
+	// cannot replenish a partially consumed snapshot's visible quantity.
+	s.LastQuoteID = q.ID
 	b := paperBatch{}
 	changed := false
 	for n := range s.Accounts {

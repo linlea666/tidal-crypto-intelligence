@@ -232,7 +232,7 @@ func TestPaperFundingLateRecordRemainsInFetchWindow(t *testing.T) {
 	due := now.Add(-48 * time.Hour)
 	s.ExpectedFunding = []int64{due.UnixMilli()}
 	from, through := paperFundingWindow(s, now)
-	if !from.Equal(due.Add(-time.Millisecond)) || through.Sub(from) != 24*time.Hour {
+	if !from.Equal(due.Add(-time.Second)) || through.Sub(from) != 24*time.Hour {
 		t.Fatal("unsettled old record fell behind bounded fetch window", from, through)
 	}
 	if err := p.commit(context.Background(), s, paperBatch{}); err != nil {
@@ -244,6 +244,34 @@ func TestPaperFundingLateRecordRemainsInFetchWindow(t *testing.T) {
 	from, through = paperFundingWindow(p.snapshot(), now)
 	if !from.Equal(s.FundingThrough.Add(-time.Hour)) || !through.Equal(now.Add(-2*time.Minute)) {
 		t.Fatal("resolved late record prevented normal overlap refresh", from, through)
+	}
+}
+
+func TestPaperAnnouncedFundingClockDoesNotMoveActualSettlement(t *testing.T) {
+	p, now := paperFixture(t)
+	ctx := context.Background()
+	paperSignal(t, p, 1, now, "buy")
+	paperTick(t, p, 2, now.Add(time.Second), "9999", "10000", "1")
+	paperSignal(t, p, 2, now.Add(2*time.Second), "sell")
+	paperTick(t, p, 3, now.Add(3*time.Second), "9999", "10000", "1")
+	s := p.snapshot()
+	due := now.Add(3 * time.Second)
+	s.ExpectedFunding = []int64{due.UnixMilli()}
+	if err := p.commit(ctx, s, paperBatch{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.settle(ctx, []paperFunding{{At: due.Add(time.Millisecond), Acquired: now.Add(time.Minute), Rate: pd(".001"), Mark: pd("10000")}}, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	s = p.snapshot()
+	if !paperFundingKnown(s, due.Add(time.Second), false) {
+		t.Fatal("official millisecond timing difference left funding pending")
+	}
+	for _, a := range s.Accounts {
+		paperAssertDecimal(t, a.Funding, "0") // Closed before actual settlement.
+	}
+	if paperSettlementObserved(s, due.Add(2*time.Second).UnixMilli()) {
+		t.Fatal("unrelated announcement matched a settlement")
 	}
 }
 
@@ -265,5 +293,39 @@ func TestPaperHaltedContractWaitsToClose(t *testing.T) {
 		if a.Position != nil {
 			t.Fatal("valid restored contract could not finish pending close")
 		}
+	}
+}
+
+func TestPaperRestartCannotReusePartiallyConsumedQuote(t *testing.T) {
+	p, now := paperFixture(t)
+	ctx := context.Background()
+	paperSignal(t, p, 1, now, "buy")
+	paperTick(t, p, 2, now.Add(time.Second), "9999", "10000", "1")
+	paperSignal(t, p, 2, now.Add(2*time.Second), "sell")
+	paperTick(t, p, 3, now.Add(3*time.Second), "9999", "10000", ".04")
+	dest := filepath.Join(t.TempDir(), "paper.sqlite")
+	if err := BackupFile(ctx, p.path, dest); err != nil {
+		t.Fatal(err)
+	}
+	r, err := openPaper(filepath.Dir(dest), "run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.db.Close()
+	defer r.readDB.Close()
+	r.instrument = p.instrument
+	if err = r.discontinuity(ctx, now.Add(3500*time.Millisecond), "restart_gap"); err != nil {
+		t.Fatal(err)
+	}
+	paperTick(t, r, 3, now.Add(5*time.Second), "9999", "10000", ".04")
+	for _, a := range r.snapshot().Accounts {
+		paperAssertDecimal(t, a.Position.Remaining, ".059")
+	}
+	paperTick(t, r, 4, now.Add(6*time.Second), "9999", "10000", ".04")
+	for _, a := range r.snapshot().Accounts {
+		paperAssertDecimal(t, a.Position.Remaining, ".019")
+	}
+	if err = r.verifyRecovery(); err != nil {
+		t.Fatal(err)
 	}
 }
