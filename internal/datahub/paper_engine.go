@@ -297,6 +297,15 @@ func (p *paperStore) onQuote(ctx context.Context, q paperQuote, protected bool) 
 	return nil
 }
 
+// A ticker's scheduled timestamp can precede quotes already received while
+// that tick was queued. Freshness and recovery use the actual processing
+// instant, never that older schedule. The deterministic transition remains
+// separate for historical/financial tests.
+func (p *paperStore) liveHeartbeat(ctx context.Context, protected bool) (time.Time, error) {
+	now := time.Now().UTC()
+	return now, p.heartbeat(ctx, now, protected)
+}
+
 func (p *paperStore) heartbeat(ctx context.Context, now time.Time, protected bool) error {
 	s := p.snapshot()
 	wasGap := s.Gap

@@ -16,6 +16,11 @@ func paperResourceStart(t *testing.T, h *Hub) func() {
 		t.Fatal(err)
 	}
 	h.Store.paper = p
+	sourceReader, err := openPaperPublicationReader(h.Store.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sourceReader.Close() })
 	now := time.Now().UTC()
 	origin := now.Add(-time.Second)
 	s := p.snapshot()
@@ -52,6 +57,13 @@ func paperResourceStart(t *testing.T, h *Hub) func() {
 					return
 				}
 				if now.Sub(lastSecond) >= time.Second {
+					read, stop := context.WithTimeout(ctx, 200*time.Millisecond)
+					_, _, _, err := readPaperPublications(read, sourceReader, 0)
+					stop()
+					if err != nil {
+						done <- err
+						return
+					}
 					p.atr = &paperIntent{ATR: pd("500"), ATRThrough: now.Truncate(time.Hour)}
 					if err := p.heartbeat(ctx, now, false); err != nil {
 						done <- err
