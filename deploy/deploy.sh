@@ -58,6 +58,9 @@ fi
 if [[ -f "$root/data/v2/onchain.sqlite" ]]; then
   docker run --rm --user 0:0 -e "TIDAL_BACKUP_BATCH=$backup_batch" -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/onchain.sqlite "/backup/onchain-$backup_batch.sqlite"
 fi
+if [[ -f "$root/data/v2/paper.sqlite" ]]; then
+  docker run --rm --user 0:0 -e "TIDAL_BACKUP_BATCH=$backup_batch" -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/paper.sqlite "/backup/paper-$backup_batch.sqlite"
+fi
 [[ ! -f "$root/state.env" ]] || cp "$root/state.env" "$root/backups/state-$version.env"
 ln -sfn "$release" "$root/current.next"
 mv -Tf "$root/current.next" "$root/current"
@@ -66,7 +69,7 @@ mv -Tf "$root/current.next" "$root/current"
   # Preserve explicit feature stops across stable upgrades, without copying
   # secrets or arbitrary environment variables into release configuration.
   if [[ -f "$root/state.env" ]]; then
-    sed -n -E '/^TIDAL_ONCHAIN_(DISABLED|EVENTS_DISABLED)=(true|false)$/p' "$root/state.env"
+    sed -n -E '/^TIDAL_ONCHAIN_(DISABLED|EVENTS_DISABLED)=(true|false)$/p; /^TIDAL_PAPER_MODE=(off|collect|run)$/p' "$root/state.env"
   fi
 } > "$root/state.env.next"
 mv "$root/state.env.next" "$root/state.env"

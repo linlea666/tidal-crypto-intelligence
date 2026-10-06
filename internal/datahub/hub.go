@@ -20,6 +20,7 @@ import (
 )
 
 type Config struct {
+	PaperMode            string
 	DisableOnchain       bool
 	DisableOnchainEvents bool
 	Mail                 *MailConfig
@@ -39,6 +40,7 @@ type viewFlight struct {
 type Hub struct {
 	onchainDisabled       bool
 	onchainEventsDisabled bool
+	paperError            string
 	mail                  *MailConfig
 	mailSend              func(context.Context, MailConfig, string, string) error
 	noticeMu              sync.Mutex
@@ -78,6 +80,16 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	h := &Hub{Store: w, registry: map[string]Dataset{}, views: map[string]cachedView{}, flights: map[string]*viewFlight{}, baselines: map[string]Baseline{}, boot: time.Now().UTC(), offline: cfg.Offline, mail: cfg.Mail}
 	h.onchainDisabled, h.onchainEventsDisabled = cfg.DisableOnchain, cfg.DisableOnchainEvents
+	mode := cfg.PaperMode
+	if mode == "" {
+		mode = "off"
+	}
+	if mode != "off" || paperExists(cfg.Root) {
+		w.paper, e = openPaper(cfg.Root, mode)
+		if e != nil {
+			h.paperError = e.Error()
+		}
+	}
 	h.mailSend, h.vixFetch, h.vixWake = sendMail, fetchVIX, make(chan struct{}, 1)
 	w.LoadState("baselines", &h.baselines)
 	w.LoadState("wallHistory", &h.walls)
@@ -168,6 +180,7 @@ func (h *Hub) Run(ctx context.Context) {
 	start(h.researchWorker)
 	start(h.liquidationWorker)
 	start(h.shortFlowWorker)
+	start(h.paperWorker)
 	if !h.offline {
 		if !h.onchainDisabled {
 			start(h.onchainCollector)

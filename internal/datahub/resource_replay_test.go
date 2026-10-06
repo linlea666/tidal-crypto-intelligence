@@ -228,6 +228,8 @@ func TestResourceReplay(t *testing.T) {
 		}
 	}
 	phaseStarted := time.Now()
+	stopPaper := paperResourceStart(t, h)
+	defer stopPaper()
 	until := phaseStarted.Add(duration)
 	lastMaintenance, lastBooks := time.Time{}, time.Time{}
 	for cycle := 0; time.Now().Before(until); cycle++ {
@@ -290,7 +292,7 @@ func TestResourceReplay(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research"} {
+				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research", "paper", "paper/trades"} {
 					for n := 0; n < 4; n++ {
 						if _, err := h.Read(ctx, path, url.Values{"asset": {"BTC"}, "hours": {"1"}, "layout": {"split"}}); err != nil {
 							t.Error(err)

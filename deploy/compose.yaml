@@ -15,6 +15,7 @@ services:
       TIDAL_COOKIE_SECURE: 'true'
       COINGLASS_API_KEY_FILE: /run/secrets/coinglass_key
       TIDAL_OFFLINE: ${TIDAL_OFFLINE:-false}
+      TIDAL_PAPER_MODE: ${TIDAL_PAPER_MODE:-collect}
       TIDAL_ONCHAIN_DISABLED: ${TIDAL_ONCHAIN_DISABLED:-false}
       TIDAL_ONCHAIN_EVENTS_DISABLED: ${TIDAL_ONCHAIN_EVENTS_DISABLED:-false}
       TIDAL_SMTP_FILE: /run/tidal-mail/smtp.json

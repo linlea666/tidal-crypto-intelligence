@@ -509,6 +509,9 @@ func (h *Hub) Status() any {
 
 // Read never schedules or fetches. Even a completely empty local query is pure.
 func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMessage, error) {
+	if path == "paper" || strings.HasPrefix(path, "paper/") {
+		return h.paperRead(ctx, path, q)
+	}
 	if path == "onchain-cost" || strings.HasPrefix(path, "onchain-cost/") {
 		return h.costRead(ctx, path, q)
 	}

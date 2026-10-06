@@ -10,6 +10,7 @@ import {
 } from "./Pages";
 import type { Asset } from "./types";
 import { SignalsPage, StudiesPage, WalletPage } from "./Research";
+import { PaperPage } from "./Paper";
 
 type FlowWindow = {
   buyCents: number;
@@ -121,28 +122,40 @@ export function ActivityPage({ asset }: { asset: Asset }) {
           ["snapshot", "当前动向"],
           ["signals", "异动预警"],
           ["studies", "历史复盘"],
+          ["paper", "模拟仓位"],
           ["wallet", "钱包趋势"],
         ].map(([id, name]) => (
           <button
             key={id}
             aria-pressed={tab === id}
             className={tab === id ? "active" : ""}
-            disabled={asset !== "BTC" && (id === "signals" || id === "studies")}
+            disabled={
+              asset !== "BTC" &&
+              (id === "signals" || id === "studies" || id === "paper")
+            }
             title={
-              asset !== "BTC" && (id === "signals" || id === "studies")
+              asset !== "BTC" &&
+              (id === "signals" || id === "studies" || id === "paper")
                 ? "仅BTC启用"
                 : ""
             }
             onClick={() => setTab(id)}
           >
             {name}
-            {asset !== "BTC" && (id === "signals" || id === "studies")
+            {asset !== "BTC" &&
+            (id === "signals" || id === "studies" || id === "paper")
               ? " · 仅BTC"
               : ""}
           </button>
         ))}
       </nav>
-      {tab === "signals" ? (
+      {tab === "paper" ? (
+        asset === "BTC" ? (
+          <PaperPage />
+        ) : (
+          <p>模拟仓位仅支持BTCUSDT永续合约。</p>
+        )
+      ) : tab === "signals" ? (
         <SignalsPage asset={asset} />
       ) : tab === "studies" ? (
         <StudiesPage asset={asset} />

@@ -34,6 +34,10 @@ func (w *Warehouse) initResearch() error {
 		return e
 	}
 	w.research = db
+	if e = w.initPaperPublications(); e != nil {
+		db.Close()
+		return e
+	}
 	if e = w.initStudySnapshots(); e != nil {
 		db.Close()
 		return e
@@ -209,6 +213,11 @@ func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days in
 		return err
 	}
 	cutoff := now.Add(-time.Duration(days) * 24 * time.Hour).Unix()
+	// Expired publications cannot become forward entries after any restart.
+	// Bound the outbox without deleting the immutable paper intake/ledger.
+	if _, err := w.research.ExecContext(ctx, "DELETE FROM signal_publications WHERE seq IN (SELECT seq FROM signal_publications WHERE at<? ORDER BY at LIMIT 1000)", now.Add(-90*24*time.Hour).UnixMilli()); err != nil {
+		return err
+	}
 	for _, q := range []string{"DELETE FROM facts WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND facts.ts>=i.from_ts AND facts.ts<i.to_ts)", "DELETE FROM documents WHERE at<?", "DELETE FROM notices WHERE created<? AND (kind IS NULL OR kind NOT LIKE 'vix:%')", "DELETE FROM gaps WHERE end<?", "DELETE FROM shadow WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND shadow.ts>=i.from_ts AND shadow.ts<i.to_ts)"} {
 		if _, e := w.research.ExecContext(ctx, q, cutoff); e != nil {
 			return e

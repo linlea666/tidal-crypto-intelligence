@@ -41,6 +41,7 @@ type StorageStatus struct {
 	HotBytes       int       `json:"hotBytes"`
 }
 type Warehouse struct {
+	paper                      *paperStore
 	onchain                    *costStore
 	research                   *sql.DB
 	shortResearch              *sql.DB
@@ -133,6 +134,13 @@ CREATE TABLE IF NOT EXISTS rollups(dataset TEXT,res INTEGER,through_ts INTEGER,P
 func (w *Warehouse) Close() error {
 	w.write.Lock()
 	defer w.write.Unlock()
+	if w.paper != nil && w.paper.db != nil {
+		if w.paper.readDB != nil {
+			_ = w.paper.readDB.Close()
+		}
+		_, _ = w.paper.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+		_ = w.paper.db.Close()
+	}
 	if w.onchain != nil && w.onchain.db != nil {
 		_, _ = w.onchain.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 		_ = w.onchain.db.Close()
