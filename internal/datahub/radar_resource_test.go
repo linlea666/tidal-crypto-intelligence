@@ -138,9 +138,30 @@ func radarResourceStart(t *testing.T, h *Hub) func() {
 	go func() {
 		defer close(done)
 		var wg sync.WaitGroup
-		wg.Add(2)
+		wg.Add(3)
 		go func() { defer wg.Done(); h.radarCollector(ctx) }()
 		go func() { defer wg.Done(); h.radarBackground(ctx) }()
+		go func() {
+			defer wg.Done()
+			// Production FX refresh runs independently of expensive maintenance.
+			// Keep that topology in replay, otherwise stale FX silently disables
+			// the radar workload during the very contention we intend to test.
+			tick := time.NewTicker(5 * time.Second)
+			defer tick.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case at := <-tick.C:
+					d, _ := h.Dataset("fx.usd.kraken")
+					_, err := h.Store.Ingest(d, Observation{Dataset: d.ID, Source: d.Source, ObservedAt: &at, FetchedAt: at, Quality: "valid", Payload: Payload{Rates: []Rate{{"USDT", "1.0001"}, {"USDC", "1.0000"}}}})
+					if err != nil {
+						t.Error("concurrent radar FX refresh", err)
+						return
+					}
+				}
+			}
+		}()
 		wg.Wait()
 	}()
 	return func() {
