@@ -2,9 +2,22 @@ package datahub
 
 import (
 	"context"
+	"net/url"
 	"testing"
 	"time"
 )
+
+func TestRadarStorageFailureNeverReturnsAnEmptySuccess(t *testing.T) {
+	h, _ := radarTestHub(t)
+	saved := h.Store.radar
+	h.Store.radar = nil
+	defer func() { h.Store.radar = saved }()
+	for _, path := range []string{"hl-radar/events", "hl-radar/wallet", "hl-radar/settings", "hl-radar/study"} {
+		if _, err := h.radarRead(context.Background(), path, url.Values{}); err == nil {
+			t.Fatalf("%s masked unavailable storage as valid data", path)
+		}
+	}
+}
 
 func TestRadarStudyFreezesAtMillionAndSurvivesCancellation(t *testing.T) {
 	h, now := radarTestHub(t)

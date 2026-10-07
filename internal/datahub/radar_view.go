@@ -13,7 +13,10 @@ import (
 
 func (h *Hub) radarRead(ctx context.Context, path string, q url.Values) (json.RawMessage, error) {
 	if h.Store.radar == nil {
-		return json.Marshal(map[string]any{"available": false, "error": h.radarInitError, "events": []RadarEvent{}})
+		if path == "hl-radar/status" {
+			return json.Marshal(h.radarStatus())
+		}
+		return nil, errors.New("雷达存储不可用：" + h.radarInitError)
 	}
 	var result any
 	var err error
