@@ -175,3 +175,23 @@ func TestRadarForwardReturnsUseCompleteSameMarketBars(t *testing.T) {
 		}
 	}
 }
+
+func TestRadarPartialBarsCannotBecomeCompleteEvidence(t *testing.T) {
+	h, now := radarTestHub(t)
+	at := now.Truncate(time.Hour)
+	d, _ := h.Dataset(ID("candles", "ETH", "Binance", "spot"))
+	for i := 1; i <= 2; i++ {
+		ts := at.Add(time.Duration(i) * 5 * time.Minute)
+		quality := "valid"
+		if i == 2 {
+			quality = "partial"
+		}
+		if _, e := h.Store.Ingest(d, Observation{Dataset: d.ID, Source: d.Source, ObservedAt: &ts, FetchedAt: now, Resolution: 300, Quality: quality, Payload: Payload{Candle: &Candle{Open: 100, High: 110, Low: 90, Close: 105, Volume: 1}}}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	o := h.radarOutcome(context.Background(), radarTrial{Asset: "ETH", Side: "long", At: at, Price: "100"}, 15, at.Add(15*time.Minute))
+	if o.State != "incomplete" || o.Observed != 1 || o.Return != nil {
+		t.Fatal("partial bar advertised complete", o)
+	}
+}

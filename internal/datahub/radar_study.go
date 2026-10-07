@@ -164,7 +164,7 @@ func (h *Hub) radarOutcome(ctx context.Context, t radarTrial, minutes int, end t
 	candles := map[int64]Candle{}
 	err := h.Store.Visit(ctx, d, 300, start, stop, func(v Observation) error {
 		at := v.Time()
-		if v.Payload.Candle != nil && !at.Before(start) && at.Before(stop) && v.Resolution == 300 {
+		if v.Quality == "valid" && v.Payload.Candle != nil && !at.Before(start) && at.Before(stop) && v.Resolution == 300 {
 			candles[at.Unix()] = *v.Payload.Candle
 		}
 		return nil
@@ -229,6 +229,9 @@ func (h *Hub) radarHistoricalFX(ctx context.Context, at time.Time) (decimal.Deci
 	var result decimal.Decimal
 	ok := false
 	_ = h.Store.Visit(ctx, d, 3600, at.Truncate(time.Hour), at.Truncate(time.Hour).Add(time.Hour), func(o Observation) error {
+		if o.Quality != "valid" || o.Time().After(at) {
+			return nil
+		}
 		for _, r := range o.Payload.Rates {
 			if r.Quote == "USDT" {
 				n, valid := radarNumber(r.USD)
