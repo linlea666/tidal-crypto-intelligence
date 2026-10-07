@@ -147,7 +147,9 @@ func TestRadarMalformedFinancialValuesAndStaleEvidence(t *testing.T) {
 func TestRadarForwardReturnsUseCompleteSameMarketBars(t *testing.T) {
 	h, now := radarTestHub(t)
 	ctx := context.Background()
-	at := now.Truncate(time.Hour)
+	// Exercise the first minute of an hour; all fixture bars must already exist.
+	now = now.Truncate(time.Hour).Add(time.Minute)
+	at := now.Add(-time.Hour).Truncate(time.Hour)
 	fx, _ := h.Dataset("fx.usd.kraken")
 	if _, e := h.Store.Ingest(fx, Observation{Dataset: fx.ID, Source: fx.Source, ObservedAt: &at, FetchedAt: now, Resolution: 3600, Quality: "valid", Payload: Payload{Rates: []Rate{{"USDT", "1.01"}}}}); e != nil {
 		t.Fatal(e)
@@ -178,7 +180,8 @@ func TestRadarForwardReturnsUseCompleteSameMarketBars(t *testing.T) {
 
 func TestRadarPartialBarsCannotBecomeCompleteEvidence(t *testing.T) {
 	h, now := radarTestHub(t)
-	at := now.Truncate(time.Hour)
+	now = now.Truncate(time.Hour).Add(time.Minute)
+	at := now.Add(-time.Hour).Truncate(time.Hour)
 	d, _ := h.Dataset(ID("candles", "ETH", "Binance", "spot"))
 	for i := 1; i <= 2; i++ {
 		ts := at.Add(time.Duration(i) * 5 * time.Minute)
