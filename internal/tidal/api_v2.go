@@ -60,6 +60,26 @@ func (s *Server) apiV2(w http.ResponseWriter, r *http.Request, a string) bool {
 		jsonOut(w, result)
 		return true
 	}
+	if path == "hl-radar/settings" && r.Method == "PUT" {
+		var body struct {
+			EmailEnabled *bool `json:"emailEnabled"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&body) != nil || body.EmailEnabled == nil || dec.Decode(&struct{}{}) != io.EOF {
+			problem(w, 400, "仅接受emailEnabled布尔开关")
+			return true
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		result, err := s.Hub.SetRadarSettings(ctx, datahub.RadarSettings{EmailEnabled: *body.EmailEnabled}, time.Now().UTC())
+		if err != nil {
+			problem(w, 400, err.Error())
+			return true
+		}
+		jsonOut(w, result)
+		return true
+	}
 	if path == "vix/settings" && r.Method == "PUT" {
 		var body struct {
 			EmailEnabled *bool `json:"emailEnabled"`

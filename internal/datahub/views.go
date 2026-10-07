@@ -242,7 +242,7 @@ func (h *Hub) WhalesView(ctx context.Context, a, side, order string, limit int, 
 			v := dec(w.Size).Sub(dec(prev.Size)).String()
 			change = &v
 		}
-		item := map[string]any{"address": w.Address, "asset": a, "side": direction, "size": w.Size, "entry": w.Entry, "mark": num(w.Mark), "usdCents": money(w.USD), "leverage": num(w.Leverage), "margin": w.Margin, "liquidation": w.Liquidation, "distance": distance, "unrealizedCents": money(w.PnL), "fundingFeeCents": money(w.FundingFee), "marginBalanceCents": money(w.MarginBalance), "at": w.At, "firstSeen": w.Created, "changeSize": change, "valid": valid, "quote": "USD", "rate": "1"}
+		item := map[string]any{"address": w.Address, "asset": a, "side": direction, "size": w.Size, "entry": w.Entry, "mark": num(w.Mark), "usdCents": money(w.USD), "leverage": num(w.Leverage), "margin": w.Margin, "liquidation": w.Liquidation, "distance": distance, "unrealizedCents": money(w.PnL), "fundingFeeCents": money(w.FundingFee), "marginBalanceCents": money(w.MarginBalance), "at": w.At, "firstSeen": w.Created, "positionOpenedAt": w.Created, "changeSize": change, "valid": valid, "quote": "USD", "rate": "1"}
 		if side == "all" || side == direction {
 			items = append(items, item)
 		}
@@ -504,11 +504,14 @@ func (h *Hub) CandleView(ctx context.Context, a string, hours int) (any, error) 
 	return map[string]any{"points": points, "resolution": fmt.Sprintf("%ds", res), "quote": "USDT", "source": "Binance"}, e
 }
 func (h *Hub) Status() any {
-	return map[string]any{"externalFeeds": map[string]any{"vix": h.vixHealth(), "onchainCost": h.onchainHealth()}, "bookBaseline": h.baselineProgress(), "datasets": h.Catalog(), "scheduler": h.Scheduler.State(), "storage": h.Store.Status(), "startedAt": h.boot, "at": time.Now().UTC(), "rulesVersion": RulesVersion, "legacyCollectorsRunning": false}
+	return map[string]any{"externalFeeds": map[string]any{"vix": h.vixHealth(), "onchainCost": h.onchainHealth(), "hlRadar": h.radarStatus()}, "bookBaseline": h.baselineProgress(), "datasets": h.Catalog(), "scheduler": h.Scheduler.State(), "storage": h.Store.Status(), "startedAt": h.boot, "at": time.Now().UTC(), "rulesVersion": RulesVersion, "legacyCollectorsRunning": false}
 }
 
 // Read never schedules or fetches. Even a completely empty local query is pure.
 func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMessage, error) {
+	if path == "hl-radar" || strings.HasPrefix(path, "hl-radar/") {
+		return h.radarRead(ctx, path, q)
+	}
 	if path == "paper" || strings.HasPrefix(path, "paper/") {
 		return h.paperRead(ctx, path, q)
 	}

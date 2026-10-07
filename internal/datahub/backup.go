@@ -79,6 +79,9 @@ func BackupFile(ctx context.Context, source, destination string) error {
 		manifest["paper"] = metadata
 		manifest["restoreRequirement"] = "Restore paper and research from the same batch; startup checks source/cursor and enters recovery, never replay missing fills"
 	}
+	if filepath.Base(source) == "radar.sqlite" {
+		manifest["restoreRequirement"] = "Restore radar and research from the same batch; startup suppresses all pending radar mail and never replays historical opening alerts"
+	}
 	raw, err := json.Marshal(manifest)
 	if err != nil {
 		return err

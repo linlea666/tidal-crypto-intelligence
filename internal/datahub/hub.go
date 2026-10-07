@@ -38,6 +38,8 @@ type viewFlight struct {
 	err  error
 }
 type Hub struct {
+	radar                 *radarRuntime
+	radarInitError        string
 	onchainDisabled       bool
 	onchainEventsDisabled bool
 	paperError            string
@@ -89,6 +91,14 @@ func Open(cfg Config) (*Hub, error) {
 		if e != nil {
 			h.paperError = e.Error()
 		}
+	}
+	w.radar, e = openRadar(cfg.Root)
+	if e != nil {
+		h.radarInitError = e.Error()
+	} else {
+		h.radar = newRadarRuntime()
+		_ = radarLoad(context.Background(), w.radar.db, "health", "last", &h.radar.health)
+		h.radar.health.Connected = false
 	}
 	h.mailSend, h.vixFetch, h.vixWake = sendMail, fetchVIX, make(chan struct{}, 1)
 	w.LoadState("baselines", &h.baselines)
@@ -185,6 +195,10 @@ func (h *Hub) Run(ctx context.Context) {
 		if !h.onchainDisabled {
 			start(h.onchainCollector)
 			start(h.onchainEvaluator)
+		}
+		if h.radar != nil {
+			start(h.radarCollector)
+			start(h.radarBackground)
 		}
 		start(h.vixCollector)
 		start(h.vixDailyCollector)

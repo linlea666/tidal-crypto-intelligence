@@ -61,6 +61,9 @@ fi
 if [[ -f "$root/data/v2/paper.sqlite" ]]; then
   docker run --rm --user 0:0 -e "TIDAL_BACKUP_BATCH=$backup_batch" -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/paper.sqlite "/backup/paper-$backup_batch.sqlite"
 fi
+if [[ -f "$root/data/v2/radar.sqlite" ]]; then
+  docker run --rm --user 0:0 -e "TIDAL_BACKUP_BATCH=$backup_batch" -v "$root/data:/data:ro" -v "$root/backups:/backup" "$image" backup-db /data/v2/radar.sqlite "/backup/radar-$backup_batch.sqlite"
+fi
 [[ ! -f "$root/state.env" ]] || cp "$root/state.env" "$root/backups/state-$version.env"
 ln -sfn "$release" "$root/current.next"
 mv -Tf "$root/current.next" "$root/current"

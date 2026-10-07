@@ -13,7 +13,7 @@ import (
 
 // Legacy notices used one second-resolution attempted timestamp per batch.
 // New batches have distinct IDs, so simultaneous BTC/VIX sends count separately.
-func (h *Hub) mailAttempts(ctx context.Context, now time.Time) (int, error) {
+func (h *Hub) totalMailAttempts(ctx context.Context, now time.Time) (int, error) {
 	var n int
 	err := h.Store.research.QueryRowContext(ctx, `SELECT
  (SELECT count(*) FROM mail_batches WHERE attempted>?) +
@@ -24,11 +24,14 @@ func (h *Hub) mailAttempts(ctx context.Context, now time.Time) (int, error) {
 // Caller holds noticeMu. Reserve the attempt and all its members atomically
 // before SMTP; a crash can never make an ambiguous send eligible for retry.
 func (h *Hub) deliverNoticeBatch(ctx context.Context, now time.Time, ids []string, title, body string) (bool, error) {
+	return h.deliverTopicNoticeBatch(ctx, now, ids, title, body, "existing")
+}
+func (h *Hub) deliverTopicNoticeBatch(ctx context.Context, now time.Time, ids []string, title, body, topic string) (bool, error) {
 	if h.offline || h.mail == nil || len(ids) == 0 {
 		return false, nil
 	}
-	n, err := h.mailAttempts(ctx, now)
-	if err != nil || n >= 6 {
+	allowed, err := h.mailBudgetAllowed(ctx, now, topic)
+	if err != nil || !allowed {
 		return false, err
 	}
 	tx, err := h.Store.research.BeginTx(ctx, nil)
@@ -38,6 +41,9 @@ func (h *Hub) deliverNoticeBatch(ctx context.Context, now time.Time, ids []strin
 	defer tx.Rollback()
 	batch := uuid.NewString()
 	if _, err = tx.ExecContext(ctx, "INSERT INTO mail_batches VALUES(?,?)", batch, now.UnixNano()); err != nil {
+		return false, err
+	}
+	if _, err = tx.ExecContext(ctx, "INSERT INTO mail_batch_topics VALUES(?,?)", batch, topic); err != nil {
 		return false, err
 	}
 	for _, id := range ids {
