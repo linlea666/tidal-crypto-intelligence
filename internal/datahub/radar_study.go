@@ -20,20 +20,24 @@ type radarOutcome struct {
 	Expected int     `json:"expectedBars"`
 }
 type radarTrial struct {
-	Evidence RadarEvent     `json:"evidence"`
-	ID       string         `json:"id"`
-	Asset    string         `json:"asset"`
-	Side     string         `json:"side"`
-	At       time.Time      `json:"at"`
-	Price    string         `json:"referenceUSD"`
-	Alert    bool           `json:"alert"`
-	Group    string         `json:"groupId"`
-	Outcomes []radarOutcome `json:"outcomes"`
+	ReferenceSource string         `json:"referenceSource"`
+	ReferenceAt     *time.Time     `json:"referenceAt"`
+	ReferenceFX     string         `json:"referenceFx"`
+	ReferenceFXAt   *time.Time     `json:"referenceFxAt"`
+	Evidence        RadarEvent     `json:"evidence"`
+	ID              string         `json:"id"`
+	Asset           string         `json:"asset"`
+	Side            string         `json:"side"`
+	At              time.Time      `json:"at"`
+	Price           string         `json:"referenceUSD"`
+	Alert           bool           `json:"alert"`
+	Group           string         `json:"groupId"`
+	Outcomes        []radarOutcome `json:"outcomes"`
 }
 
 // Freeze when a verified opening first reaches the USD threshold, in the same
 // transaction as its facts. Mail settings and later returns never select samples.
-func radarFreezeTrial(ctx context.Context, tx radarDB, v RadarEvent, now time.Time) error {
+func (h *Hub) radarFreezeTrial(ctx context.Context, tx radarDB, v RadarEvent, now time.Time) error {
 	if !v.LiveOpening || !v.Verified || v.Closed != nil || v.Threshold == nil || v.USDCents == nil || *v.USDCents < 100000000 {
 		return nil
 	}
@@ -43,8 +47,23 @@ func radarFreezeTrial(ctx context.Context, tx radarDB, v RadarEvent, now time.Ti
 	} else if err != sql.ErrNoRows {
 		return err
 	}
-	price := dec(v.Native).Div(dec(v.Size).Abs()).Mul(dec(v.FX)).String()
-	t := radarTrial{Evidence: v, ID: v.ID, Asset: v.Asset, Side: v.Side, At: now, Price: price, Alert: v.InitialRecorded, Group: v.Group, Outcomes: []radarOutcome{}}
+	t := radarTrial{ReferenceSource: "Binance spot / USD", Evidence: v, ID: v.ID, Asset: v.Asset, Side: v.Side, At: now, Alert: v.InitialRecorded, Group: v.Group, Outcomes: []radarOutcome{}}
+	// The benchmark and all forward bars must use the same venue/instrument.
+	// A missing discovery price remains missing; never backfill it with hindsight.
+	d, _ := h.Dataset(ID("price", v.Asset, "Binance", "spot"))
+	o, exists := h.Store.Latest(d.ID)
+	rate, fxAt, fxOK := h.Rate("USDT", now)
+	if exists && o.Fresh(d, now) && o.Payload.Price != nil && o.Payload.Price.Quote == "USDT" && fxOK {
+		price, valid := radarNumber(o.Payload.Price.Value)
+		fx, validFX := radarNumber(rate)
+		if valid && validFX && price.IsPositive() && fx.IsPositive() {
+			at := o.Time()
+			t.Price = price.Mul(fx).String()
+			t.ReferenceAt = &at
+			t.ReferenceFX = rate
+			t.ReferenceFXAt = fxAt
+		}
+	}
 	if err := radarPut(ctx, tx, "study", t.ID, t.At, t, true); err != nil {
 		return err
 	}
@@ -158,8 +177,7 @@ func (h *Hub) radarOutcome(ctx context.Context, t radarTrial, minutes int, end t
 	if o.Observed != o.Expected {
 		return o
 	}
-	// Evaluation stays in source USDT units unless valid historical FX is present.
-	// Use the existing historical quote conversion at each bar; never current FX.
+	// Convert the same Binance spot instrument with historical FX, never current FX.
 	ref := dec(t.Price)
 	if !ref.IsPositive() {
 		return o
@@ -346,5 +364,5 @@ func (h *Hub) radarStudyView(ctx context.Context) (any, error) {
 		}
 		detail = append(detail, map[string]any{"id": t.ID, "asset": t.Asset, "side": t.Side, "at": t.At, "alert": t.Alert, "groupId": t.Group, "outcomes": t.Outcomes})
 	}
-	return map[string]any{"origin": origin, "days": time.Since(origin).Hours() / 24, "independentEvents": len(groups), "completeEvents": mature, "reviewReady": !truncated && time.Since(origin) >= 30*24*time.Hour && mature >= 30, "truncated": truncated, "metrics": metrics, "items": detail, "note": "首次核验到百万级仓位时冻结证据与参考价；同步组取最早发现成员，只算一个样本。大额基线包含全部已核验百万级新开仓，雷达组为其中满足地址规则的子集。最多汇总最近500条，超限明确标记且不宣称全量审查。从发现后下一根完整5分钟K线开始，缺行情/FX保留未知；最大不利波动未覆盖首尾不足5分钟区间，收益不含成本。至少30天/30个独立完整事件才进入描述性审查，不代表可跟单收益。"}, nil
+	return map[string]any{"origin": origin, "days": time.Since(origin).Hours() / 24, "independentEvents": len(groups), "completeEvents": mature, "reviewReady": !truncated && time.Since(origin) >= 30*24*time.Hour && mature >= 30, "truncated": truncated, "metrics": metrics, "items": detail, "note": "首次核验到百万级仓位时冻结证据和同期Binance现货参考价，后续也用同市场行情，缺参考价不追填；同步组取最早发现成员，只算一个样本。大额基线包含全部已核验百万级新开仓，雷达组为其中满足地址规则的子集。最多汇总最近500条，超限明确标记且不宣称全量审查。从发现后下一根完整5分钟K线开始，缺行情/FX保留未知；最大不利波动未覆盖首尾不足5分钟区间，收益不含成本。至少30天/30个独立完整事件才进入描述性审查，不代表可跟单收益。"}, nil
 }

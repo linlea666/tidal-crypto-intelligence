@@ -38,6 +38,10 @@ func TestRadarStudyFreezesAtMillionAndSurvivesCancellation(t *testing.T) {
 	a := radarTestAccount(later, "10")
 	a.Positions[0].Position.Value = "1100000"
 	a.Margin.Total = "1100000"
+	pd, _ := h.Dataset(ID("price", "BTC", "Binance", "spot"))
+	if _, e := h.Store.Ingest(pd, Observation{Dataset: pd.ID, Source: pd.Source, ObservedAt: &later, FetchedAt: later, Quality: "valid", Payload: Payload{Price: &Price{"109500", "USDT"}}}); e != nil {
+		t.Fatal(e)
+	}
 	if e := h.radarApply(ctx, w, []radarFill{add}, a, later); e != nil {
 		t.Fatal(e)
 	}
@@ -46,7 +50,7 @@ func TestRadarStudyFreezesAtMillionAndSurvivesCancellation(t *testing.T) {
 	if e := radarLoad(ctx, h.Store.radar.db, "study", ev.ID, &tr); e != nil {
 		t.Fatal(e)
 	}
-	if !tr.At.Equal(later) || tr.Price != "110000" {
+	if !tr.At.Equal(later) || tr.Price != "109500" || tr.ReferenceSource != "Binance spot / USD" {
 		t.Fatalf("wrong freeze %+v", tr)
 	}
 	a.Positions[0].Position.Value = "900000"

@@ -299,7 +299,7 @@ func (h *Hub) radarApply(ctx context.Context, w RadarWallet, fills []radarFill, 
 		if err = radarSaveEvent(ctx, tx, v); err != nil {
 			return err
 		}
-		if err = radarFreezeTrial(ctx, tx, v, now); err != nil {
+		if err = h.radarFreezeTrial(ctx, tx, v, now); err != nil {
 			return err
 		}
 	}
