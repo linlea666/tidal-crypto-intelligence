@@ -1,5 +1,11 @@
 # 实施状态
 
+## 雷达发布检查：测试时间夹具修正，生产尚未切换
+
+PR #25 已合并为 `670aaa41`。最终功能源码 `2b6a3ba` 的 GitHub Checks [37661326504](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/37661326504) 全部适用项通过；产物11501737867核对：1.7核/768MiB，回放949.30秒、完整并发维护363.50秒，Docker峰值179.3MiB、cgroup含缓存446.12MiB，退出0、无OOM。雷达真实wire测试路径 offered/delivered=36,340/36,340，REST76，事件19，缺口/拒绝0。五小时长测为skipped，未记通过。
+
+稳定v2.14.0的 [Release检查37663967980](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/37663967980) 在完整race阶段失败，未构建或部署镜像，生产继续v2.13.2。根因是新增两项前向复盘测试以当前整点加5/10分钟生成历史K线，在18:07运行时产生未来时间，仓库正确拒绝。修正限于 `radar_study_test.go`：固定覆盖整点后一分的边界，所有行情使用上一完整小时；生产仓库校验和雷达算法保持不变。修正后两项测试十轮race通过。原发布失败保留，后续使用新稳定补丁版本，不重标旧标签。
+
 ## Hyperliquid 异常建仓雷达：本地实现与验收中
 
 新增原生 BTC/ETH 公开成交发现、最多两路 REST 地址核验、持仓生命周期、资金/角色证据、同步组与分级通知，独立 radar.sqlite/WAL。CoinGlass 存量快照不能证明新建仓，因此未将旧榜单差分冒充事件。`create_time` 的旧 firstSeen 保持兼容，另列 positionOpenedAt。见 [规则与运维说明](HYPERLIQUID-RADAR.md)。
