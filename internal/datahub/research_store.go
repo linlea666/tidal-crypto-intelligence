@@ -28,6 +28,7 @@ func (w *Warehouse) initResearch() error {
  CREATE TABLE IF NOT EXISTS gaps(start INTEGER PRIMARY KEY,end INTEGER,reason TEXT);
  CREATE TABLE IF NOT EXISTS shadow(asset TEXT,ts INTEGER,payload BLOB,PRIMARY KEY(asset,ts)) WITHOUT ROWID;
  CREATE TABLE IF NOT EXISTS notices(id TEXT PRIMARY KEY,signal_id TEXT,kind TEXT,created INTEGER,status TEXT,attempted INTEGER DEFAULT 0,payload BLOB);
+ CREATE TABLE IF NOT EXISTS mail_batch_topics(batch_id TEXT PRIMARY KEY,topic TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS mail_results(batch_id TEXT PRIMARY KEY,completed INTEGER,status TEXT,error TEXT);`)
 	if e != nil {
 		db.Close()
@@ -218,7 +219,7 @@ func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days in
 	if _, err := w.research.ExecContext(ctx, "DELETE FROM signal_publications WHERE seq IN (SELECT seq FROM signal_publications WHERE at<? ORDER BY at LIMIT 1000)", now.Add(-90*24*time.Hour).UnixMilli()); err != nil {
 		return err
 	}
-	for _, q := range []string{"DELETE FROM facts WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND facts.ts>=i.from_ts AND facts.ts<i.to_ts)", "DELETE FROM documents WHERE at<?", "DELETE FROM notices WHERE created<? AND (kind IS NULL OR kind NOT LIKE 'vix:%')", "DELETE FROM gaps WHERE end<?", "DELETE FROM shadow WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND shadow.ts>=i.from_ts AND shadow.ts<i.to_ts)"} {
+	for _, q := range []string{"DELETE FROM facts WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND facts.ts>=i.from_ts AND facts.ts<i.to_ts)", "DELETE FROM documents WHERE at<?", "DELETE FROM notices WHERE created<? AND (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'hl-radar:%'))", "DELETE FROM gaps WHERE end<?", "DELETE FROM shadow WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND shadow.ts>=i.from_ts AND shadow.ts<i.to_ts)"} {
 		if _, e := w.research.ExecContext(ctx, q, cutoff); e != nil {
 			return e
 		}

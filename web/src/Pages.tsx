@@ -1,3 +1,4 @@
+import { RadarPage } from "./Radar";
 import { OnchainCostPage, costStatuses } from "./OnchainCost";
 import { LiquidationPage } from "./Liquidations";
 import { LargeOrderZones } from "./LargeOrderZones";
@@ -275,6 +276,7 @@ function Backfill({
   );
 }
 export function MarketPages(p: Props) {
+  if (p.view === "hl-radar") return <RadarPage />;
   if (p.view === "onchain-cost") return <OnchainCostPage />;
   if (p.view === "vix") return <VIXPage />;
   if(p.view==="large-orders")return <LargeOrderZones key={p.asset} asset={p.asset}/>;

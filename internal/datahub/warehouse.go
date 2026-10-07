@@ -41,6 +41,7 @@ type StorageStatus struct {
 	HotBytes       int       `json:"hotBytes"`
 }
 type Warehouse struct {
+	radar                      *radarStore
 	paper                      *paperStore
 	onchain                    *costStore
 	research                   *sql.DB
@@ -132,6 +133,9 @@ CREATE TABLE IF NOT EXISTS rollups(dataset TEXT,res INTEGER,through_ts INTEGER,P
 	return w, rows.Err()
 }
 func (w *Warehouse) Close() error {
+	if w.radar != nil {
+		_ = w.radar.db.Close()
+	}
 	w.write.Lock()
 	defer w.write.Unlock()
 	if w.paper != nil && w.paper.db != nil {

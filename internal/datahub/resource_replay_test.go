@@ -230,6 +230,8 @@ func TestResourceReplay(t *testing.T) {
 	phaseStarted := time.Now()
 	stopPaper := paperResourceStart(t, h)
 	defer stopPaper()
+	stopRadar := radarResourceStart(t, h)
+	defer stopRadar()
 	until := phaseStarted.Add(duration)
 	lastMaintenance, lastBooks := time.Time{}, time.Time{}
 	for cycle := 0; time.Now().Before(until); cycle++ {
@@ -237,7 +239,7 @@ func TestResourceReplay(t *testing.T) {
 		live := current.Truncate(time.Minute).Add(-time.Minute)
 		ingest(flow, Observation{Dataset: flow.ID, Source: flow.Source, ObservedAt: &live, FetchedAt: current, Resolution: 60, Quality: "valid", Payload: Payload{Flow: &Flow{"1200000", "1000000"}}})
 		fx, _ := h.Dataset("fx.usd.kraken")
-		ingest(fx, Observation{Dataset: fx.ID, Source: fx.Source, ObservedAt: &current, FetchedAt: current, Quality: "valid", Payload: Payload{Rates: []Rate{{"USDT", "1.0001"}}}})
+		ingest(fx, Observation{Dataset: fx.ID, Source: fx.Source, ObservedAt: &current, FetchedAt: current, Quality: "valid", Payload: Payload{Rates: []Rate{{"USDT", "1.0001"}, {"USDC", "1.0000"}}}})
 		for _, a := range Assets() {
 			pd, _ := h.Dataset(ID("price", a, "Binance", "spot"))
 			value := "80000"
@@ -292,7 +294,7 @@ func TestResourceReplay(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research", "paper", "paper/trades"} {
+				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research", "paper", "paper/trades", "hl-radar/events", "hl-radar/status", "hl-radar/study"} {
 					for n := 0; n < 4; n++ {
 						if _, err := h.Read(ctx, path, url.Values{"asset": {"BTC"}, "hours": {"1"}, "layout": {"split"}}); err != nil {
 							t.Error(err)

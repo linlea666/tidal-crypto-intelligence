@@ -532,6 +532,7 @@ func (w *Warehouse) maintainVIX(ctx context.Context, now time.Time) error {
 		{"DELETE FROM notices WHERE kind LIKE 'vix:%' AND created<?", now.Add(-90 * 24 * time.Hour).Unix()},
 		{"DELETE FROM mail_batch_items WHERE batch_id IN (SELECT id FROM mail_batches WHERE attempted<?)", now.Add(-90 * 24 * time.Hour).UnixNano()},
 		{"DELETE FROM mail_results WHERE batch_id IN (SELECT id FROM mail_batches WHERE attempted<?)", now.Add(-90 * 24 * time.Hour).UnixNano()},
+		{"DELETE FROM mail_batch_topics WHERE batch_id IN (SELECT id FROM mail_batches WHERE attempted<?)", now.Add(-90 * 24 * time.Hour).UnixNano()},
 		{"DELETE FROM mail_batches WHERE attempted<?", now.Add(-90 * 24 * time.Hour).UnixNano()},
 	} {
 		if _, err := w.research.ExecContext(ctx, s.q, s.arg); err != nil {

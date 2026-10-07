@@ -24,6 +24,7 @@ const nav = [
   ["derivatives", "合约态势"],
   ["liquidations", "清算分布"],
   ["whales", "巨鲸持仓"],
+  ["hl-radar", "异常建仓雷达"],
   ["onchain-cost", "链上筹码"],
   ["etf", "ETF资金"],
   ["vix", "VIX指数"],
@@ -40,7 +41,8 @@ export function App() {
   const [view, setView] = useState(location.hash.slice(1) || "liquidity");
   const isVIX = view === "vix";
   const isOnchain = view === "onchain-cost";
-  const independent = isVIX || isOnchain;
+  const isRadar = view === "hl-radar";
+  const independent = isVIX || isOnchain || isRadar;
   const navRef = useRef<HTMLElement>(null);
   useEffect(() => {
     navRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -275,7 +277,7 @@ export function App() {
           <span
             className={`status-dot ${independent || validVenues.size < 5 || stale ? "warn" : ""}`}
           />
-          <span>{isOnchain ? "BTC链上 · 独立日线" : isVIX ? "VIX · 延时数据" : view === "large-orders" ? "现货大单 · 独立覆盖" : stale ? "数据已过期" : `${validVenues.size}/5 家现货`}</span>
+          <span>{isRadar ? "Hyperliquid · 独立覆盖" : isOnchain ? "BTC链上 · 独立日线" : isVIX ? "VIX · 延时数据" : view === "large-orders" ? "现货大单 · 独立覆盖" : stale ? "数据已过期" : `${validVenues.size}/5 家现货`}</span>
           {!independent && view !== "large-orders" && <span className="desktop-only">USD 实时换算</span>}
           <time>
             {new Date(clockNow).toLocaleDateString("zh-CN", {
@@ -314,6 +316,7 @@ export function App() {
                     "onchain-cost": "BTC 链上成本与波动观察",
                     derivatives: "合约态势",
                     whales: "公开巨鲸持仓",
+                    "hl-radar": "异常建仓雷达",
                     liquidations: "清算集中在哪里？",
                     health: "数据与运行健康",
                   } as Record<string, string>
@@ -340,7 +343,7 @@ export function App() {
               )}
             </div>
             <p className="subtitle">
-              {isOnchain ? "看清成本集中、结构变化与方向确认条件" : isVIX ? "观察市场恐慌，达到自定阈值时邮件提醒" : view === "large-orders" ? "看清买卖集中价位，逐层核对来源与成交证据" : view === "liquidity"
+              {isRadar ? "新地址、大额敞口与同步行为，用证据解释异常" : isOnchain ? "看清成本集中、结构变化与方向确认条件" : isVIX ? "观察市场恐慌，达到自定阈值时邮件提醒" : view === "large-orders" ? "看清买卖集中价位，逐层核对来源与成交证据" : view === "liquidity"
                 ? "柱子越长，当前挂单金额越大"
                 : view === "whales"
                   ? "看清已监控大仓位的均价与动态清算位置"
