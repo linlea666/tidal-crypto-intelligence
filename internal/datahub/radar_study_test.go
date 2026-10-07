@@ -143,3 +143,35 @@ func TestRadarMalformedFinancialValuesAndStaleEvidence(t *testing.T) {
 		t.Fatal("overflow accepted")
 	}
 }
+
+func TestRadarForwardReturnsUseCompleteSameMarketBars(t *testing.T) {
+	h, now := radarTestHub(t)
+	ctx := context.Background()
+	at := now.Truncate(time.Hour)
+	fx, _ := h.Dataset("fx.usd.kraken")
+	if _, e := h.Store.Ingest(fx, Observation{Dataset: fx.ID, Source: fx.Source, ObservedAt: &at, FetchedAt: now, Resolution: 3600, Quality: "valid", Payload: Payload{Rates: []Rate{{"USDT", "1.01"}}}}); e != nil {
+		t.Fatal(e)
+	}
+	d, _ := h.Dataset(ID("candles", "BTC", "Binance", "spot"))
+	for i, c := range []Candle{{Open: 100, High: 110, Low: 90, Close: 105, Volume: 1}, {Open: 105, High: 108, Low: 98, Close: 104, Volume: 1}} {
+		ts := at.Add(time.Duration(i+1) * 5 * time.Minute)
+		if _, e := h.Store.Ingest(d, Observation{Dataset: d.ID, Source: d.Source, ObservedAt: &ts, FetchedAt: now, Resolution: 300, Quality: "valid", Payload: Payload{Candle: &c}}); e != nil {
+			t.Fatal(e)
+		}
+	}
+	for _, side := range []string{"long", "short"} {
+		tr := radarTrial{Asset: "BTC", Side: side, At: at, Price: "101"}
+		o := h.radarOutcome(ctx, tr, 15, at.Add(15*time.Minute))
+		want := "4"
+		if side == "short" {
+			want = "-4"
+		}
+		if o.State != "complete" || o.Return == nil || *o.Return != want || o.MFE == nil || *o.MFE != "10" || o.MAE == nil || *o.MAE != "-10" || o.Observed != 2 || o.Expected != 2 {
+			t.Fatalf("%s invalid outcome %+v", side, o)
+		}
+		tr.Price = ""
+		if o = h.radarOutcome(ctx, tr, 15, at.Add(15*time.Minute)); o.State != "incomplete" || o.Return != nil {
+			t.Fatal("missing discovery price backfilled")
+		}
+	}
+}
