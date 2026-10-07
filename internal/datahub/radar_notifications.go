@@ -41,7 +41,15 @@ func (h *Hub) mailBudgetAllowed(ctx context.Context, now time.Time, topic string
 	return total < 12 && old < 6, nil
 }
 func (h *Hub) radarReceipt(now time.Time) bool {
-	return h.mail != nil && h.mail.RadarReceiptVerifiedAt != nil && !h.mail.RadarReceiptVerifiedAt.IsZero() && !h.mail.RadarReceiptVerifiedAt.After(now)
+	if h.mail == nil {
+		return false
+	}
+	if h.radar != nil {
+		if at := h.radar.receipt.Load(); at > 0 && at <= now.UnixMilli() {
+			return true
+		}
+	}
+	return h.mail.RadarReceiptVerifiedAt != nil && !h.mail.RadarReceiptVerifiedAt.IsZero() && !h.mail.RadarReceiptVerifiedAt.After(now)
 }
 func (h *Hub) radarSettings(ctx context.Context) (RadarSettings, error) {
 	var s RadarSettings
@@ -56,10 +64,17 @@ func (h *Hub) SetRadarSettings(ctx context.Context, s RadarSettings, now time.Ti
 		return nil, errors.New("雷达存储不可用")
 	}
 	if s.EmailEnabled && !h.radarReceipt(now) {
-		return nil, errors.New("需先完成真实收件验收并记录SMTP配置中的radarReceiptVerifiedAt")
+		return nil, errors.New("请先发送收件测试并输入邮件中的验收码")
 	}
 	h.noticeMu.Lock()
 	defer h.noticeMu.Unlock()
+	previous, err := h.radarSettings(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if previous.EmailEnabled == s.EmailEnabled {
+		return h.radarSettingsView(ctx)
+	}
 	if e := h.Store.radar.put(ctx, "settings", "mail", now, s, false); e != nil {
 		return nil, e
 	}
@@ -147,7 +162,7 @@ func (h *Hub) radarProcessNotices(ctx context.Context, now time.Time) error {
 	if err := h.radarExport(ctx, now); err != nil {
 		return err
 	}
-	rows, e := h.Store.research.QueryContext(ctx, "SELECT payload FROM notices WHERE kind LIKE 'hl-radar:%' AND status='pending' ORDER BY created,id LIMIT 32")
+	rows, e := h.Store.research.QueryContext(ctx, "SELECT payload FROM notices WHERE kind IN ('hl-radar:opening','hl-radar:priority') AND status='pending' ORDER BY created,id LIMIT 32")
 	if e != nil {
 		return e
 	}

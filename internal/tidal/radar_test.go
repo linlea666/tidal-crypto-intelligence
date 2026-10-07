@@ -62,6 +62,16 @@ func TestRadarAuthenticatedReadOnlyAPI(t *testing.T) {
 	if w := request("PUT", "/api/v2/hl-radar/settings", `{"emailEnabled":false}`, cookie, ""); w.Code != 200 {
 		t.Fatal(w.Body.String())
 	}
+	for _, tc := range []struct {
+		body   string
+		cookie *http.Cookie
+		origin string
+		status int
+	}{{`{"action":"test"}`, nil, "", 401}, {`{"action":"test"}`, cookie, "https://evil.invalid", 403}, {`{"action":"test","unexpected":true}`, cookie, "", 400}, {`{"action":"test"}`, cookie, "", 400}} {
+		if w := request("POST", "/api/v2/hl-radar/mail-test", tc.body, tc.cookie, tc.origin); w.Code != tc.status {
+			t.Fatal("receipt endpoint", w.Code, w.Body.String())
+		}
+	}
 	for _, path := range []string{"hl-radar/events?asset=SOL", "hl-radar/events?before=invalid", "hl-radar/wallet?address=bad"} {
 		if w := request("GET", "/api/v2/"+path, "", cookie, ""); w.Code != 400 {
 			t.Fatal(w.Code)

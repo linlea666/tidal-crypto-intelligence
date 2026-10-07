@@ -99,6 +99,7 @@ func Open(cfg Config) (*Hub, error) {
 		h.radar = newRadarRuntime()
 		_ = radarLoad(context.Background(), w.radar.db, "health", "last", &h.radar.health)
 		h.radar.health.Connected = false
+		h.loadRadarReceipt(context.Background())
 	}
 	h.mailSend, h.vixFetch, h.vixWake = sendMail, fetchVIX, make(chan struct{}, 1)
 	w.LoadState("baselines", &h.baselines)

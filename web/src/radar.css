@@ -263,4 +263,29 @@
   }
 }
 
-.radar-page > * { min-width: 0; }
+.radar-page > * {
+  min-width: 0;
+}
+.radar-receipt {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.radar-receipt .radar-controls button {
+  margin-left: 0;
+}
+.radar-receipt label {
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+.radar-receipt input {
+  min-width: 0;
+  max-width: 100%;
+  background: #17211d;
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+}

@@ -60,6 +60,27 @@ func (s *Server) apiV2(w http.ResponseWriter, r *http.Request, a string) bool {
 		jsonOut(w, result)
 		return true
 	}
+	if path == "hl-radar/mail-test" && r.Method == "POST" {
+		var body struct {
+			Action string `json:"action"`
+			Code   string `json:"code"`
+		}
+		dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
+		dec.DisallowUnknownFields()
+		if dec.Decode(&body) != nil || dec.Decode(&struct{}{}) != io.EOF {
+			problem(w, 400, "无效收件验收请求")
+			return true
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 35*time.Second)
+		defer cancel()
+		result, err := s.Hub.RadarMailAcceptance(ctx, body.Action, body.Code, time.Now().UTC())
+		if err != nil {
+			problem(w, 400, err.Error())
+			return true
+		}
+		jsonOut(w, result)
+		return true
+	}
 	if path == "hl-radar/settings" && r.Method == "PUT" {
 		var body struct {
 			EmailEnabled *bool `json:"emailEnabled"`

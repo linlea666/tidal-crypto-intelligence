@@ -198,6 +198,7 @@ export function RadarPage() {
   const [saving, setSaving] = useState(false);
   const [override, setOverride] = useState<Settings | null>(null);
   const [studyOpen, setStudyOpen] = useState(false);
+  const [receiptCode, setReceiptCode] = useState("");
   const q = useAPI<Response>(
     `hl-radar/events?asset=${asset}&side=${side}&limit=25&before=${encodeURIComponent(cursor)}`,
     10000,
@@ -216,6 +217,31 @@ export function RadarPage() {
     setPast([]);
     setSelected("");
   };
+  async function acceptMail(action: "test" | "confirm") {
+    setSaving(true);
+    setMessage("");
+    try {
+      if (action === "test") {
+        const result = await api<{ message: string }>("hl-radar/mail-test", {
+          method: "POST",
+          body: JSON.stringify({ action }),
+        });
+        setMessage(result.message);
+      } else {
+        const result = await api<Settings>("hl-radar/mail-test", {
+          method: "POST",
+          body: JSON.stringify({ action, code: receiptCode }),
+        });
+        setOverride(result);
+        setReceiptCode("");
+        setMessage("真实收件已确认，可以开启雷达邮件");
+      }
+    } catch (e) {
+      setMessage((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  }
   async function toggle() {
     if (!settings) return;
     setSaving(true);
@@ -323,6 +349,42 @@ export function RadarPage() {
         {!settings?.receiptVerified && <small>真实收件验收待完成</small>}
         <span role="status">{message}</span>
       </section>
+      {!settings?.receiptVerified && (
+        <section className="radar-receipt" aria-label="收件验收">
+          <p>
+            先向已配置的收件箱发送测试，再输入邮件里的验收码。每次测试计入发送额度，不自动重发。
+          </p>
+          <div className="radar-controls">
+            <button
+              disabled={saving || !settings?.configured || settings.offline}
+              onClick={() => acceptMail("test")}
+            >
+              发送收件测试
+            </button>
+            <label>
+              收件验收码{" "}
+              <input
+                aria-label="收件验收码"
+                autoComplete="off"
+                value={receiptCode}
+                maxLength={32}
+                onChange={(e) => setReceiptCode(e.target.value)}
+              />
+            </label>
+            <button
+              disabled={
+                saving ||
+                receiptCode.trim().length !== 32 ||
+                !settings?.configured ||
+                settings.offline
+              }
+              onClick={() => acceptMail("confirm")}
+            >
+              确认实际收件
+            </button>
+          </div>
+        </section>
+      )}
       <p className="helper">
         100 万美元名义仓位起提醒；25
         万美元起核验。仅部分覆盖，不承诺零漏报。数据过期时历史金额保留，当前判断暂停。

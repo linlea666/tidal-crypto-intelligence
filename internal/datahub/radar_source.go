@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -44,6 +45,7 @@ type radarWeight struct {
 	ID uint64
 }
 type radarRuntime struct {
+	receipt    atomic.Int64
 	mu         sync.Mutex
 	candidates map[string]*radarCandidate
 	seen       map[string]time.Time
@@ -207,7 +209,8 @@ func (h *Hub) radarDiscover(t radarTrade, now time.Time) error {
 		return nil
 	}
 	rate, _, fx := h.Rate("USDC", now)
-	if !fx {
+	fxRate, rateOK := radarNumber(rate)
+	if !fx || !rateOK || !fxRate.IsPositive() {
 		return errors.New("雷达美元换汇缺失，候选判断暂停")
 	}
 	r := h.radar
@@ -254,7 +257,7 @@ func (h *Hub) radarDiscover(t radarTrade, now time.Time) error {
 		if c.Minutes[slot].At != minute {
 			c.Minutes[slot] = radarMinute{At: minute}
 		}
-		c.Minutes[slot].Value = c.Minutes[slot].Value.Add(px.Mul(sz).Mul(dec(rate)))
+		c.Minutes[slot].Value = c.Minutes[slot].Value.Add(px.Mul(sz).Mul(fxRate))
 		total := decimal.Zero
 		for _, m := range c.Minutes {
 			if m.At >= minute-14 {
@@ -297,18 +300,27 @@ func (h *Hub) radarFetch(ctx context.Context, address string, now time.Time) err
 	if full {
 		from = now.Add(-30 * 24 * time.Hour)
 	}
+	// Obtain the current position before optional deep history consumes quota.
+	// Five full pages alone cost 600 weight. A timed-out history lookup must
+	// degrade age evidence, not make the mandatory account query unreachable.
+	var a radarAccount
+	if err = r.query(ctx, map[string]any{"type": "clearinghouseState", "user": address}, 2, &a); err != nil {
+		return err
+	}
+	historyCtx, stopHistory := context.WithTimeout(ctx, 20*time.Second)
 	fills := []radarFill{}
 	complete := true
 	cursor := from.UnixMilli()
 	seen := map[string]radarFill{}
 	for page := 0; page < 5; page++ {
 		var batch []radarFill
-		err = r.query(ctx, map[string]any{"type": "userFillsByTime", "user": address, "startTime": cursor, "endTime": now.UnixMilli(), "aggregateByTime": false}, 120, &batch)
+		err = r.query(historyCtx, map[string]any{"type": "userFillsByTime", "user": address, "startTime": cursor, "endTime": now.UnixMilli(), "aggregateByTime": false}, 120, &batch)
 		if err != nil {
 			complete = false
 			break
 		}
 		if len(batch) > 2000 {
+			stopHistory()
 			return errors.New("用户成交条数超过契约")
 		}
 		last := cursor
@@ -323,6 +335,7 @@ func (h *Hub) radarFetch(ctx context.Context, address string, now time.Time) err
 			}
 			k := radarFillID(f)
 			if prior, exists := seen[k]; exists && prior != f {
+				stopHistory()
 				return errors.New("同次历史查询成交身份冲突")
 			} else if !exists {
 				seen[k] = f
@@ -343,6 +356,7 @@ func (h *Hub) radarFetch(ctx context.Context, address string, now time.Time) err
 		}
 		cursor = last // inclusive replay avoids losing same-millisecond fills
 	}
+	stopHistory()
 	if len(fills) == 0 && err != nil {
 		return err
 	}
@@ -355,7 +369,9 @@ func (h *Hub) radarFetch(ctx context.Context, address string, now time.Time) err
 	}
 	if full || newOpening || now.Sub(w.LedgerThrough) > 5*time.Minute {
 		var ledger []radarLedger
-		le := r.query(ctx, map[string]any{"type": "userNonFundingLedgerUpdates", "user": address, "startTime": w.HistoryFrom.UnixMilli(), "endTime": now.UnixMilli()}, 120, &ledger)
+		ledgerCtx, stopLedger := context.WithTimeout(ctx, 8*time.Second)
+		le := r.query(ledgerCtx, map[string]any{"type": "userNonFundingLedgerUpdates", "user": address, "startTime": w.HistoryFrom.UnixMilli(), "endTime": now.UnixMilli()}, 120, &ledger)
+		stopLedger()
 		ledgerComplete := le == nil && len(ledger) < 2000
 		if le != nil || len(ledger) >= 2000 {
 			complete = false
@@ -402,10 +418,12 @@ func (h *Hub) radarFetch(ctx context.Context, address string, now time.Time) err
 			} `json:"data"`
 		}
 		if full || w.Role == "" {
-			if re := r.query(ctx, map[string]any{"type": "userRole", "user": address}, 60, &role); re == nil {
+			roleCtx, stopRole := context.WithTimeout(ctx, 5*time.Second)
+			if re := r.query(roleCtx, map[string]any{"type": "userRole", "user": address}, 60, &role); re == nil {
 				w.Role = role.Role
 				w.Master = role.Data.Master
 			}
+			stopRole()
 		}
 		w.HistoryComplete = complete && (full || w.HistoryComplete)
 		if full {
@@ -416,10 +434,6 @@ func (h *Hub) radarFetch(ctx context.Context, address string, now time.Time) err
 	} else if !complete {
 		w.HistoryComplete = false
 		w.HistoryNote = "增量成交查询缺口，历史完整度已降级"
-	}
-	var a radarAccount
-	if err = r.query(ctx, map[string]any{"type": "clearinghouseState", "user": address}, 2, &a); err != nil {
-		return err
 	}
 	if err = h.radarApply(ctx, w, fills, a, time.Now().UTC()); err != nil {
 		return err
