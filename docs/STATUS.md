@@ -4,7 +4,7 @@
 
 2026年10月8日北京时间，Hyperliquid 异常建仓雷达通过 [PR #25](https://github.com/linlea666/tidal-crypto-intelligence/pull/25) 与测试边界补丁 [PR #26](https://github.com/linlea666/tidal-crypto-intelligence/pull/26)，经稳定 [v2.14.1](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.14.1) 和 [Release流水线37665630324](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/37665630324) 成功部署。生产revision `cd970fbcd1ec801157b71815adfe0814d9737852`，digest `sha256:88df418720b440dd057e12c8365025cb6f50d2dd74bec09d676026c27fb7f8a1`，容器启动 `2026-10-07T18:22:58.026079593Z`。v2.14.0因测试时间夹具失败未部署，原标签和失败证据保留。
 
-主体最终检查37661326504、补丁PR检查37665021209的全部适用任务通过。补丁仅测试/文档，生产代码与主体资源回放一致；补丁资源产物11503861023也已下载核对：953.37秒、完整并发维护365.18秒、1.7核/768MiB、Docker峰值178.2MiB，无OOM、退出0，雷达 offered/delivered=36,510/36,510、REST76、事件19、缺口/拒绝0。发布自身完整race、镜像和生产Compose检查通过。五小时长测未执行，不当作通过；短回放不是长期容量证明。
+主体最终检查37661326504、补丁PR检查37665021209的全部适用任务通过。补丁仅测试/文档，生产代码与主体资源回放一致；补丁资源产物11503861023也已下载核对：953.37秒、完整并发维护365.18秒、1.7核/768MiB、Docker峰值178.2MiB，无OOM、退出0，雷达 offered/delivered=36,510/36,510、REST76、事件19、缺口/拒绝0。最终生产revision的主分支检查37665605140也全部适用项通过；产物11502359748核对943.08秒、完整维护363.38秒、Docker峰值175.6MiB，雷达36,330条全部接收、76次REST、19事件、无缺口/拒绝/OOM，退出0。发布自身完整race、镜像和生产Compose检查通过。五小时长测未执行，不当作通过；短回放不是长期容量证明。
 
 生产两轮兼容对照：原54条BTC信号冻结字段、79条通知ID与cutover保持，模拟代次 `e3f636af4201c419e10cfb9320c56b46`、原始起点 `2026-10-06T17:06:38.695038885Z`、消费游标5和run模式保留，VIX/链上邮件开关保持。现有paper报价缺口仍发生，最近观察覆盖约82.42%；旧盘口历史容量暂停也保持。不能将这些既有质量问题标为本次已修复。
 
