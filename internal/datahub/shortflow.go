@@ -55,6 +55,9 @@ type ShortZone struct {
 	Reference float64   `json:"referencePrice"`
 }
 type ShortObservation struct {
+	Registration      string                `json:"registration,omitempty"`
+	RegistrationError string                `json:"registrationError,omitempty"`
+	ProjectionError   string                `json:"projectionError,omitempty"`
 	Pipeline          string                `json:"pipelineVersion,omitempty"`
 	InputVersion      string                `json:"inputVersion,omitempty"`
 	FirstGenerated    *time.Time            `json:"firstGeneratedAt"`

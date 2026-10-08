@@ -161,12 +161,17 @@ type paperEquityPoint struct {
 	Value *decimal.Decimal `json:"value"`
 }
 type paperCurve struct {
-	Points                 []paperEquityPoint `json:"points"`
-	MaximumDrawdown        *decimal.Decimal   `json:"maximumObservedDrawdown"`
-	MaximumDrawdownPercent *decimal.Decimal   `json:"maximumObservedDrawdownPercent"`
-	ExposedSeconds         int64              `json:"exposedSeconds"`
-	GapSamples             int                `json:"gapSamples"`
-	Resolution             int                `json:"resolutionSeconds"`
+	DrawdownLowerBound        *decimal.Decimal   `json:"drawdownLowerBound"`
+	DrawdownLowerBoundPercent *decimal.Decimal   `json:"drawdownLowerBoundPercent"`
+	CompleteDrawdown          *decimal.Decimal   `json:"completeSampledDrawdown"`
+	CompleteDrawdownPercent   *decimal.Decimal   `json:"completeSampledDrawdownPercent"`
+	DrawdownComplete          bool               `json:"drawdownComplete"`
+	Points                    []paperEquityPoint `json:"points"`
+	MaximumDrawdown           *decimal.Decimal   `json:"maximumObservedDrawdown"`
+	MaximumDrawdownPercent    *decimal.Decimal   `json:"maximumObservedDrawdownPercent"`
+	ExposedSeconds            int64              `json:"exposedSeconds"`
+	GapSamples                int                `json:"gapSamples"`
+	Resolution                int                `json:"resolutionSeconds"`
 }
 
 func (p *paperStore) equityCurve(ctx context.Context, s paperState, group string, now time.Time) (paperCurve, error) {
@@ -184,9 +189,11 @@ func paperEquityCurve(ctx context.Context, reader paperQuerier, s paperState, gr
 	}
 	defer r.Close()
 	var peak *decimal.Decimal
+	knownPeak := paperInitial
+	lower, lowerPct := decimal.Zero, decimal.Zero
 	maxDrop, maxPercent, funded := decimal.Zero, decimal.Zero, decimal.Zero
 	index := 0
-	var last time.Time
+	var last, first time.Time
 	valid := 0
 	for r.Next() {
 		var raw []byte
@@ -200,6 +207,17 @@ func paperEquityCurve(ctx context.Context, reader paperQuerier, s paperState, gr
 		for index < len(funding) && !funding[index].Funding.At.After(e.At) {
 			funded = funded.Add(funding[index].Amount)
 			index++
+		}
+		if e.BeforeFunding != nil && paperFundingKnown(s, e.At, false) {
+			value := e.BeforeFunding.Add(funded)
+			knownPeak = decimal.Max(knownPeak, value)
+			lower = decimal.Max(lower, knownPeak.Sub(value))
+			if knownPeak.IsPositive() {
+				lowerPct = decimal.Max(lowerPct, knownPeak.Sub(value).Div(knownPeak).Mul(decimal.NewFromInt(100)))
+			}
+		}
+		if first.IsZero() {
+			first = e.At
 		}
 		point := paperEquityPoint{At: e.At}
 		gap := e.BeforeFunding == nil || !paperFundingKnown(s, e.At, false) || !last.IsZero() && e.At.Sub(last) > 65*time.Second
@@ -236,6 +254,11 @@ func paperEquityCurve(ctx context.Context, reader paperQuerier, s paperState, gr
 	}
 	if valid > 0 {
 		curve.MaximumDrawdown, curve.MaximumDrawdownPercent = &maxDrop, &maxPercent
+		curve.DrawdownLowerBound, curve.DrawdownLowerBoundPercent = &lower, &lowerPct
+		curve.DrawdownComplete = curve.GapSamples == 0 && !s.EquityGap && !last.IsZero() && !last.After(now) && now.Sub(last) <= 65*time.Second && s.Origin != nil && first.Sub(*s.Origin) <= 65*time.Second && !first.Before(*s.Origin)
+		if curve.DrawdownComplete {
+			curve.CompleteDrawdown, curve.CompleteDrawdownPercent = &lower, &lowerPct
+		}
 	}
 	return curve, r.Err()
 }

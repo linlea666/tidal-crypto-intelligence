@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -55,6 +56,22 @@ CREATE TRIGGER IF NOT EXISTS sf_removed AFTER DELETE ON sf_records BEGIN UPDATE 
 		return err
 	}
 	w.shortResearch = db
+	// Copy only bounded display metadata. Preserve the legacy rows and origins.
+	for _, key := range []string{"short-flow/current", "short-flow/report", "short-flow/gap", "short-flow/runtime-v2"} {
+		var raw []byte
+		e := w.db.QueryRow("SELECT payload FROM state WHERE key=?", key).Scan(&raw)
+		if e != nil && e != sql.ErrNoRows {
+			return e
+		}
+		if e == nil && len(raw) <= shortFlowRowLimit {
+			if _, e = w.shortDB().Exec("INSERT OR IGNORE INTO sf_records VALUES('state',?,?,?)", key, now.Unix(), raw); e != nil {
+				return e
+			}
+		}
+	}
+	if w.shortState(context.Background(), "short-flow/runtime-v2", &runtime) && runtime.Version == ShortPipeline {
+		w.shortRuntime = &runtime
+	}
 	return pipelineErr
 }
 
@@ -78,7 +95,27 @@ func (w *Warehouse) shortSaveState(ctx context.Context, key string, v any) error
 	if len(b) > shortFlowRowLimit {
 		return errors.New("短周期状态工作集超限")
 	}
-	_, e = boundedExec(ctx, w.db, 5000, "INSERT INTO state(key,payload) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", key, b)
+	if key == "short-flow/current" || key == "short-flow/report" {
+		w.mu.Lock()
+		if w.shortProjection == nil {
+			w.shortProjection = map[string]json.RawMessage{}
+		}
+		w.shortProjection[key] = b
+		w.mu.Unlock()
+	}
+	_, e = boundedExec(ctx, w.shortDB(), 1500, "INSERT INTO sf_records VALUES('state',?,?,?) ON CONFLICT(kind,id) DO UPDATE SET at=excluded.at,payload=excluded.payload", key, time.Now().Unix(), b)
+	if key == "short-flow/gap" {
+		w.mu.Lock()
+		if e == nil {
+			w.shortGapVolatile = nil
+		} else {
+			var g shortGap
+			if json.Unmarshal(b, &g) == nil && g.Paused {
+				w.shortGapVolatile = &g
+			}
+		}
+		w.mu.Unlock()
+	}
 	return shortWriteError(e)
 }
 func (w *Warehouse) shortState(ctx context.Context, key string, v any) bool {
@@ -86,7 +123,28 @@ func (w *Warehouse) shortState(ctx context.Context, key string, v any) bool {
 }
 func (w *Warehouse) shortStateResult(ctx context.Context, key string, v any) error {
 	var b []byte
-	if e := w.db.QueryRowContext(ctx, "SELECT payload FROM state WHERE key=?", key).Scan(&b); e != nil {
+	if !strings.HasPrefix(key, "short-flow/") {
+		if err := w.db.QueryRowContext(ctx, "SELECT payload FROM state WHERE key=?", key).Scan(&b); err != nil {
+			return err
+		}
+		return json.Unmarshal(b, v)
+	}
+	if key == "short-flow/gap" {
+		w.mu.RLock()
+		g := w.shortGapVolatile
+		w.mu.RUnlock()
+		if g != nil {
+			b, _ := json.Marshal(g)
+			return json.Unmarshal(b, v)
+		}
+	}
+	w.mu.RLock()
+	cached := w.shortProjection[key]
+	w.mu.RUnlock()
+	if cached != nil {
+		return json.Unmarshal(cached, v)
+	}
+	if e := w.shortDB().QueryRowContext(ctx, "SELECT payload FROM sf_records WHERE kind='state' AND id=?", key).Scan(&b); e != nil {
 		return e
 	}
 	if len(b) > shortFlowRowLimit {
@@ -121,15 +179,9 @@ func (w *Warehouse) shortGap(now time.Time, e error, pause ...bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 	var g shortGap
-	var raw []byte
-	err := w.db.QueryRowContext(ctx, "SELECT payload FROM state WHERE key='short-flow/gap'").Scan(&raw)
+	err := w.shortStateResult(ctx, "short-flow/gap", &g)
 	if err != nil && err != sql.ErrNoRows {
 		return
-	}
-	if err == nil {
-		if json.Unmarshal(raw, &g) != nil {
-			return
-		}
 	}
 	wasPaused := g.Paused
 	g.At, g.Reason, g.Paused = now, e.Error(), true
@@ -280,25 +332,38 @@ func (h *Hub) shortObservationStep(ctx context.Context, now time.Time) error {
 	s.At = now.Add(time.Since(inputStart))
 	s.Refreshed = flowPtr(s.At)
 	publication, pubErr := h.shortPublication(ctx, &s, s.At)
-	// Current observations remain available when research storage is full.
-	if e = h.Store.shortSaveState(ctx, "short-flow/current", s); e != nil {
-		return e
+	// Publication and research precede the replaceable display cache. A failed
+	// cache write cannot turn a durably registered observation into a gap.
+	registrationErr := pubErr
+	if registrationErr == nil && publication != nil {
+		registrationErr = h.Store.shortPut(ctx, "publication", s.InputVersion, s.Through, publication)
 	}
-	if pubErr != nil {
-		return pubErr
+	if registrationErr == nil && baselineErr != nil && baselineErr != sql.ErrNoRows {
+		registrationErr = baselineErr
 	}
-	if publication != nil {
-		if e := h.Store.shortPut(ctx, "publication", s.InputVersion, s.Through, publication); e != nil {
-			return e
-		}
+	if registrationErr == nil && gapErr != nil && gapErr != sql.ErrNoRows {
+		registrationErr = gapErr
 	}
-	if baselineErr != nil && baselineErr != sql.ErrNoRows {
-		return baselineErr
+	if registrationErr == nil {
+		registrationErr = h.recordShortObservation(ctx, s, now)
 	}
-	if gapErr != nil && gapErr != sql.ErrNoRows {
-		return gapErr
+	s.Registration = "registered"
+	if registrationErr != nil {
+		s.Registration = "unregistered"
+		s.RegistrationError = registrationErr.Error()
 	}
-	return h.recordShortObservation(ctx, s, now)
+	cacheErr := h.Store.shortSaveState(ctx, "short-flow/current", s)
+	if cacheErr != nil { // The bounded volatile projection remains readable.
+		s.ProjectionError = "展示状态未持久化；重启后可能暂不可用"
+		b, _ := json.Marshal(s)
+		h.Store.mu.Lock()
+		h.Store.shortProjection["short-flow/current"] = b
+		h.Store.mu.Unlock()
+	}
+	if registrationErr != nil {
+		return registrationErr
+	}
+	return nil
 }
 
 func (h *Hub) shortZones(ctx context.Context, s *ShortObservation, now time.Time) {

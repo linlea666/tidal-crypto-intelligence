@@ -177,9 +177,10 @@ func paperParameters() json.RawMessage {
 }
 
 type paperEvent struct {
-	At     time.Time `json:"at"`
-	Kind   string    `json:"kind"`
-	Reason string    `json:"reason"`
+	Diagnostics *paperDiagnosticView `json:"diagnostics,omitempty"`
+	At          time.Time            `json:"at"`
+	Kind        string               `json:"kind"`
+	Reason      string               `json:"reason"`
 }
 type paperEquity struct {
 	At              time.Time        `json:"at"`

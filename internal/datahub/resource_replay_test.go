@@ -195,8 +195,10 @@ func TestResourceReplay(t *testing.T) {
 	}
 	legacyCtx, stopLegacy := context.WithTimeout(ctx, 200*time.Millisecond)
 	beforeWait := time.Now()
-	var previous ShortObservation
-	h.Store.shortState(legacyCtx, "short-flow/current", &previous)
+	// Explicitly exercise the retired hub-state query. shortState now routes
+	// to the research projection and must no longer wait on this occupied pool.
+	var previous []byte
+	_ = h.Store.db.QueryRowContext(legacyCtx, "SELECT payload FROM state WHERE key=?", "short-flow/current").Scan(&previous)
 	oldDuration, oldError := time.Since(beforeWait), legacyCtx.Err()
 	stopLegacy()
 	nextCtx, stopNext := context.WithTimeout(ctx, 1650*time.Millisecond)

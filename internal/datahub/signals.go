@@ -43,39 +43,43 @@ type SignalBaseline struct {
 	Median60     float64              `json:"median60VolumeCents"`
 }
 type Signal struct {
-	Multifactor           *FlowSnapshot    `json:"multifactor,omitempty"`
-	MultifactorUpgrade    *FlowSnapshot    `json:"multifactorUpgrade,omitempty"`
-	ConfirmationSnapshot  *FlowSnapshot    `json:"confirmationSnapshot,omitempty"`
-	Progress              *PriceProgress   `json:"priceProgress,omitempty"`
-	ConfirmedThrough      *time.Time       `json:"confirmedDataThrough,omitempty"`
-	Level                 string           `json:"level,omitempty"`
-	Features              *SignalFeatures  `json:"features,omitempty"`
-	Upgrade               *SignalUpgrade   `json:"strongUpgrade,omitempty"`
-	Repair                *LifecycleRepair `json:"lifecycleRepair,omitempty"`
-	DetectionDelaySeconds *float64         `json:"detectionDelaySeconds"`
-	Evaluation            string           `json:"evaluationVersion,omitempty"`
-	ID                    string           `json:"id"`
-	Asset                 string           `json:"asset"`
-	Direction             string           `json:"direction"`
-	Pattern               string           `json:"pattern"`
-	State                 string           `json:"state"`
-	Rules                 string           `json:"rulesVersion"`
-	At                    time.Time        `json:"at"`
-	DataThrough           time.Time        `json:"dataThrough"`
-	Updated               time.Time        `json:"updatedAt"`
-	ConfirmedAt           *time.Time       `json:"confirmedAt"`
-	Expires               time.Time        `json:"expiresAt"`
-	FrozenHigh            float64          `json:"frozenHigh"`
-	FrozenLow             float64          `json:"frozenLow"`
-	ReferencePrice        float64          `json:"referencePrice"`
-	DetectionPrice        *float64         `json:"detectionPriceUsdt"`
-	ATR                   *float64         `json:"atr1h"`
-	Net15                 int64            `json:"net15Cents"`
-	BuyShare              *float64         `json:"buyShare"`
-	Baseline              SignalBaseline   `json:"baseline"`
-	Evidence              []string         `json:"evidence"`
-	Conflicts             []string         `json:"conflicts"`
-	Missing               []string         `json:"missing"`
+	ComputedAt             *time.Time       `json:"computedAt,omitempty"`
+	ConfirmationComputedAt *time.Time       `json:"confirmationComputedAt,omitempty"`
+	CoreInputFirstSeenAt   *time.Time       `json:"coreInputFirstSeenAt,omitempty"`
+	CoreInputAvailableAt   *time.Time       `json:"coreInputAvailableAt,omitempty"`
+	Multifactor            *FlowSnapshot    `json:"multifactor,omitempty"`
+	MultifactorUpgrade     *FlowSnapshot    `json:"multifactorUpgrade,omitempty"`
+	ConfirmationSnapshot   *FlowSnapshot    `json:"confirmationSnapshot,omitempty"`
+	Progress               *PriceProgress   `json:"priceProgress,omitempty"`
+	ConfirmedThrough       *time.Time       `json:"confirmedDataThrough,omitempty"`
+	Level                  string           `json:"level,omitempty"`
+	Features               *SignalFeatures  `json:"features,omitempty"`
+	Upgrade                *SignalUpgrade   `json:"strongUpgrade,omitempty"`
+	Repair                 *LifecycleRepair `json:"lifecycleRepair,omitempty"`
+	DetectionDelaySeconds  *float64         `json:"detectionDelaySeconds"`
+	Evaluation             string           `json:"evaluationVersion,omitempty"`
+	ID                     string           `json:"id"`
+	Asset                  string           `json:"asset"`
+	Direction              string           `json:"direction"`
+	Pattern                string           `json:"pattern"`
+	State                  string           `json:"state"`
+	Rules                  string           `json:"rulesVersion"`
+	At                     time.Time        `json:"at"`
+	DataThrough            time.Time        `json:"dataThrough"`
+	Updated                time.Time        `json:"updatedAt"`
+	ConfirmedAt            *time.Time       `json:"confirmedAt"`
+	Expires                time.Time        `json:"expiresAt"`
+	FrozenHigh             float64          `json:"frozenHigh"`
+	FrozenLow              float64          `json:"frozenLow"`
+	ReferencePrice         float64          `json:"referencePrice"`
+	DetectionPrice         *float64         `json:"detectionPriceUsdt"`
+	ATR                    *float64         `json:"atr1h"`
+	Net15                  int64            `json:"net15Cents"`
+	BuyShare               *float64         `json:"buyShare"`
+	Baseline               SignalBaseline   `json:"baseline"`
+	Evidence               []string         `json:"evidence"`
+	Conflicts              []string         `json:"conflicts"`
+	Missing                []string         `json:"missing"`
 }
 type signalState struct {
 	InputVersion string                `json:"inputVersion"`
@@ -335,15 +339,36 @@ func confirms(s Signal, bars map[int64]FlowBar, candles map[int64]Candle, end ti
 	return true
 }
 func (h *Hub) signalInput(ctx context.Context, a string, from, to, asOf time.Time) (map[int64]FlowBar, map[int64]Candle, error) {
+	return h.signalInputObserved(ctx, a, from, to, asOf, nil)
+}
+
+type signalInputClock struct {
+	First, Available time.Time
+	Unknown          bool
+}
+
+func (c *signalInputClock) observe(o Observation) {
+	if c == nil {
+		return
+	}
+	if o.FirstFetchedAt == nil {
+		c.Unknown = true
+	} else {
+		c.First = maxTime(c.First, *o.FirstFetchedAt)
+	}
+	c.Available = maxTime(c.Available, o.FetchedAt)
+}
+func (h *Hub) signalInputObserved(ctx context.Context, a string, from, to, asOf time.Time, clock *signalInputClock) (map[int64]FlowBar, map[int64]Candle, error) {
 	acc := newFlowAccumulator(300)
 	candles := map[int64]Candle{}
 	fd := ID("flow", a, "", "spot")
-	e := h.Store.FactsAsOf(ctx, fd, from, to, asOf, func(o Observation) error { acc.add(o); return nil })
+	e := h.Store.FactsAsOf(ctx, fd, from, to, asOf, func(o Observation) error { clock.observe(o); acc.add(o); return nil })
 	if e != nil {
 		return nil, nil, e
 	}
 	e = h.Store.FactsAsOf(ctx, ID("candles", a, "Binance", "spot"), from, to, asOf, func(o Observation) error {
 		if o.Payload.Candle != nil && o.Quality == "valid" && o.Resolution == 300 && recordTime(o).Unix()%300 == 0 && !recordTime(o).Add(5*time.Minute).After(to) && !recordTime(o).Add(5*time.Minute).After(asOf) {
+			clock.observe(o)
 			candles[recordTime(o).Unix()] = *o.Payload.Candle
 		}
 		return nil
@@ -423,7 +448,8 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 			return err
 		}
 		state.InputVersion = version
-		bars, candles, e := h.signalInput(ctx, a, end.Add(-16*time.Hour), end, now)
+		clock := &signalInputClock{}
+		bars, candles, e := h.signalInputObserved(ctx, a, end.Add(-16*time.Hour), end, now, clock)
 		if e != nil {
 			return e
 		}
@@ -572,6 +598,17 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 		if newBar {
 			state.Last = end
 		}
+		for i := range updates {
+			s := &updates[i]
+			if notices[s.ID] == "anomaly" {
+				if !clock.Unknown && !clock.First.IsZero() {
+					s.CoreInputFirstSeenAt = flowPtr(clock.First)
+				}
+				if !clock.Available.IsZero() {
+					s.CoreInputAvailableAt = flowPtr(clock.Available)
+				}
+			}
+		}
 		if e := h.commitSignals(ctx, a, state, updates, notices, now); e != nil {
 			return e
 		}
@@ -580,6 +617,13 @@ func (h *Hub) processSignals(ctx context.Context, now time.Time) error {
 }
 func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, updates []Signal, notices map[string]string, now time.Time) error {
 	candidateAllowed := h.candidateMailAllowed(ctx, now)
+	// Never wait for the hub pool while holding the research writer lock.
+	var cutover time.Time
+	cutoverErr := h.Store.shortStateResult(ctx, "signals/multifactor-cutover", &cutover)
+	if cutoverErr != nil && cutoverErr != sql.ErrNoRows {
+		return cutoverErr
+	}
+	cutoverActive := cutoverErr == nil
 	tx, e := h.Store.research.BeginTx(ctx, nil)
 	if e != nil {
 		return e
@@ -593,7 +637,33 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 		_, e = tx.ExecContext(ctx, "INSERT INTO documents VALUES(?,?,?,?,?) ON CONFLICT(kind,id) DO UPDATE SET at=excluded.at,payload=excluded.payload", kind, id, a, at.Unix(), b)
 		return e
 	}
+	newPublications := []string{}
 	for _, s := range updates {
+		computed := time.Now().UTC()
+		existing := false
+		if notices[s.ID] == "anomaly" {
+			var raw []byte
+			err := tx.QueryRowContext(ctx, "SELECT payload FROM documents WHERE kind='signal' AND id=?", s.ID).Scan(&raw)
+			if err != nil && err != sql.ErrNoRows {
+				return err
+			}
+			if err == nil {
+				var old Signal
+				if err = json.Unmarshal(raw, &old); err != nil {
+					return err
+				}
+				existing = true
+				s.ComputedAt = old.ComputedAt
+				s.CoreInputFirstSeenAt = old.CoreInputFirstSeenAt
+				s.CoreInputAvailableAt = old.CoreInputAvailableAt
+			}
+		}
+		if notices[s.ID] == "anomaly" && s.ComputedAt == nil && !existing {
+			s.ComputedAt = &computed
+		}
+		if notices[s.ID] == "confirmed" && s.ConfirmationComputedAt == nil {
+			s.ConfirmationComputedAt = &computed
+		}
 		if e = put("signal", s.ID, s.At, s); e != nil {
 			return e
 		}
@@ -603,13 +673,20 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 			if err != nil {
 				return err
 			}
-			if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO signal_publications(id,at,payload) VALUES(?,?,?)", s.Rules+"/"+s.ID, now.UnixMilli(), b); err != nil {
+			result, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO signal_publications(id,at,payload) VALUES(?,?,?)", s.Rules+"/"+s.ID, now.UnixMilli(), b)
+			if err != nil {
 				return err
+			}
+			n, err := result.RowsAffected()
+			if err != nil {
+				return err
+			}
+			if n == 1 {
+				newPublications = append(newPublications, s.ID)
 			}
 		}
 		allowed := s.Rules != CandidateRules || candidateAllowed && s.Level == "strong" && (kind == "strong" || kind == "confirmed")
-		var cutover time.Time
-		if h.Store.LoadState("signals/multifactor-cutover", &cutover) {
+		if cutoverActive {
 			allowed = s.Rules == MultifactorRules && (kind == "anomaly" || kind == "confirmed")
 			if s.Rules != MultifactorRules && kind == "confirmed" && !s.At.After(cutover) && now.Before(s.Expires) {
 				var n int
@@ -636,7 +713,23 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 	if e = put("signal-engine", a, now, state); e != nil {
 		return e
 	}
-	return tx.Commit()
+	if e = tx.Commit(); e != nil {
+		return e
+	}
+	// Read after commit: an observed upper bound of availability, never the
+	// scheduled tick or a timestamp retrospectively assigned to old events.
+	for _, id := range newPublications {
+		var committed Signal
+		if e = h.Store.document(ctx, "signal", id, &committed); e != nil {
+			return e
+		}
+		at := time.Now().UTC()
+		raw, _ := json.Marshal(map[string]any{"firstReadableAt": at, "computedAt": committed.ComputedAt})
+		if _, e = h.Store.research.ExecContext(ctx, "INSERT OR IGNORE INTO documents VALUES('signal-clock',?,?,?,?)", id, a, at.Unix(), raw); e != nil {
+			return e
+		}
+	}
+	return nil
 }
 func (h *Hub) SignalsView(ctx context.Context, a, id string, rules ...string) (any, error) {
 	if !researchAsset(a) {

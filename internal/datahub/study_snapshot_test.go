@@ -214,7 +214,7 @@ func TestShortPublicationNoRewriteAndFailureSurvivesSuccess(t *testing.T) {
 	if err = h.Store.shortSaveState(ctx, "short-flow/current", s); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = h.Store.db.Exec("INSERT INTO state VALUES('short-flow/gap',x'01') ON CONFLICT(key) DO UPDATE SET payload=x'01'"); err != nil {
+	if _, err = h.Store.shortDB().Exec("INSERT INTO sf_records VALUES('state','short-flow/gap',0,x'01') ON CONFLICT(kind,id) DO UPDATE SET payload=x'01'"); err != nil {
 		t.Fatal(err)
 	}
 	view := h.shortObservationView(now).(ShortObservation)
@@ -224,7 +224,7 @@ func TestShortPublicationNoRewriteAndFailureSurvivesSuccess(t *testing.T) {
 }
 func TestBoundedShortWriteHonorsRemainingBudget(t *testing.T) {
 	w := testStore(t)
-	other, err := database(filepath.Join(w.Root(), "hub.sqlite"))
+	other, err := database(filepath.Join(w.Root(), "research.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestBoundedShortWriteHonorsRemainingBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback()
-	if _, err = tx.Exec("INSERT INTO state VALUES('held',x'01')"); err != nil {
+	if _, err = tx.Exec("INSERT INTO sf_records VALUES('state','held',0,x'01')"); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -245,7 +245,7 @@ func TestBoundedShortWriteHonorsRemainingBudget(t *testing.T) {
 		t.Fatal("busy handler escaped stage budget", time.Since(start), err)
 	}
 	var timeout int
-	if err = w.db.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil || timeout != 5000 {
+	if err = w.shortDB().QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil || timeout != 1500 {
 		t.Fatal("connection policy not restored", timeout, err)
 	}
 }

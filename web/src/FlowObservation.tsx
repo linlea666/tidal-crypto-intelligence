@@ -6,7 +6,7 @@ export type FlowWindow = { minutes: number; from: string; to: string; coverage: 
 export type FlowCheck = { name: string; passed: boolean; known: boolean; actual: number | null; required: number | null };
 export type Observation = {
   rulesVersion: string; at: string; dataThrough: string; availableAt: string | null; fresh: boolean; ageSeconds: number; processingDelaySeconds: number | null;
-  firstGeneratedAt?: string | null; refreshedAt?: string | null; inputAvailableAt?: string | null; firstPublishDelaySeconds?: number | null; sourceArrivalDelaySeconds?: number | null; diagnostics?: ShortRuntime | null;
+  registration?: string; registrationError?: string; projectionError?: string; firstGeneratedAt?: string | null; refreshedAt?: string | null; inputAvailableAt?: string | null; firstPublishDelaySeconds?: number | null; sourceArrivalDelaySeconds?: number | null; diagnostics?: ShortRuntime | null;
   windows: Record<string, FlowWindow>; segments: FlowWindow[];
   hints: { minutes: number; direction: string; active: boolean; checks: FlowCheck[] }[];
   baseline: { valid: boolean; coverage: number; validDates: number; from: string; to: string; windows: Record<string, { buyP95Cents: number | null; sellP95Cents: number | null; medianVolumeCents: number | null }> };
@@ -58,6 +58,8 @@ export function FlowObservation({ s, failed }: { s?: Observation | null; failed:
     <div className="short-flow-hints" aria-live="polite">
       {!fresh ? <p>数据截止超过5分钟或读取延迟，金额保留为历史参考。</p> : hints.length ? hints.map(h => <p className={h.direction === "buy" ? "buy" : "sell"} key={`${h.minutes}-${h.direction}`}><strong>{h.minutes}分钟{h.direction === "buy" ? "买入" : "卖出"}{h.minutes === 5 ? "脉冲" : "延续观察"}</strong> · 效果验证中{netHour != null && netHour !== 0 && (netHour > 0) !== (h.direction === "buy") && " · 与1小时方向相反"}</p>) : s.baseline.valid ? <p>当前5／10分钟未满足独立观察条件；没有提示不代表没有行情。</p> : null}
       {!s.baseline.valid && <p>同周期30天基线未就绪或覆盖不足，暂停异常提示，继续展示完整成交金额。</p>}
+      {s.registration === "unregistered" && <p className="flow-error">本次观察未登记，不计入有效前向覆盖。{s.registrationError}</p>}
+      {s.projectionError && <p className="flow-error">{s.projectionError}</p>}
       {s.researchPaused && <p className="flow-error">独立验证暂停：{s.researchReason || "研究容量或写入保护"}。页面金额继续更新。</p>}
       {s.diagnostics?.stages.study?.state === "error" && !s.researchPaused && <p>结果研究最近执行异常；成交观察独立更新，验证报告可能滞后。</p>}
       {!s.baseline.valid && s.diagnostics?.stages.baseline?.state === "yielded" && <p>同周期基线已保存计算进度，准备完成前暂停异常提示。</p>}

@@ -63,3 +63,9 @@ Binance消息中的e/E、p/P及K线l/L是不同字段，必须分别解码，不
 覆盖滚动删除与新增修订不重置、失败/超时不伪装成空输入、租期和容量、备份恢复、订单计数全表对账；完整race/vet与前端检查。受限Linux原1.7核/768MiB、600MiB目标及5小时15分钟长回放必须据实验收。浏览器1440与390检查输入/缺口/错误/ETH。模拟再加金融、部分成交、资金费边界、重复事件、重启及不足样本回归。
 
 源码从最新稳定主线本地进入GitHub，经稳定Release部署，不能在生产改源码。只增加兼容字段和表；回退保留新证据，不删除原数据。72小时生产观察独立计时，未完成不计通过。
+
+## 分层改进 Release 1 补充
+
+短周期投影保存在既有 sf_records/state，旧hub行保留作兼容来源。研究登记不再依赖hub展示缓存写入，投影明确registered/unregistered；存储保护或失败不改变既有覆盖。发布后首次可读是提交后实际读取的上界观测，非精确SQLite提交瞬间，核心输入时间只描述所读取现货和价格事实，辅助因子沿用各自时钟。旧未知时间保持空。
+
+paper.feed.diagnostics是进程内有界诊断，重启清零且有startedAt，旧失败事件独立保留；报价溢出事件可含当刻diagnostics。回撤新增drawdownLowerBound/Percent与completeSampledDrawdown/Percent、drawdownComplete，原maximumObservedDrawdown字段保持连续片段定义，不再独立呈现为账户完整风险。

@@ -47,6 +47,8 @@ type Warehouse struct {
 	research                   *sql.DB
 	shortResearch              *sql.DB
 	shortRuntime               *ShortRuntime
+	shortProjection            map[string]json.RawMessage
+	shortGapVolatile           *shortGap
 	root                       string
 	db                         *sql.DB
 	write                      sync.Mutex
@@ -194,6 +196,9 @@ func (w *Warehouse) putHot(id string, o Observation) {
 	w.epoch++
 }
 func (w *Warehouse) SaveState(key string, v any) error {
+	if strings.HasPrefix(key, "short-flow/") && w.shortResearch != nil {
+		return w.shortSaveState(context.Background(), key, v)
+	}
 	b, e := json.Marshal(v)
 	if e != nil {
 		return e
@@ -202,6 +207,11 @@ func (w *Warehouse) SaveState(key string, v any) error {
 	return e
 }
 func (w *Warehouse) LoadState(key string, v any) bool {
+	if strings.HasPrefix(key, "short-flow/") && w.shortResearch != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+		defer cancel()
+		return w.shortStateResult(ctx, key, v) == nil
+	}
 	var b []byte
 	if w.db.QueryRow("SELECT payload FROM state WHERE key=?", key).Scan(&b) != nil {
 		return false

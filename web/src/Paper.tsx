@@ -89,6 +89,10 @@ type Account = {
   curve: {
     points: { at: string; value: D }[];
     maximumObservedDrawdown: D;
+    drawdownLowerBound: D;
+    drawdownLowerBoundPercent: D;
+    completeSampledDrawdown: D;
+    drawdownComplete: boolean;
     maximumObservedDrawdownPercent: D;
     exposedSeconds: number;
     gapSamples: number;
@@ -400,12 +404,16 @@ function PaperAccount({
           费用加倍净结果 <strong>{fmt(a.all.doubleCostNet)} USDT</strong>
         </p>
         <p>
-          已观察最大回撤{" "}
+          连续可见片段回撤{" "}
           <strong>
             {fmt(a.curve.maximumObservedDrawdown)} USDT /{" "}
             {fmt(a.curve.maximumObservedDrawdownPercent)}%
           </strong>
         </p>
+        <p>
+          已知净值点回撤下界 <strong>{fmt(a.curve.drawdownLowerBound)} USDT / {fmt(a.curve.drawdownLowerBoundPercent)}%</strong>
+        </p>
+        <p>完整采样回撤 <strong>{a.curve.drawdownComplete ? `${fmt(a.curve.completeSampledDrawdown)} USDT` : "未知 · 存在路径缺口"}</strong></p>
         <p>
           市场暴露时间 <strong>{age(a.curve.exposedSeconds)}</strong>
         </p>
@@ -438,7 +446,7 @@ function PaperAccount({
       )}
       <p className="paper-muted">
         每{a.curve.resolutionSeconds}
-        秒采样，包含未实现盈亏；缺口不连线。全期回撤只依据连续可见区间。
+        秒采样，包含未实现盈亏；缺口不连线。回撤下界保留缺口前已知峰值；连续片段回撤单列，均不代表缺失区间极值。
         {a.curve.gapSamples > 0
           ? `${a.curve.gapSamples}个缺失采样使完整最大回撤不可确认；`
           : ""}
