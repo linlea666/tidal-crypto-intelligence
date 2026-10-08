@@ -3,6 +3,7 @@ package datahub
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -49,13 +50,22 @@ type HistoryGap struct {
 	Reason string    `json:"reason"`
 }
 type Job struct {
-	ReusedLocal bool         `json:"reusedLocal,omitempty"`
-	RangeStart  *time.Time   `json:"requestedFrom,omitempty"`
-	RangeEnd    *time.Time   `json:"requestedTo,omitempty"`
-	Covered     []OrderRange `json:"covered,omitempty"`
-	Gaps        []HistoryGap `json:"gaps,omitempty"`
-	ErrorKind   string       `json:"errorKind,omitempty"`
-	Purpose     string       `json:"purpose,omitempty"`
+	FetchSeconds           *float64     `json:"fetchSeconds"`
+	QueueWaitSeconds       float64      `json:"queueWaitSeconds"`
+	SuccessIntervalSeconds *float64     `json:"successIntervalSeconds"`
+	SourceLagSeconds       *float64     `json:"sourceLagSeconds"`
+	TimelySamples          int64        `json:"timelySamples"`
+	ObservedSamples        int64        `json:"observedSamples"`
+	DiagnosticThrough      *time.Time   `json:"diagnosticThrough"`
+	LastFailureAt          *time.Time   `json:"lastFailureAt,omitempty"`
+	LastFailure            string       `json:"lastFailure,omitempty"`
+	ReusedLocal            bool         `json:"reusedLocal,omitempty"`
+	RangeStart             *time.Time   `json:"requestedFrom,omitempty"`
+	RangeEnd               *time.Time   `json:"requestedTo,omitempty"`
+	Covered                []OrderRange `json:"covered,omitempty"`
+	Gaps                   []HistoryGap `json:"gaps,omitempty"`
+	ErrorKind              string       `json:"errorKind,omitempty"`
+	Purpose                string       `json:"purpose,omitempty"`
 
 	ContractStatus string       `json:"contractStatus,omitempty"`
 	OrderRanges    []OrderRange `json:"orderRanges,omitempty"`
@@ -219,6 +229,33 @@ func NewScheduler(store *Warehouse, registry []Dataset, fetch Fetcher, enabled b
 			if j.Next.Before(now) {
 				j.Next = now.Add(phase)
 			}
+			if prev.Dataset.Collection != d.Collection || prev.Dataset.Refresh != d.Refresh {
+				j.Next = now.Add(phase)
+				if coreFiveFoot(d) {
+					j.Disabled = false
+				}
+			}
+		}
+		if d.Collection == BookFlowCollection && (coreBook(d) || minuteFoot(d)) {
+			phaseSeconds := 6
+			if d.Venue == "OKX" {
+				phaseSeconds += 26
+			}
+			if minuteFoot(d) {
+				phaseSeconds += 13
+			}
+			if _, exists := old[d.ID]; !exists || old[d.ID].Dataset.Collection != d.Collection {
+				j.Next = now.Truncate(time.Minute).Add(time.Duration(phaseSeconds) * time.Second)
+				if !j.Next.After(now) {
+					j.Next = j.Next.Add(time.Minute)
+				}
+			}
+		}
+		if coreFiveFoot(d) && d.Collection == BookFlowCollection {
+			var c minuteContract
+			if store.bookFlowLoad(context.Background(), "contract", minuteFootID(d.Venue), &c) == nil && c.ActivatedAt != nil {
+				j.Disabled = true
+			}
 		}
 		j.Disabled = j.Disabled || d.Disabled
 		s.jobs[j.ID] = &j
@@ -266,6 +303,9 @@ func (s *Scheduler) State() map[string]any {
 func (s *Scheduler) priority(j *Job, now time.Time) float64 {
 	wait := now.Sub(j.Next).Seconds()
 	p := float64(j.Dataset.Priority)*1000 - wait/2
+	if j.Mode == "live" && j.Dataset.Collection == BookFlowCollection && (coreBook(j.Dataset) || minuteFoot(j.Dataset)) {
+		return -10000 - wait
+	}
 	if j.Mode != "live" {
 		p = 2500 - wait/2
 		if j.Mode == "history" {
@@ -290,7 +330,13 @@ func (s *Scheduler) priority(j *Job, now time.Time) float64 {
 			if elapsed > float64(j.Dataset.SoftDeadline) {
 				p -= 2000
 			}
-			if elapsed > float64(j.Dataset.TTL-30) {
+			// Deliberately slow backgrounds must not repeatedly jump ahead of
+			// timely core work merely because their strict usage TTL is shorter.
+			ttlDeadline := j.Dataset.TTL - 30
+			if j.Dataset.Collection == BookFlowCollection {
+				ttlDeadline = max(ttlDeadline, j.Dataset.Refresh*2)
+			}
+			if elapsed > float64(ttlDeadline) {
 				p -= 5000
 			}
 		}
@@ -298,14 +344,8 @@ func (s *Scheduler) priority(j *Job, now time.Time) float64 {
 	return p
 }
 
-// Step is the only gate allowed to initiate a CoinGlass request, including retries
-// and on-demand jobs. The rolling ledger is committed before the network call.
-func (s *Scheduler) Step(ctx context.Context, now time.Time) bool {
-	s.mu.Lock()
-	if !s.enabled || s.inflight >= 2 || !s.quota.available(now) {
-		s.mu.Unlock()
-		return false
-	}
+// Caller holds the scheduler mutex; shared by dispatch and deterministic quota replay.
+func (s *Scheduler) selectJobLocked(now time.Time) *Job {
 	var selected *Job
 	for _, j := range s.jobs {
 		if j.Disabled || j.Completed || j.InFlight || now.Before(j.Next) {
@@ -320,11 +360,24 @@ func (s *Scheduler) Step(ctx context.Context, now time.Time) bool {
 			selected = j
 		}
 	}
+	return selected
+}
+
+// Step is the only gate allowed to initiate a CoinGlass request, including retries
+// and on-demand jobs. The rolling ledger is committed before the network call.
+func (s *Scheduler) Step(ctx context.Context, now time.Time) bool {
+	s.mu.Lock()
+	if !s.enabled || s.inflight >= 2 || !s.quota.available(now) {
+		s.mu.Unlock()
+		return false
+	}
+	selected := s.selectJobLocked(now)
 	if selected == nil {
 		s.mu.Unlock()
 		return false
 	}
 	selected.InFlight = true
+	selected.QueueWaitSeconds = max(0, now.Sub(selected.Next).Seconds())
 	selected.LastAttempt = &now
 	selected.Calls++
 	s.inflight++
@@ -371,6 +424,7 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 	if j.Mode == "baseline" || j.Mode == "history" {
 		d.Params["limit"] = strconv.Itoa(pageSize)
 	}
+	requestStarted := time.Now()
 	raw, err := s.fetch(ctx, d)
 	fetched := time.Now().UTC()
 	var observations []Observation
@@ -383,7 +437,26 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 	valid := 0
 	accepted := []Observation{}
 	if err == nil {
+		var cutover *time.Time
+		if coreFiveFoot(d) && d.Collection == BookFlowCollection {
+			var c minuteContract
+			ce := s.store.bookFlowLoad(ctx, "contract", minuteFootID(d.Venue), &c)
+			if ce != nil && ce != sql.ErrNoRows {
+				err = ce
+			} else {
+				cutover = c.Cutover
+			}
+		}
 		for _, o := range observations {
+			if err != nil {
+				break
+			}
+			if minuteFoot(d) && !validMinuteFoot(o) {
+				o.Quality, o.Reason = "missing", "一分钟足迹金额或价区契约无效"
+			}
+			if cutover != nil && !recordTime(o).Before(*cutover) {
+				continue
+			}
 			if j.From != nil && o.Time().Before(*j.From) {
 				continue
 			}
@@ -415,13 +488,26 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 			}
 		}
 	}
+	var contract *minuteContract
+	if minuteFoot(d) && j.Mode == "live" {
+		bounded, cancel := context.WithTimeout(ctx, 2*time.Second)
+		c, ce := s.processMinuteContract(bounded, d, accepted, fetched, err)
+		cancel()
+		contract = &c
+		if ce != nil {
+			err = ce
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	current := s.jobs[j.ID]
+	current.FetchSeconds = flowPtr(fetched.Sub(requestStarted).Seconds())
 	current.InFlight = false
 	s.inflight--
 	now := time.Now().UTC()
 	if err != nil {
+		current.LastFailureAt = &fetched
+		current.LastFailure = err.Error()
 		current.Failures++
 		current.Error = err.Error()
 		current.ErrorKind = "transient"
@@ -448,7 +534,7 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 				current.Gaps = append(current.Gaps, HistoryGap{*j.From, end, current.ErrorKind})
 			}
 		}
-		if d.Contract && current.LastSuccess == nil && contractError {
+		if d.Contract && !minuteFoot(d) && current.LastSuccess == nil && contractError {
 			current.ContractStatus = "failed"
 			current.Disabled = true
 		}
@@ -473,6 +559,24 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 			}
 		}
 	} else {
+		if current.LastSuccess != nil {
+			current.SuccessIntervalSeconds = flowPtr(fetched.Sub(*current.LastSuccess).Seconds())
+		}
+		if !last.IsZero() {
+			end := last
+			if d.Kind == "footprint" || d.Kind == "flow" {
+				end = end.Add(time.Duration(d.Resolution) * time.Second)
+			}
+			lag := max(0, fetched.Sub(end).Seconds())
+			current.SourceLagSeconds = &lag
+			if current.DiagnosticThrough == nil || last.After(*current.DiagnosticThrough) {
+				current.ObservedSamples++
+				if lag <= float64(d.SoftDeadline) {
+					current.TimelySamples++
+				}
+				current.DiagnosticThrough = &last
+			}
+		}
 		current.Error = ""
 		current.ErrorKind = ""
 		current.Failures = 0
@@ -524,6 +628,24 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 			current.Completed = true
 		}
 	}
+	if contract != nil {
+		if contract.VerifiedAt == nil && contract.Attempts >= 10 {
+			current.Disabled = true
+			current.ContractStatus = "failed"
+			current.LastFailureAt = &fetched
+			current.LastFailure = "一分钟足迹验证未通过，保留五分钟来源"
+		}
+		if contract.VerifiedAt != nil {
+			current.ContractStatus = "verified"
+		} else if contract.Attempts < 10 {
+			current.ContractStatus = "pending"
+		}
+		if contract.ActivatedAt != nil {
+			if old := s.jobs[ID("footprint", "BTC", d.Venue, "spot")]; old != nil {
+				old.Disabled = true
+			}
+		}
+	}
 	_ = s.persistLocked()
 }
 func (s *Scheduler) Run(ctx context.Context) {
@@ -557,6 +679,13 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 		return Job{}, errors.New("无效研究任务用途")
 	}
 	d, e := FindDataset(req.Dataset)
+	if e != nil {
+		s.mu.Lock()
+		if live := s.jobs[req.Dataset]; live != nil && live.Mode == "live" && minuteFoot(live.Dataset) {
+			d, e = live.Dataset, nil
+		}
+		s.mu.Unlock()
+	}
 	if e != nil {
 		return Job{}, e
 	}
@@ -609,7 +738,13 @@ func (s *Scheduler) Request(req DataRequest, now time.Time, baseline bool) (Job,
 			return Job{}, errors.New("无效历史粒度")
 		}
 		if d.Kind == "footprint" && req.Resolution < 300 {
-			return Job{}, errors.New("1分钟足迹未验证可用")
+			var c minuteContract
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			err := s.store.bookFlowLoad(ctx, "contract", d.ID, &c)
+			cancel()
+			if !minuteFoot(d) || err != nil || c.VerifiedAt == nil || req.Resolution != 60 || req.To.Sub(*req.From) > time.Hour || req.From.Before(now.Add(-72*time.Hour)) {
+				return Job{}, errors.New("一分钟足迹须先验证，补缺每次最多一小时且在近72小时内")
+			}
 		}
 		if d.Kind == "book" && ((req.Resolution == 60 && req.From.Before(now.Add(-72*time.Hour))) || (req.Resolution == 300 && req.From.Before(now.Add(-15*24*time.Hour)))) {
 			return Job{}, errors.New("超过上游盘口历史范围")

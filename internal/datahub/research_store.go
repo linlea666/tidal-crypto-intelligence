@@ -35,6 +35,9 @@ func (w *Warehouse) initResearch() error {
 		return e
 	}
 	w.research = db
+	if e = w.initBookFlow(); e != nil {
+		w.bookFlowError = e.Error()
+	}
 	if e = w.initAlertAudit(); e != nil {
 		// Optional shadow research cannot take established collectors down.
 		w.alertAuditError = e.Error()

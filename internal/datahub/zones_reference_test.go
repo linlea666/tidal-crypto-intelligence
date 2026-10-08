@@ -21,7 +21,7 @@ func referenceZones(asset string, step, price float64, books map[string]Observat
 		rate, fxOK := rates[d.Quote]
 		valid := fxOK && (!live || o.Fresh(d, now))
 		bid, ask := best(b)
-		c := Coverage{Venue: d.Venue, Symbol: d.Symbol, Quote: d.Quote, Valid: valid, ObservedAt: o.ObservedAt, FetchedAt: o.FetchedAt, Levels: len(b.Bids) + len(b.Asks), Rate: rate}
+		c := Coverage{Refresh: d.Refresh, Venue: d.Venue, Symbol: d.Symbol, Quote: d.Quote, Valid: valid, ObservedAt: o.ObservedAt, FetchedAt: o.FetchedAt, Levels: len(b.Bids) + len(b.Asks), Rate: rate}
 		if fxOK {
 			c.Low = num(multiply(fmt.Sprint(b.Low), rate))
 			c.High = num(multiply(fmt.Sprint(b.High), rate))

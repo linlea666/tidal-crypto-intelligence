@@ -10,6 +10,7 @@ import (
 )
 
 type Coverage struct {
+	Refresh    int        `json:"refreshSeconds"`
 	Venue      string     `json:"venue"`
 	Symbol     string     `json:"symbol"`
 	Quote      string     `json:"quote"`
@@ -155,7 +156,7 @@ func prepareBooks(books map[string]Observation, registry map[string]Dataset, rat
 		rate, fxOK := rates[d.Quote]
 		valid := fxOK && (!live || o.Fresh(d, now))
 		bid, ask := best(b)
-		c := Coverage{Venue: d.Venue, Symbol: d.Symbol, Quote: d.Quote, Valid: valid, ObservedAt: o.ObservedAt, FetchedAt: o.FetchedAt, Levels: len(b.Bids) + len(b.Asks), Rate: rate}
+		c := Coverage{Refresh: d.Refresh, Venue: d.Venue, Symbol: d.Symbol, Quote: d.Quote, Valid: valid, ObservedAt: o.ObservedAt, FetchedAt: o.FetchedAt, Levels: len(b.Bids) + len(b.Asks), Rate: rate}
 		if fxOK {
 			c.Low = num(multiply(fmt.Sprint(b.Low), rate))
 			c.High = num(multiply(fmt.Sprint(b.High), rate))
@@ -254,7 +255,7 @@ func (h *Hub) rawFrame(asset string, step float64, now time.Time) Frame {
 	for id, d := range registry {
 		if d.Kind == "book" && d.Asset == asset {
 			if _, ok := books[id]; !ok {
-				cov = append(cov, Coverage{Venue: d.Venue, Symbol: d.Symbol, Quote: d.Quote, Reason: "等待首次快照"})
+				cov = append(cov, Coverage{Refresh: d.Refresh, Venue: d.Venue, Symbol: d.Symbol, Quote: d.Quote, Reason: "等待首次快照"})
 			}
 		}
 	}

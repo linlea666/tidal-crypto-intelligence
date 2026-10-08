@@ -228,7 +228,7 @@ export function LargeOrderBoard({ asset }: { asset: Asset }) {
         <div>
           <span className="eyebrow">独立观察 · 不计入普通买卖墙或BTC信号</span>
           <h2>大额挂单看板</h2>
-          <p>五家交易所已获取样本 · 约5分钟采集 · 金额固定于所选快照</p>
+          <p>五家交易所已获取样本 · 计划{d?.sources[0]?.refreshSeconds ? d.sources[0].refreshSeconds / 60 + "分钟" : "频率读取中"}采集 · 金额固定于所选快照</p>
         </div>
         <button className="secondary" onClick={fresh} disabled={loading}>
           {loading

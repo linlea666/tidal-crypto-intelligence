@@ -27,6 +27,8 @@ type Props = {
   onNavigate: (v: string) => void;
 };
 export type Meta = {
+  refreshSeconds?: number;
+  sourceAgeSeconds?: number | null;
   venue?: string;
   status: string;
   observedAt: string | null;
@@ -167,6 +169,8 @@ export function Status({ meta }: { meta?: Meta }) {
       {new Date(meta.fetchedAt).getFullYear() > 2000
         ? clock(meta.fetchedAt)
         : "等待首次采集"}
+      {meta.refreshSeconds != null && ` · 计划每${meta.refreshSeconds / 60}分钟抓取`}
+      {meta.sourceAgeSeconds != null && ` · 数据年龄${Math.floor(meta.sourceAgeSeconds / 60)}分钟`}
       {meta.resolutionSeconds > 0
         ? ` · ${meta.resolutionSeconds / 60}分钟精度`
         : ""}
@@ -645,7 +649,7 @@ function WhalesPage({ asset }: Props) {
             </div>
           ))}
           {!buckets.length && (
-            <Empty text="每5分钟采集；只有来源时间8分钟内、字段有效的持仓参与分布。" />
+            <Empty text={`计划每${(data?.monitor.refreshSeconds ?? 300) / 60}分钟采集；只有来源时间8分钟内、字段有效的持仓参与分布。`} />
           )}
         </section>
         <aside className="watchlist">
@@ -792,7 +796,7 @@ function WhalesPage({ asset }: Props) {
           </table>
         </div>
         <p className="helper">
-          每5分钟采集，逐条来源时间8分钟内有效。CoinGlass覆盖的Hyperliquid百万美元级持仓，不是全市场巨鲸榜。清算距离使用平台标记价格；名单消失不等于平仓。
+          计划每{(data?.monitor.refreshSeconds ?? 300) / 60}分钟采集，逐条来源时间8分钟内有效。CoinGlass覆盖的Hyperliquid百万美元级持仓，不是全市场巨鲸榜。清算距离使用平台标记价格；名单消失不等于平仓。
         </p>
       </section>
     </>

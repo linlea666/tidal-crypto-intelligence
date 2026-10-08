@@ -17,8 +17,16 @@ func metadata(d Dataset, o Observation, ok bool) map[string]any {
 	if ok {
 		status = o.Status(d, time.Now())
 	}
+	var sourceAge *float64
+	if ok && !o.Time().IsZero() {
+		sourceAge = flowPtr(max(0, time.Since(o.Time()).Seconds()))
+	}
+	refresh := d.Refresh
+	if o.Source == "derived/coinglass-minute-v1" {
+		refresh = 60
+	}
 	expires := o.Time().Add(time.Duration(d.TTL) * time.Second)
-	return map[string]any{"dataset": d.ID, "source": d.Source, "asset": d.Asset, "market": d.Market, "venue": d.Venue, "symbol": d.Symbol, "quote": d.Quote, "unit": d.Unit, "observedAt": o.ObservedAt, "fetchedAt": o.FetchedAt, "timeBasis": o.TimeBasis, "expiresAt": expires, "resolutionSeconds": o.Resolution, "revision": o.Revision, "status": status, "coverageRequested": d.Params["exchange_list"]}
+	return map[string]any{"dataset": d.ID, "source": d.Source, "asset": d.Asset, "market": d.Market, "venue": d.Venue, "symbol": d.Symbol, "quote": d.Quote, "unit": d.Unit, "observedAt": o.ObservedAt, "fetchedAt": o.FetchedAt, "timeBasis": o.TimeBasis, "expiresAt": expires, "resolutionSeconds": o.Resolution, "revision": o.Revision, "status": status, "coverageRequested": d.Params["exchange_list"], "refreshSeconds": refresh, "sourceAgeSeconds": sourceAge, "collectionVersion": d.Collection, "storedSource": o.Source}
 }
 func (h *Hub) historyWindow(ctx context.Context, d Dataset, hours int, fn func(Observation) error) (int, error) {
 	res := nativeRes(d)
@@ -303,7 +311,7 @@ func (h *Hub) WhalesView(ctx context.Context, a, side, order string, limit int, 
 		}
 		buckets = append(buckets, map[string]any{"kind": parts[0], "side": parts[1], "price": num(parts[2]), "usdCents": sum, "addresses": len(addresses), "largestShare": float64(largest) / float64(max(1, sum))})
 	}
-	monitor := map[string]any{"candidates": observed, "fresh": fresh, "scope": "CoinGlass覆盖的Hyperliquid百万美元级持仓，不代表全市场", "refreshSeconds": WhaleRefreshSeconds, "ttlSeconds": WhaleTTLSeconds, "pinned": []string{}, "websocketUsers": 0, "coreLimit": 100, "limit": 100}
+	monitor := map[string]any{"candidates": observed, "fresh": fresh, "scope": "CoinGlass覆盖的Hyperliquid百万美元级持仓，不代表全市场", "refreshSeconds": d.Refresh, "ttlSeconds": WhaleTTLSeconds, "pinned": []string{}, "websocketUsers": 0, "coreLimit": 100, "limit": 100}
 	return map[string]any{"items": items[:min(limit, len(items))], "count": len(items), "buckets": buckets, "monitor": monitor, "at": now, "longCents": optionalAmount(long, fresh > 0), "shortCents": optionalAmount(short, fresh > 0), "nearLiquidationCents": optionalAmount(near, fresh > 0), "hasData": fresh > 0, "meta": metadata(d, o, ok), "distributionScope": "全部有效已覆盖大仓，不受榜单前50/100及方向筛选影响"}, nil
 }
 func (h *Hub) LargeView(a string, history bool) any {
@@ -568,7 +576,12 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 		case "signals":
 			return h.SignalsView(ctx, a, "", q.Get("rules"))
 		case "alert-audit":
+			if q.Get("layer") == "book" {
+				return h.bookFlowView(ctx, q, time.Now().UTC())
+			}
 			return h.alertAudit(ctx, q, time.Now().UTC())
+		case "book-flow":
+			return h.bookFlowView(ctx, q, time.Now().UTC())
 		case "studies":
 			return h.StudiesView(ctx, a, "")
 		case "wallet-trends":

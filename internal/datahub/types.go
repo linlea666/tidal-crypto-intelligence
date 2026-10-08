@@ -22,6 +22,7 @@ func freshWhale(w Whale, now time.Time) bool {
 }
 
 type Dataset struct {
+	Collection   string            `json:"collectionVersion,omitempty"`
 	Disabled     bool              `json:"disabled,omitempty"`
 	Contract     bool              `json:"requiresContractCheck,omitempty"`
 	ID           string            `json:"id"`

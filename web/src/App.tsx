@@ -463,7 +463,7 @@ export function App() {
                   </div>
                 </div>
                 <p className="book-definition">
-                  当前挂单存量 · 每档{step}美元 · 1分钟粒度 · 约2分钟采集
+                  当前挂单存量 · 每档{step}美元 · 1分钟粒度 · 按各来源计划采集
                   <br />
                   {frame?.summary?.oldestSourceAt
                     ? `来源快照 ${clock(frame.summary.oldestSourceAt)}–${clock(frame.summary.newestSourceAt!)}（北京时间）`
@@ -640,6 +640,7 @@ export function App() {
                               来源{" "}
                               {c.observedAt ? clock(c.observedAt) : "时间未知"}{" "}
                               · 获取 {c.fetchedAt ? clock(c.fetchedAt) : "未知"}
+ {c.refreshSeconds != null && ` · 计划${c.refreshSeconds / 60}分钟`}
                               {c.fxAt ? ` · 汇率 ${clock(c.fxAt)}` : ""}
                             </span>
                           </div>
@@ -652,7 +653,7 @@ export function App() {
                     <p className="helper">
                       挂单金额、持续时间、成交证据分别判断。采样减量和未再返回均不等于已确认撤单。
                       {selected.sampled &&
-                        " 盘口约2分钟更新，持续指价位采样稳定程度。"}
+                        " 持续指价位采样稳定程度；实际频率见来源详情。"}
                     </p>
                   </>
                 ) : (

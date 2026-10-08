@@ -103,7 +103,7 @@ func Normalize(d Dataset, raw []byte, fetched time.Time) ([]Observation, error) 
 	if data == nil {
 		return nil, ErrNoData
 	}
-	if d.Contract {
+	if d.Contract && !minuteFoot(d) {
 		return normalizeObservers(d, data, fetched)
 	}
 	obs := func(at *time.Time, p Payload) Observation {

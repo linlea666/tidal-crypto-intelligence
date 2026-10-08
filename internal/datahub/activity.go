@@ -172,7 +172,7 @@ func (h *Hub) ActivityView(ctx context.Context, a string, hours int, span float6
 		"orderHistoryGap": false, "interpretation": activityInterpretation(bias, pct), "asset": a, "from": from, "to": to, "hours": hours, "bias": bias, "reason": reason, "buyShare": share, "flow": stats, "flowMeta": metadata(fd, flow, flowOK),
 		"pressureReaction": pressureReaction(bias, pct), "priceChangePercent": pct, "priceReaction": reaction, "priceQuote": "USDT · 币安5分钟K线", "candles": candles,
 		"perpFlow": perp, "perpMeta": metadata(perpD, perpLatest, perpOK), "derivatives": derivatives,
-		"footprint": feetMap["footprint"], "footprintVenues": feetMap["footprintVenues"], "footprintPartial": feetMap["footprintPartial"], "footprintQuote": "USDT", "matchedFootprintVenues": matched,
+		"footprintSources": feetMap["footprintSources"], "footprint": feetMap["footprint"], "footprintVenues": feetMap["footprintVenues"], "footprintPartial": feetMap["footprintPartial"], "footprintQuote": "USDT", "matchedFootprintVenues": matched,
 		"orders": []any{}, "orderCount": 0, "orderHasData": false, "orderBidCents": 0, "orderAskCents": 0, "orderSources": []any{},
 		"events": []any{}, "eventsHasMore": false, "historyStatus": []any{}, "ordersMovedTo": "large-orders", "rulesVersion": RulesVersion,
 		"tradeFeedAvailable": false, "tradeFeedNote": "逐笔大额成交暂未接入；累计成交变化不等于逐笔成交",

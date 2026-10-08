@@ -20,7 +20,7 @@ func TestResourceReplay(t *testing.T) {
 	if os.Getenv("TIDAL_RESOURCE_REPLAY") != "1" {
 		t.Skip("opt-in Linux resource gate")
 	}
-	h, e := Open(Config{Root: t.TempDir(), Offline: true})
+	h, e := Open(Config{Root: t.TempDir(), Offline: true, BookFlowMode: "run"})
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -234,12 +234,14 @@ func TestResourceReplay(t *testing.T) {
 	layeredDone := make(chan struct{})
 	go func() { defer close(layeredDone); h.layeredWorker(layeredCtx) }()
 	defer func() { stopLayered(); <-layeredDone }()
+	stopBookFlow := bookFlowResourceStart(t, h)
+	defer stopBookFlow()
 	stopPaper := paperResourceStart(t, h)
 	defer stopPaper()
 	stopRadar := radarResourceStart(t, h)
 	defer stopRadar()
 	until := phaseStarted.Add(duration)
-	lastMaintenance, lastBooks := time.Time{}, time.Time{}
+	lastMaintenance, lastBooks, lastBookFlow := time.Time{}, time.Time{}, time.Time{}
 	for cycle := 0; time.Now().Before(until); cycle++ {
 		current := time.Now().UTC()
 		live := current.Truncate(time.Minute).Add(-time.Minute)
@@ -254,6 +256,10 @@ func TestResourceReplay(t *testing.T) {
 			}
 			ingest(pd, Observation{Dataset: pd.ID, Source: pd.Source, ObservedAt: &current, FetchedAt: current, Quality: "valid", Payload: Payload{Price: &Price{value, "USDT"}}})
 		}
+		if current.Sub(lastBookFlow) >= time.Minute {
+			bookFlowResourceInput(t, h, current)
+			lastBookFlow = current
+		}
 		if current.Sub(lastBooks) >= 2*time.Minute {
 			for _, asset := range Assets() {
 				d, o := liquidationReplayFixture(asset, current)
@@ -263,7 +269,7 @@ func TestResourceReplay(t *testing.T) {
 		}
 		if current.Sub(lastBooks) >= 2*time.Minute {
 			for _, d := range Registry() {
-				if d.Kind == "book" {
+				if d.Kind == "book" && !coreBook(d) {
 					book := &Book{}
 					mid := 80000
 					if d.Asset == "ETH" {
@@ -300,7 +306,7 @@ func TestResourceReplay(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research", "paper", "paper/trades", "alert-audit", "hl-radar/events", "hl-radar/status", "hl-radar/study"} {
+				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research", "paper", "paper/trades", "alert-audit", "book-flow", "hl-radar/events", "hl-radar/status", "hl-radar/study"} {
 					for n := 0; n < 4; n++ {
 						if _, err := h.Read(ctx, path, url.Values{"asset": {"BTC"}, "hours": {"1"}, "layout": {"split"}}); err != nil {
 							t.Error(err)

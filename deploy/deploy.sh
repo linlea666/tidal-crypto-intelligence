@@ -72,7 +72,7 @@ mv -Tf "$root/current.next" "$root/current"
   # Preserve explicit feature stops across stable upgrades, without copying
   # secrets or arbitrary environment variables into release configuration.
   if [[ -f "$root/state.env" ]]; then
-    sed -n -E '/^TIDAL_ONCHAIN_(DISABLED|EVENTS_DISABLED)=(true|false)$/p; /^TIDAL_PAPER_MODE=(off|collect|run)$/p' "$root/state.env"
+    sed -n -E '/^TIDAL_ONCHAIN_(DISABLED|EVENTS_DISABLED)=(true|false)$/p; /^TIDAL_PAPER_MODE=(off|collect|run)$/p; /^TIDAL_BOOK_FLOW_MODE=(off|collect|run)$/p' "$root/state.env"
   fi
 } > "$root/state.env.next"
 mv "$root/state.env.next" "$root/state.env"

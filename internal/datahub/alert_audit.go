@@ -29,7 +29,7 @@ func auditSignal(s Signal) map[string]any {
 		v := s.Multifactor
 		input = map[string]any{"dataThrough": v.DataThrough, "net1hUsd": netDecimal(v.Spot["60"].Net), "net4hUsd": netDecimal(v.Spot["240"].Net), "priceUsdt": finiteDecimal(v.Price.Close), "priorAtrUsdt": finiteDecimal(v.Price.PriorATR), "displacementAtr": finiteDecimal(v.Price.DisplacementATR)}
 	}
-	return map[string]any{"id": s.ID, "direction": s.Direction, "rulesVersion": s.Rules, "at": s.At, "dataThrough": s.DataThrough, "expiresAt": s.Expires, "priceUsdt": finiteDecimal(price), "confirmedAt": s.ConfirmedAt, "confirmedDataThrough": s.ConfirmedThrough, "computedAt": s.ComputedAt, "confirmationComputedAt": s.ConfirmationComputedAt, "coreInputFirstSeenAt": s.CoreInputFirstSeenAt, "coreInputAvailableAt": s.CoreInputAvailableAt, "initialInput": input, "meaning": alertMeaning(s, false)}
+	return map[string]any{"id": s.ID, "direction": s.Direction, "rulesVersion": s.Rules, "collectionVersion": s.Collection, "at": s.At, "dataThrough": s.DataThrough, "expiresAt": s.Expires, "priceUsdt": finiteDecimal(price), "confirmedAt": s.ConfirmedAt, "confirmedDataThrough": s.ConfirmedThrough, "computedAt": s.ComputedAt, "confirmationComputedAt": s.ConfirmationComputedAt, "coreInputFirstSeenAt": s.CoreInputFirstSeenAt, "coreInputAvailableAt": s.CoreInputAvailableAt, "initialInput": input, "meaning": alertMeaning(s, false)}
 }
 func auditTrial(t ShortTrial) map[string]any {
 	outcomes := []any{}

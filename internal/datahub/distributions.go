@@ -62,6 +62,11 @@ func (h *Hub) SampleDistributions(now time.Time) {
 	}
 	for _, a := range Assets() {
 		derived, _ := h.Dataset(ID("whale-distribution", a, "Hyperliquid", "futures"))
+		if h.bookFlowMode != "off" {
+			if previous, exists := h.Store.Latest(derived.ID); exists && previous.Dependencies[d.ID] == o.Revision {
+				continue
+			}
+		}
 		sampleAt := now.Truncate(time.Minute)
 		at := now
 		valid := 0

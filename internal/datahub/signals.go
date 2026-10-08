@@ -43,6 +43,7 @@ type SignalBaseline struct {
 	Median60     float64              `json:"median60VolumeCents"`
 }
 type Signal struct {
+	Collection             string           `json:"collectionVersion,omitempty"`
 	ComputedAt             *time.Time       `json:"computedAt,omitempty"`
 	ConfirmationComputedAt *time.Time       `json:"confirmationComputedAt,omitempty"`
 	CoreInputFirstSeenAt   *time.Time       `json:"coreInputFirstSeenAt,omitempty"`
@@ -654,12 +655,16 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 				}
 				existing = true
 				s.ComputedAt = old.ComputedAt
+				s.Collection = old.Collection
 				s.CoreInputFirstSeenAt = old.CoreInputFirstSeenAt
 				s.CoreInputAvailableAt = old.CoreInputAvailableAt
 			}
 		}
 		if notices[s.ID] == "anomaly" && s.ComputedAt == nil && !existing {
 			s.ComputedAt = &computed
+			if h.bookFlowMode != "off" {
+				s.Collection = BookFlowCollection
+			}
 		}
 		if notices[s.ID] == "confirmed" && s.ConfirmationComputedAt == nil {
 			s.ConfirmationComputedAt = &computed
