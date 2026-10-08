@@ -38,7 +38,7 @@ func auditTrial(t ShortTrial) map[string]any {
 			outcomes = append(outcomes, map[string]any{"minutes": o.Minutes, "state": o.State, "coverage": o.Coverage, "returnPercent": finiteDecimal(o.Return), "mfePercent": finiteDecimal(o.MFE), "maePercent": finiteDecimal(o.MAE), "mfeBarAt": o.MFEAt, "maeBarAt": o.MAEAt})
 		}
 	}
-	return map[string]any{"at": t.At, "start": t.Start, "referenceUsdt": finiteDecimal(t.Reference), "done": t.Done, "outcomes": outcomes, "note": "候选产生后的下一根完整五分钟现货K线开盘价；无费用，不是合约成交收益"}
+	return map[string]any{"at": t.At, "start": t.Start, "referenceUsdt": finiteDecimal(t.Reference), "done": t.Done, "outcomes": outcomes, "note": "登记时点后的下一根完整五分钟现货K线开盘价；无费用，不是合约成交收益"}
 }
 
 func auditRange(q url.Values, now time.Time) (time.Time, time.Time, error) {
@@ -134,7 +134,10 @@ func (h *Hub) alertAudit(ctx context.Context, q url.Values, now time.Time) (any,
 		if layer == "confirmation" {
 			query += ` AND CAST(strftime('%s',json_extract(d.payload,'$.confirmedAt')) AS INTEGER)>=? AND CAST(strftime('%s',json_extract(d.payload,'$.confirmedAt')) AS INTEGER)<?`
 			args = append(args, from.Unix(), to.Unix())
-		} else if layer == "" || layer == "formal" {
+		} else if layer == "formal" {
+			query += ` AND d.at>=?`
+			args = append(args, from.Unix())
+		} else if layer == "" {
 			query += ` AND (d.at>=? OR CAST(strftime('%s',json_extract(d.payload,'$.confirmedAt')) AS INTEGER)>=?)`
 			args = append(args, from.Unix(), from.Unix())
 		}
