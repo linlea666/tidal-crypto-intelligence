@@ -230,6 +230,10 @@ func TestResourceReplay(t *testing.T) {
 		}
 	}
 	phaseStarted := time.Now()
+	layeredCtx, stopLayered := context.WithCancel(ctx)
+	layeredDone := make(chan struct{})
+	go func() { defer close(layeredDone); h.layeredWorker(layeredCtx) }()
+	defer func() { stopLayered(); <-layeredDone }()
 	stopPaper := paperResourceStart(t, h)
 	defer stopPaper()
 	stopRadar := radarResourceStart(t, h)
@@ -296,7 +300,7 @@ func TestResourceReplay(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research", "paper", "paper/trades", "hl-radar/events", "hl-radar/status", "hl-radar/study"} {
+				for _, path := range []string{"activity", "levels", "large-orders", "large-order-zones", "large-order-zones/history", "signals", "studies", "liquidations", "liquidation-study", "onchain-cost", "onchain-cost/history", "onchain-cost/events", "onchain-cost/research", "paper", "paper/trades", "alert-audit", "hl-radar/events", "hl-radar/status", "hl-radar/study"} {
 					for n := 0; n < 4; n++ {
 						if _, err := h.Read(ctx, path, url.Values{"asset": {"BTC"}, "hours": {"1"}, "layout": {"split"}}); err != nil {
 							t.Error(err)

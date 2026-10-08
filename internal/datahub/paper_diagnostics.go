@@ -21,22 +21,28 @@ type paperRate struct {
 	Processed  uint64  `json:"processed"`
 }
 type paperDiagnosticView struct {
-	Started   time.Time               `json:"startedAt"`
-	Received  uint64                  `json:"received"`
-	Enqueued  uint64                  `json:"enqueued"`
-	Processed uint64                  `json:"processed"`
-	Overflows uint64                  `json:"overflows"`
-	HighWater int                     `json:"queueHighWater"`
-	Active    string                  `json:"activeStage"`
-	ActiveMS  float64                 `json:"activeMs"`
-	Stages    map[string]paperLatency `json:"stages"`
-	Rates     []paperRate             `json:"recentSeconds"`
+	LastDequeuedAt     *time.Time              `json:"lastDequeuedAt,omitempty"`
+	ArrivalThrough     *time.Time              `json:"arrivalThrough,omitempty"`
+	ArrivalIntervalsUS []int64                 `json:"arrivalIntervalsUs,omitempty"`
+	Started            time.Time               `json:"startedAt"`
+	Received           uint64                  `json:"received"`
+	Enqueued           uint64                  `json:"enqueued"`
+	Processed          uint64                  `json:"processed"`
+	Overflows          uint64                  `json:"overflows"`
+	HighWater          int                     `json:"queueHighWater"`
+	Active             string                  `json:"activeStage"`
+	ActiveMS           float64                 `json:"activeMs"`
+	Stages             map[string]paperLatency `json:"stages"`
+	Rates              []paperRate             `json:"recentSeconds"`
 }
 type paperDiagnostics struct {
-	mu          sync.Mutex
-	view        paperDiagnosticView
-	activeSince time.Time
-	rates       [120]paperRate
+	mu           sync.Mutex
+	view         paperDiagnosticView
+	activeSince  time.Time
+	rates        [120]paperRate
+	arrivals     [512]int64
+	arrivalCount uint64
+	arrivalAt    time.Time
 }
 
 func (d *paperDiagnostics) init() {
@@ -61,6 +67,12 @@ func (d *paperDiagnostics) receive(at time.Time, depth int, accepted bool) {
 	defer d.mu.Unlock()
 	d.init()
 	d.view.Received++
+	observed := at
+	if !d.arrivalAt.IsZero() {
+		d.arrivals[d.arrivalCount%512] = max(int64(0), observed.Sub(d.arrivalAt).Microseconds())
+		d.arrivalCount++
+	}
+	d.arrivalAt = observed
 	d.rate(at).Received++
 	if accepted {
 		d.view.Enqueued++
@@ -77,6 +89,8 @@ func (d *paperDiagnostics) processed(at time.Time) {
 	defer d.mu.Unlock()
 	d.init()
 	d.view.Processed++
+	dequeued := time.Now().UTC()
+	d.view.LastDequeuedAt = &dequeued
 	d.rate(time.Now()).Processed++
 	d.observe("queue_wait", time.Since(at))
 }
@@ -120,6 +134,18 @@ func (d *paperDiagnostics) snapshot() *paperDiagnosticView {
 	defer d.mu.Unlock()
 	d.init()
 	v := d.view
+	if !d.arrivalAt.IsZero() {
+		at := d.arrivalAt
+		v.ArrivalThrough = &at
+	}
+	v.ArrivalIntervalsUS = []int64{}
+	first := uint64(0)
+	if d.arrivalCount > 512 {
+		first = d.arrivalCount - 512
+	}
+	for i := first; i < d.arrivalCount; i++ {
+		v.ArrivalIntervalsUS = append(v.ArrivalIntervalsUS, d.arrivals[i%512])
+	}
 	v.Stages = make(map[string]paperLatency, len(d.view.Stages))
 	for k, x := range d.view.Stages {
 		v.Stages[k] = x
@@ -137,18 +163,40 @@ func (d *paperDiagnostics) snapshot() *paperDiagnosticView {
 	return &v
 }
 
+// A full queue is not proof of missing data. A producer may outrun an
+// unscheduled consumer for a few milliseconds. Yield with bounded backpressure,
+// retaining every quote and its original reception clock. The existing one
+// second processing-age guard remains authoritative; never enlarge the queue.
 func paperEnqueueStream(out chan<- paperMessage, msg paperMessage, trace *paperDiagnostics) *paperDiagnosticView {
 	select {
 	case out <- msg:
 		trace.receive(msg.At, len(out), true)
 		return nil
 	default:
-		trace.receive(msg.At, cap(out), false)
-		if trace == nil {
-			return &paperDiagnosticView{Overflows: 1, HighWater: cap(out)}
-		}
-		return trace.failureSnapshot()
 	}
+	start := time.Now()
+	wait := time.Until(msg.At.Add(time.Second))
+	accepted := false
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		select {
+		case out <- msg:
+			accepted = true
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	if trace != nil {
+		trace.measure("enqueue_backpressure", time.Since(start))
+	}
+	trace.receive(msg.At, cap(out), accepted)
+	if accepted {
+		return nil
+	}
+	if trace == nil {
+		return &paperDiagnosticView{Overflows: 1, HighWater: cap(out)}
+	}
+	return trace.failureSnapshot()
 }
 
 func (d *paperDiagnostics) measure(name string, elapsed time.Duration) {

@@ -2,6 +2,7 @@ package datahub
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -138,8 +139,8 @@ func paperStream(ctx context.Context, address string, out chan<- paperMessage, t
 					break
 				}
 				at := time.Now().UTC()
-				// Blocking a full bounded channel is itself a data gap, rather
-				// than silently throwing away a path-dependent exit observation.
+				// Preserve every path-dependent observation through bounded
+				// backpressure; only exceeding the processing budget is a gap.
 				failure = paperEnqueueStream(out, paperMessage{Kind: "stream", At: at, Raw: raw}, trace)
 				if failure != nil {
 					err = errors.New("perpetual quote queue overflow")
@@ -395,6 +396,14 @@ func (h *Hub) paperWorker(ctx context.Context) {
 		wg.Add(1)
 		go func(f func()) { defer wg.Done(); f() }(f)
 	}
+	h.paperConsumeLoop(ctx, p, sourceReader, out)
+}
+
+// Production and burst replay use the identical queue consumer, including
+// heartbeat, source reads, ledger writes, funding and maintenance.
+func (h *Hub) paperConsumeLoop(ctx context.Context, p *paperStore, sourceReader *sql.DB, out <-chan paperMessage) {
+	loopDone := p.diagnostics.stage("consumer_loop")
+	defer loopDone()
 	if err := p.discontinuity(ctx, time.Now().UTC(), "restart_gap"); err != nil {
 		p.failure(err, time.Now().UTC())
 		return
@@ -408,10 +417,15 @@ func (h *Hub) paperWorker(ctx context.Context) {
 		var err error
 		now := time.Now().UTC()
 		operation := "ledger"
+		waiting := p.diagnostics.stage("consumer_wait")
+		var dispatch func()
 		select {
 		case <-ctx.Done():
+			waiting()
 			return
 		case msg := <-out:
+			waiting()
+			dispatch = p.diagnostics.stage("message_dispatch")
 			operation = msg.Kind
 			if msg.Kind == "stream" {
 				p.diagnostics.processed(msg.At)
@@ -498,6 +512,8 @@ func (h *Hub) paperWorker(ctx context.Context) {
 			}
 			done()
 		case <-tick.C:
+			waiting()
+			dispatch = p.diagnostics.stage("tick_dispatch")
 			now = time.Now().UTC()
 			done := p.diagnostics.stage("heartbeat_prepare")
 			protected = h.Store.Status().Paused || p.size() >= PaperBudget-paperReserve
@@ -558,12 +574,16 @@ func (h *Hub) paperWorker(ctx context.Context) {
 				}
 				stop()
 			}
+			done = p.diagnostics.stage("publish_feed")
 			p.publishFeed()
+			done()
 		}
 		if ctx.Err() != nil {
+			dispatch()
 			return
 		}
 		if err != nil {
+			failed := p.diagnostics.stage("failure_handling")
 			if operation == "funding" || operation == "candles" || operation == "instrument" {
 				if e := p.recordFailure(ctx, err, now, operation); e != nil {
 					p.failure(e, now)
@@ -571,7 +591,9 @@ func (h *Hub) paperWorker(ctx context.Context) {
 			} else {
 				p.failure(err, now)
 			}
+			failed()
 		}
+		dispatch()
 	}
 }
 
