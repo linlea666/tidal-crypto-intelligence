@@ -225,7 +225,11 @@ func (h *Hub) bookFlowStep(ctx context.Context, now time.Time) error {
 				if blocked {
 					continue
 				}
-				e := newBookEvent(venue, p, z, now)
+				computed := now
+				if !h.offline {
+					computed = time.Now().UTC()
+				}
+				e := newBookEvent(venue, p, z, computed)
 				s.Blocked = append(s.Blocked, e)
 				updates[e.ID] = e
 			}
@@ -604,13 +608,7 @@ func (h *Hub) bookFlowWorker(ctx context.Context) {
 			}
 			h.mu.Unlock()
 			if err != nil {
-				h.mu.RLock()
-				r := h.bookFlowRuntime
-				h.mu.RUnlock()
-				b, _ := json.Marshal(r)
-				save, stop := context.WithTimeout(ctx, 150*time.Millisecond)
-				_, _ = boundedExec(save, h.Store.db, 5000, "INSERT INTO state VALUES('book-flow/runtime',?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", b)
-				stop()
+				h.saveBookFlowRuntime(ctx)
 			}
 			if err == nil && now.Second() < 10 && h.bookFlowMode == "run" {
 				step, cancel = context.WithTimeout(ctx, time.Second)
@@ -622,6 +620,7 @@ func (h *Hub) bookFlowWorker(ctx context.Context) {
 					h.bookFlowRuntime.Failure = fmt.Sprintf("观察结果: %v", err)
 					h.bookFlowRuntime.Failures++
 					h.mu.Unlock()
+					h.saveBookFlowRuntime(ctx)
 				}
 			}
 		}
@@ -631,4 +630,14 @@ func (h *Hub) bookFlowWorker(ctx context.Context) {
 func bookFlowParameters() json.RawMessage {
 	b, _ := json.Marshal(map[string]any{"rules": BookFlowRules, "collection": BookFlowCollection, "venues": []string{"Binance", "OKX"}, "grid": "100", "width": "200", "range": "0.01", "baselineMinutes": 30, "minimumCoverage": "0.95", "multiple": "2", "increaseUsd": "1000000", "footMinutes": 5, "footMinimumUsd": "1000000", "share": "0.6", "retention": "0.7", "fade": "0.5", "expiryMinutes": 30, "rearmMinutes": 10, "sourceMaxAgeSeconds": 180, "bookFootBoundarySeconds": 90})
 	return b
+}
+
+func (h *Hub) saveBookFlowRuntime(ctx context.Context) {
+	h.mu.RLock()
+	r := h.bookFlowRuntime
+	h.mu.RUnlock()
+	b, _ := json.Marshal(r)
+	save, stop := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer stop()
+	_, _ = boundedExec(save, h.Store.db, 5000, "INSERT INTO state VALUES('book-flow/runtime',?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", b)
 }
