@@ -2,13 +2,16 @@ package datahub
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 )
 
-// Adds a 200 quote/s paper path to the existing constrained long replay.
-// Generated quotes are confined to _test.go and never enter a live database.
+// A producer with absolute deadlines supplies every scheduled message through
+// the production queue and consumer. Synthetic prices stay in isolated tests;
+// count conservation, actual fills, maintenance and recovery are all checked.
 func paperResourceStart(t *testing.T, h *Hub) func() {
 	t.Helper()
 	p, err := openPaper(h.Store.root, "run")
@@ -16,87 +19,158 @@ func paperResourceStart(t *testing.T, h *Hub) func() {
 		t.Fatal(err)
 	}
 	h.Store.paper = p
-	sourceReader, err := openPaperPublicationReader(h.Store.root)
+	reader, err := openPaperPublicationReader(h.Store.root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { sourceReader.Close() })
-	now := time.Now().UTC()
-	origin := now.Add(-time.Second)
+	t.Cleanup(func() { reader.Close() })
+	// No settlement occurs during this synthetic, at-most-six-hour fixture.
 	s := p.snapshot()
-	s.Origin = &origin
-	s.GoodSince = now.Add(-time.Minute)
-	s.Gap = false
-	s.Pause = ""
-	s.FundingThrough = now.Add(24 * time.Hour)
+	s.FundingThrough = time.Now().UTC().Add(24 * time.Hour)
 	if err = p.commit(context.Background(), s, paperBatch{}); err != nil {
 		t.Fatal(err)
 	}
-	p.instrument = paperInstrument{At: now, Status: "TRADING", Step: pd(".001"), Minimum: pd(".001"), Maximum: pd("1000"), MinNotional: pd("5")}
 	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
+	producerCtx, stopProducers := context.WithCancel(ctx)
+	out := make(chan paperMessage, 256)
+	consumerDone := make(chan struct{})
+	go func() { defer close(consumerDone); h.paperConsumeLoop(ctx, p, reader, out) }()
+	producerDone := make(chan error, 1)
+	var offered, accepted, bursts uint64
+	var maxLateness time.Duration
 	go func() {
-		tick := time.NewTicker(5 * time.Millisecond)
-		defer tick.Stop()
-		var id, seq int64
-		var lastSecond, lastSignal time.Time
-		candles := map[int64]Candle{}
-		for {
+		start := time.Now()
+		var lastMark, lastMetadata time.Time
+		var quoteID int64
+		for id := int64(1); ; id++ {
+			deadline := start.Add(time.Duration(id) * 5 * time.Millisecond)
+			timer := time.NewTimer(max(time.Duration(0), time.Until(deadline)))
 			select {
-			case <-ctx.Done():
-				done <- nil
+			case <-producerCtx.Done():
+				timer.Stop()
+				producerDone <- nil
 				return
-			case now := <-tick.C:
-				now = now.UTC()
-				id++
-				p.markAt = now
-				p.sourceAt = now
-				raw := []byte(fmt.Sprintf(`{"e":"bookTicker","s":"BTCUSDT","st":1,"u":%d,"E":%d,"b":"80000","a":"80001","B":"1","A":"1"}`, id, now.UnixMilli()))
-				if err := p.streamMessage(ctx, paperMessage{At: now, Raw: raw}, candles, false); err != nil {
-					done <- err
+			case <-timer.C:
+			}
+			now := time.Now().UTC()
+			maxLateness = max(maxLateness, time.Since(deadline))
+			if !now.Truncate(5 * time.Minute).Equal(lastMetadata.Truncate(5 * time.Minute)) {
+				instrument := []byte(`{"symbols":[{"symbol":"BTCUSDT","status":"TRADING","contractType":"PERPETUAL","marginAsset":"USDT","filters":[{"filterType":"LOT_SIZE","stepSize":"0.001","minQty":"0.001","maxQty":"1000"},{"filterType":"MIN_NOTIONAL","notional":"5"}]}]}`)
+				if !paperSend(producerCtx, out, paperMessage{Kind: "instrument", At: now, Raw: instrument}) {
+					producerDone <- nil
 					return
 				}
-				if now.Sub(lastSecond) >= time.Second {
-					read, stop := context.WithTimeout(ctx, 200*time.Millisecond)
-					_, _, _, err := readPaperPublications(read, sourceReader, 0)
-					stop()
-					if err != nil {
-						done <- err
-						return
-					}
-					p.atr = &paperIntent{ATR: pd("500"), ATRThrough: now.Truncate(time.Hour)}
-					if err := p.heartbeat(ctx, now, false); err != nil {
-						done <- err
-						return
-					}
-					p.publishFeed()
-					lastSecond = now
+				rows := [][]any{}
+				through := now.Truncate(5 * time.Minute)
+				for at := through.Add(-17 * time.Hour); at.Before(through); at = at.Add(5 * time.Minute) {
+					rows = append(rows, []any{at.UnixMilli(), "80000", "80250", "79750", "80000", "1", at.Add(5*time.Minute).UnixMilli() - 1})
 				}
-				if now.Sub(lastSignal) >= time.Minute {
-					seq++
-					side := "buy"
-					if seq%2 == 0 {
-						side = "sell"
+				raw, _ := json.Marshal(rows)
+				if !paperSend(producerCtx, out, paperMessage{Kind: "candles", At: now, Raw: raw}) {
+					producerDone <- nil
+					return
+				}
+				lastMetadata = now
+			}
+			quoteID++
+			messages := []string{fmt.Sprintf(`{"e":"bookTicker","s":"BTCUSDT","st":1,"u":%d,"E":%d,"b":"80000","a":"80001","B":"1","A":"1"}`, quoteID, now.UnixMilli())}
+			if now.Sub(lastMark) >= time.Second {
+				messages = append(messages, fmt.Sprintf(`{"e":"markPriceUpdate","s":"BTCUSDT","E":%d,"p":"80000","T":0}`, now.UnixMilli()))
+				lastMark = now
+			}
+			for _, raw := range messages {
+				offered++
+				f := paperEnqueueStream(out, paperMessage{Kind: "stream", At: now, Raw: []byte(raw)}, &p.diagnostics)
+				if f != nil {
+					producerDone <- fmt.Errorf("queue overflow: stage=%s duration=%.3fms", f.Active, f.ActiveMS)
+					return
+				}
+				accepted++
+			}
+			// Sanitized envelope of the captured 257-message / 1.784ms burst.
+			// Repeat during concurrent maintenance; no ticker beats can vanish.
+			if id%12000 == 0 {
+				bursts++
+				burstAt := time.Now()
+				for n := 1; n <= 257; n++ {
+					if wait := time.Until(burstAt.Add(time.Duration(n) * 1784 * time.Microsecond / 257)); wait > 0 {
+						time.Sleep(wait)
 					}
-					signal := Signal{ID: fmt.Sprintf("resource-%d", seq), Asset: "BTC", Rules: MultifactorRules, Direction: side, At: now}
-					if err := p.consume(ctx, []paperPublication{{Seq: seq, At: now, Signal: signal}}, now, false); err != nil {
-						done <- err
+					at := time.Now().UTC()
+					quoteID++
+					offered++
+					raw := []byte(fmt.Sprintf(`{"e":"bookTicker","s":"BTCUSDT","u":%d,"E":%d,"b":"80000","a":"80001","B":"1","A":"1"}`, quoteID, at.UnixMilli()))
+					if f := paperEnqueueStream(out, paperMessage{Kind: "stream", At: at, Raw: raw}, &p.diagnostics); f != nil {
+						producerDone <- fmt.Errorf("captured burst overflow: %s", f.Active)
 						return
 					}
-					lastSignal = now
+					accepted++
 				}
 			}
 		}
 	}()
+	signalDone := make(chan error, 1)
+	go func() {
+		tick := time.NewTicker(100 * time.Millisecond)
+		defer tick.Stop()
+		var last time.Time
+		var seq int64
+		for {
+			select {
+			case <-producerCtx.Done():
+				signalDone <- nil
+				return
+			case <-tick.C:
+				now := time.Now().UTC()
+				s := p.snapshot()
+				if s.Origin == nil || s.Gap || now.Sub(last) < time.Minute {
+					continue
+				}
+				seq++
+				side := "buy"
+				if seq%2 == 0 {
+					side = "sell"
+				}
+				sig := Signal{ID: fmt.Sprintf("resource-%d", seq), Asset: "BTC", Rules: MultifactorRules, Direction: side, At: now}
+				write, stop := context.WithTimeout(producerCtx, 2*time.Second)
+				err := h.commitSignals(write, "BTC", signalState{}, []Signal{sig}, map[string]string{sig.ID: "anomaly"}, now)
+				stop()
+				if err != nil {
+					signalDone <- err
+					return
+				}
+				last = now
+			}
+		}
+	}()
 	return func() {
+		stopProducers()
+		producerErr := <-producerDone
+		signalErr := <-signalDone
+		drainUntil := time.Now().Add(2 * time.Second)
+		for p.diagnostics.snapshot().Processed < accepted && time.Now().Before(drainUntil) {
+			time.Sleep(time.Millisecond)
+		}
 		cancel()
-		if err := <-done; err != nil && err != context.Canceled {
-			t.Error("paper concurrent resource path", err)
+		<-consumerDone
+		d := p.diagnostics.snapshot()
+		if producerErr != nil {
+			t.Error("paper resource producer", producerErr)
+		}
+		if signalErr != nil && !errors.Is(signalErr, context.Canceled) {
+			t.Error("paper resource publication", signalErr)
+		}
+		if d.Received != offered || d.Enqueued != accepted || d.Processed != accepted || d.Overflows != 0 {
+			t.Error("paper resource message conservation", offered, accepted, d.Processed, d.Overflows)
 		}
 		if err := p.verifyRecovery(); err != nil {
 			t.Error("paper resource ledger", err)
 		}
-		t.Logf("paper replay bytes=%d cursor=%d", p.size(), p.snapshot().Cursor)
+		var fills int
+		if err := p.db.QueryRow("SELECT count(*) FROM paper_fills").Scan(&fills); err != nil || fills == 0 {
+			t.Error("paper replay produced no actual fills", fills, err)
+		}
+		t.Logf("paper production replay offered=%d accepted=%d consumed=%d overflow=%d bursts=%d maxLateness=%s bytes=%d cursor=%d fills=%d", offered, accepted, d.Processed, d.Overflows, bursts, maxLateness, p.size(), p.snapshot().Cursor, fills)
 	}
 }
 
@@ -108,7 +182,7 @@ func TestPaperResourceActorRecordsFills(t *testing.T) {
 	defer h.Store.Close()
 	stop := paperResourceStart(t, h)
 	defer stop()
-	deadline := time.NewTimer(3 * time.Second)
+	deadline := time.NewTimer(40 * time.Second)
 	defer deadline.Stop()
 	poll := time.NewTicker(20 * time.Millisecond)
 	defer poll.Stop()

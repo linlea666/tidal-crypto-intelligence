@@ -139,8 +139,8 @@ func paperStream(ctx context.Context, address string, out chan<- paperMessage, t
 					break
 				}
 				at := time.Now().UTC()
-				// Blocking a full bounded channel is itself a data gap, rather
-				// than silently throwing away a path-dependent exit observation.
+				// Preserve every path-dependent observation through bounded
+				// backpressure; only exceeding the processing budget is a gap.
 				failure = paperEnqueueStream(out, paperMessage{Kind: "stream", At: at, Raw: raw}, trace)
 				if failure != nil {
 					err = errors.New("perpetual quote queue overflow")
