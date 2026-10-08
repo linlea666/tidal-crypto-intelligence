@@ -16,6 +16,7 @@ import (
 )
 
 type paperStore struct {
+	diagnostics paperDiagnostics
 	db          *sql.DB
 	readDB      *sql.DB
 	path        string
@@ -125,17 +126,27 @@ func (p *paperStore) commit(ctx context.Context, s paperState, b paperBatch) err
 			return errors.New("paper database capacity reached; ledger preserved")
 		}
 	}
+	waitBefore := p.db.Stats().WaitDuration
+	done := p.diagnostics.stage("ledger_begin")
 	tx, err := p.db.BeginTx(ctx, nil)
+	done()
+	p.diagnostics.measure("ledger_pool_wait", p.db.Stats().WaitDuration-waitBefore)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	finish := p.diagnostics.stage("ledger_write")
+	defer func() { finish() }()
 	put := func(query string, value any, args ...any) error {
+		encodeStart := time.Now()
 		raw, err := json.Marshal(value)
+		p.diagnostics.measure("ledger_encode", time.Since(encodeStart))
 		if err != nil {
 			return err
 		}
+		sqlDone := p.diagnostics.stage("ledger_sql")
 		_, err = tx.ExecContext(ctx, query, append(args, raw)...)
+		sqlDone()
 		return err
 	}
 	for _, t := range b.Trades {
@@ -180,6 +191,8 @@ func (p *paperStore) commit(ctx context.Context, s paperState, b paperBatch) err
 	if err = put("INSERT INTO paper_state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", s); err != nil {
 		return err
 	}
+	finish()
+	finish = p.diagnostics.stage("ledger_commit")
 	if err = tx.Commit(); err != nil {
 		return err
 	}
@@ -355,4 +368,14 @@ func readPaperPublications(ctx context.Context, db *sql.DB, after int64) ([]pape
 }
 func paperIntakeRecord(s paperState, a paperAccount, intent paperIntent, at time.Time, state, reason string) paperIntake {
 	return paperIntake{ID: fmt.Sprintf("%s/%s/%s/%s", s.Generation, a.Group, intent.Signal.ID, state), Group: a.Group, SignalID: intent.Signal.ID, At: at, State: state, Reason: reason, Signal: intent.Signal}
+}
+
+func (p *paperStore) recordStreamFailure(ctx context.Context, err error, at time.Time, trace *paperDiagnosticView) error {
+	s := p.snapshot()
+	message := "stream: " + err.Error()
+	s.LastFailure, s.LastFailureAt = message, &at
+	p.mu.Lock()
+	p.err = message
+	p.mu.Unlock()
+	return p.commit(ctx, s, paperBatch{Events: []paperEvent{{At: at, Kind: "fetch_failure", Reason: message, Diagnostics: trace}}})
 }

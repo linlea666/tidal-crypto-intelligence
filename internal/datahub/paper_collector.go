@@ -22,21 +22,23 @@ const paperBookWS = "wss://fstream.binance.com/public/ws/btcusdt@bookTicker"
 const paperMarketWS = "wss://fstream.binance.com/market/stream?streams=btcusdt@markPrice@1s/btcusdt@kline_5m"
 
 type paperFeed struct {
-	Quote      *paperQuote      `json:"quote"`
-	MarkAt     *time.Time       `json:"markAt"`
-	Instrument paperInstrument  `json:"instrument"`
-	ATR        *decimal.Decimal `json:"atr"`
-	ATRThrough *time.Time       `json:"atrThrough"`
-	Mode       string           `json:"mode"`
-	Bytes      int64            `json:"bytes"`
-	Error      string           `json:"error"`
+	Diagnostics *paperDiagnosticView `json:"diagnostics,omitempty"`
+	Quote       *paperQuote          `json:"quote"`
+	MarkAt      *time.Time           `json:"markAt"`
+	Instrument  paperInstrument      `json:"instrument"`
+	ATR         *decimal.Decimal     `json:"atr"`
+	ATRThrough  *time.Time           `json:"atrThrough"`
+	Mode        string               `json:"mode"`
+	Bytes       int64                `json:"bytes"`
+	Error       string               `json:"error"`
 }
 type paperMessage struct {
-	Kind    string
-	At      time.Time
-	Raw     []byte
-	Through time.Time
-	Err     error
+	Diagnostics *paperDiagnosticView
+	Kind        string
+	At          time.Time
+	Raw         []byte
+	Through     time.Time
+	Err         error
 }
 
 // Binance wire keys are case-sensitive, while encoding/json also matches
@@ -109,7 +111,12 @@ func paperSend(ctx context.Context, out chan<- paperMessage, msg paperMessage) b
 		return true
 	}
 }
-func paperStream(ctx context.Context, address string, out chan<- paperMessage) {
+func paperStream(ctx context.Context, address string, out chan<- paperMessage, traces ...*paperDiagnostics) {
+	var trace *paperDiagnostics
+	if len(traces) > 0 {
+		trace = traces[0]
+	}
+	var failure *paperDiagnosticView
 	if !paperPublicURL(address) {
 		paperSend(ctx, out, paperMessage{Kind: "gap", At: time.Now().UTC(), Err: errors.New("unexpected perpetual stream URL")})
 		return
@@ -133,11 +140,11 @@ func paperStream(ctx context.Context, address string, out chan<- paperMessage) {
 				at := time.Now().UTC()
 				// Blocking a full bounded channel is itself a data gap, rather
 				// than silently throwing away a path-dependent exit observation.
-				select {
-				case out <- paperMessage{Kind: "stream", At: at, Raw: raw}:
-				default:
+				failure = paperEnqueueStream(out, paperMessage{Kind: "stream", At: at, Raw: raw}, trace)
+				if failure != nil {
 					err = errors.New("perpetual quote queue overflow")
 				}
+
 				if err != nil {
 					break
 				}
@@ -150,9 +157,10 @@ func paperStream(ctx context.Context, address string, out chan<- paperMessage) {
 		if ctx.Err() != nil {
 			return
 		}
-		if !paperSend(ctx, out, paperMessage{Kind: "gap", At: time.Now().UTC(), Err: err}) {
+		if !paperSend(ctx, out, paperMessage{Kind: "gap", At: time.Now().UTC(), Err: err, Diagnostics: failure}) {
 			return
 		}
+		failure = nil
 		t := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
@@ -349,7 +357,8 @@ func paperCandle(raw []json.RawMessage, now time.Time) (int64, Candle, error) {
 	return ts / 1000, c, nil
 }
 func (p *paperStore) publishFeed() {
-	f := paperFeed{Mode: p.mode, Instrument: p.instrument, Bytes: p.size()}
+	p.diagnostics.sampleCPU()
+	f := paperFeed{Diagnostics: p.diagnostics.snapshot(), Mode: p.mode, Instrument: p.instrument, Bytes: p.size()}
 	if p.quote != nil {
 		q := *p.quote
 		f.Quote = &q
@@ -382,7 +391,7 @@ func (h *Hub) paperWorker(ctx context.Context) {
 	child, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	defer func() { cancel(); wg.Wait() }()
-	for _, f := range []func(){func() { paperStream(child, paperBookWS, out) }, func() { paperStream(child, paperMarketWS, out) }, func() { paperRESTWorker(child, p, out) }} {
+	for _, f := range []func(){func() { paperStream(child, paperBookWS, out, &p.diagnostics) }, func() { paperStream(child, paperMarketWS, out, &p.diagnostics) }, func() { paperRESTWorker(child, p, out) }} {
 		wg.Add(1)
 		go func(f func()) { defer wg.Done(); f() }(f)
 	}
@@ -404,17 +413,21 @@ func (h *Hub) paperWorker(ctx context.Context) {
 			return
 		case msg := <-out:
 			operation = msg.Kind
+			if msg.Kind == "stream" {
+				p.diagnostics.processed(msg.At)
+			}
 			now = time.Now().UTC()
 			if msg.Err != nil {
 				err = msg.Err
 				if msg.Kind == "gap" {
 					err = p.discontinuity(ctx, now, "stream_disconnect")
 					if err == nil {
-						err = p.recordFailure(ctx, msg.Err, now, "stream")
+						err = p.recordStreamFailure(ctx, msg.Err, now, msg.Diagnostics)
 					}
 				}
 				break
 			}
+			done := p.diagnostics.stage(msg.Kind)
 			switch msg.Kind {
 			case "instrument":
 				p.instrument, err = parsePaperInstrument(msg.Raw, msg.At)
@@ -483,8 +496,10 @@ func (h *Hub) paperWorker(ctx context.Context) {
 				}
 				err = p.streamMessage(ctx, msg, candles, protected)
 			}
+			done()
 		case <-tick.C:
 			now = time.Now().UTC()
+			done := p.diagnostics.stage("heartbeat_prepare")
 			protected = h.Store.Status().Paused || p.size() >= PaperBudget-paperReserve
 			for ts := range candles {
 				if ts < now.Add(-17*time.Hour).Unix() {
@@ -495,12 +510,17 @@ func (h *Hub) paperWorker(ctx context.Context) {
 			if atr := hourlyATR(candles, now); atr != nil && *atr > 0 && completeCandles(candles, now.Truncate(time.Hour).Add(-14*time.Hour-5*time.Minute), now.Truncate(time.Hour)) {
 				p.atr = &paperIntent{ATR: decimal.NewFromFloat(*atr).Round(12), ATRThrough: now.Truncate(time.Hour)}
 			}
+			done()
+			done = p.diagnostics.stage("heartbeat")
 			now, err = p.liveHeartbeat(ctx, protected)
+			done()
 			if err == nil {
 				s := p.snapshot()
 				read, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+				done = p.diagnostics.stage("source_read")
 				pubs, source, end, e := readPaperPublications(read, sourceReader, s.Cursor)
 				cancel()
+				done()
 				now = time.Now().UTC() // First actionable read completion, not tick time.
 				err = e
 				if err == nil {
@@ -530,7 +550,9 @@ func (h *Hub) paperWorker(ctx context.Context) {
 				lastMaintenance = now
 				// Equity is accounting evidence: preserve it with the ledger.
 				maintenance, stop := context.WithTimeout(ctx, 200*time.Millisecond)
+				done = p.diagnostics.stage("checkpoint")
 				_, e := p.db.ExecContext(maintenance, "PRAGMA wal_checkpoint(TRUNCATE)")
+				done()
 				if err == nil {
 					err = e
 				}

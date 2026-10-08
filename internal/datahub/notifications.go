@@ -336,3 +336,25 @@ func noticeBody(v noticePayload, dashboard string) string {
 	}
 	return body
 }
+
+func (h *Hub) signalMailWorker(ctx context.Context) {
+	tick := time.NewTicker(time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			now := time.Now().UTC()
+			step, cancel := context.WithTimeout(ctx, 30*time.Second)
+			err := h.processNotices(step, now)
+			cancel()
+			if ctx.Err() != nil {
+				return
+			}
+			if err != nil {
+				_ = h.Store.SaveState("mail/error", map[string]any{"at": time.Now().UTC(), "error": err.Error()})
+			}
+		}
+	}
+}

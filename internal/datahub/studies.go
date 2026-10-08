@@ -788,7 +788,8 @@ func (h *Hub) researchWorker(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-tick.C:
+		case <-tick.C:
+			now := time.Now().UTC()
 			var seeded string
 			if !h.offline && (!h.Store.LoadState("studies/pipeline", &seeded) || seeded != studyPipeline) {
 				if _, e := h.CreateStudy(StudyRequest{Asset: "BTC"}); e == nil {
@@ -818,11 +819,6 @@ func (h *Hub) researchWorker(ctx context.Context) {
 				}
 			}
 			cancel()
-			mailCtx, done := context.WithTimeout(ctx, 30*time.Second)
-			if e := h.processNotices(mailCtx, now); e != nil {
-				_ = h.Store.SaveState("mail/error", map[string]any{"at": now, "error": e.Error()})
-			}
-			done()
 		}
 	}
 }

@@ -638,7 +638,12 @@ func (h *Hub) shortStudyView(a string) any {
 	if !h.Store.LoadState("short-flow/report", &r) {
 		return nil
 	}
-	h.Store.LoadState("short-flow/gap", &r.Gap)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	if err := h.Store.shortStateResult(ctx, "short-flow/gap", &r.Gap); err != nil && err != sql.ErrNoRows {
+		r.Gap.Paused = true
+		r.Gap.Reason = "研究暂停状态暂不可核验"
+	}
 	r.Diagnostics = h.Store.shortRuntimeView()
 	return r
 }
