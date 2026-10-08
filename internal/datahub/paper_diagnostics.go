@@ -67,7 +67,7 @@ func (d *paperDiagnostics) receive(at time.Time, depth int, accepted bool) {
 	defer d.mu.Unlock()
 	d.init()
 	d.view.Received++
-	observed := time.Now().UTC()
+	observed := at
 	if !d.arrivalAt.IsZero() {
 		d.arrivals[d.arrivalCount%512] = max(int64(0), observed.Sub(d.arrivalAt).Microseconds())
 		d.arrivalCount++
@@ -163,18 +163,40 @@ func (d *paperDiagnostics) snapshot() *paperDiagnosticView {
 	return &v
 }
 
+// A full queue is not proof of missing data. A producer may outrun an
+// unscheduled consumer for a few milliseconds. Yield with bounded backpressure,
+// retaining every quote and its original reception clock. The existing one
+// second processing-age guard remains authoritative; never enlarge the queue.
 func paperEnqueueStream(out chan<- paperMessage, msg paperMessage, trace *paperDiagnostics) *paperDiagnosticView {
 	select {
 	case out <- msg:
 		trace.receive(msg.At, len(out), true)
 		return nil
 	default:
-		trace.receive(msg.At, cap(out), false)
-		if trace == nil {
-			return &paperDiagnosticView{Overflows: 1, HighWater: cap(out)}
-		}
-		return trace.failureSnapshot()
 	}
+	start := time.Now()
+	wait := time.Until(msg.At.Add(time.Second))
+	accepted := false
+	if wait > 0 {
+		timer := time.NewTimer(wait)
+		select {
+		case out <- msg:
+			accepted = true
+		case <-timer.C:
+		}
+		timer.Stop()
+	}
+	if trace != nil {
+		trace.measure("enqueue_backpressure", time.Since(start))
+	}
+	trace.receive(msg.At, cap(out), accepted)
+	if accepted {
+		return nil
+	}
+	if trace == nil {
+		return &paperDiagnosticView{Overflows: 1, HighWater: cap(out)}
+	}
+	return trace.failureSnapshot()
 }
 
 func (d *paperDiagnostics) measure(name string, elapsed time.Duration) {
