@@ -55,8 +55,9 @@ type Entry = {
 };
 const cache = new Map<string, Entry>();
 const pending = new Map<string, Promise<unknown>>();
-// VIX and liquidation pages have independent reads; the local API permits two queries
-// in flight. Serialize these lightweight reads without widening that budget.
+// Multi-panel research pages share the existing two-query API limit.
+// Reuse the bounded read queue so signals, studies and audit cannot occupy
+// all slots at once or cause each other to receive a local 429.
 let vixReadQueue: Promise<unknown> = Promise.resolve();
 function entry(url: string): Entry {
   let e = cache.get(url);
@@ -116,7 +117,7 @@ export function api<T>(url: string, options: RequestInit = {}): Promise<T> {
     if (url === "logout") clearDataCache();
     return data as T;
   };
-  const serialVIX = method === "GET" && /^(?:hl-radar|onchain-cost|vix|liquidations|liquidation-study|liquidation-zones|large-order-zones)(?:[/?]|$)/.test(url);
+  const serialVIX = method === "GET" && /^(?:signals|studies|alert-audit|hl-radar|onchain-cost|vix|liquidations|liquidation-study|liquidation-zones|large-order-zones)(?:[/?]|$)/.test(url);
   const promise = serialVIX ? vixReadQueue.then(request, request) : request();
   if (serialVIX) vixReadQueue = promise.catch(() => {});
   if (method === "GET" && !options.signal) {
