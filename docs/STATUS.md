@@ -15,6 +15,8 @@
 本机公共连接验收失败：45秒内Binance WebSocket握手EOF，未取得报价/ATR；原始失败保留，不能算采集通过，不盲目重跑。下一步需要稳定Release在服务器提供同窗生产诊断后定位报价积压，尚未作猜测性队列修复。桌面1440/手机390已核对新增回撤说明，实际宽1425/375且无横向溢出；隔离合成账本只用于本机交互，未进入生产。新字段补充SQL连接池等待、编码/SQL/提交耗时和每秒进程累计CPU；失败只保存近5秒速率以限制质量日志增长，实时视图保留120秒。发布结果续记。72小时、约束长回放、真实突发覆盖、生产短周期恢复和策略效果均未记通过。
 
 
+GitHub首轮37821162224：verify/race通过，受限回放在447.95秒停止，峰值154.1MiB、无OOM；失败根因是旧比较测试仍调用已经迁移的shortState并预期它在hub连接上超时。该调用现在正确立即成功。仅将“旧路径”对照改为显式原hub状态SQL，保留200毫秒超时及新路径成功断言；不改变产品逻辑或放宽预算。旧失败产物11569378306已保留，修正后的完整回放待实际结果。
+
 ## v2.14.1 雷达已上线：实际收件与持续质量待验收
 
 2026年10月8日北京时间，Hyperliquid 异常建仓雷达通过 [PR #25](https://github.com/linlea666/tidal-crypto-intelligence/pull/25) 与测试边界补丁 [PR #26](https://github.com/linlea666/tidal-crypto-intelligence/pull/26)，经稳定 [v2.14.1](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.14.1) 和 [Release流水线37665630324](https://github.com/linlea666/tidal-crypto-intelligence/actions/runs/37665630324) 成功部署。生产revision `cd970fbcd1ec801157b71815adfe0814d9737852`，digest `sha256:88df418720b440dd057e12c8365025cb6f50d2dd74bec09d676026c27fb7f8a1`，容器启动 `2026-10-07T18:22:58.026079593Z`。v2.14.0因测试时间夹具失败未部署，原标签和失败证据保留。
