@@ -20,14 +20,18 @@ type ShortCoverage struct {
 	Reasons  []string  `json:"reasons,omitempty"`
 }
 type ShortOutcome struct {
-	Minutes  int      `json:"minutes"`
-	State    string   `json:"state"`
-	Coverage float64  `json:"coverage"`
-	Return   *float64 `json:"returnPercent"`
-	MFE      *float64 `json:"mfePercent"`
-	MAE      *float64 `json:"maePercent"`
+	MFEAt    *time.Time `json:"mfeBarAt,omitempty"`
+	MAEAt    *time.Time `json:"maeBarAt,omitempty"`
+	Minutes  int        `json:"minutes"`
+	State    string     `json:"state"`
+	Coverage float64    `json:"coverage"`
+	Return   *float64   `json:"returnPercent"`
+	MFE      *float64   `json:"mfePercent"`
+	MAE      *float64   `json:"maePercent"`
 }
 type ShortTrial struct {
+	MFEAt     *time.Time        `json:"mfeBarAt,omitempty"`
+	MAEAt     *time.Time        `json:"maeBarAt,omitempty"`
 	ID        string            `json:"id"`
 	Rule      string            `json:"rule"`
 	Direction string            `json:"direction"`
@@ -214,9 +218,11 @@ func (h *Hub) advanceShortTrial(ctx context.Context, t *ShortTrial, now time.Tim
 			hi, lo := math.Max(0, math.Max(a, b)), math.Min(0, math.Min(a, b))
 			if t.MFE == nil || hi > *t.MFE {
 				t.MFE = &hi
+				t.MFEAt = flowPtr(at)
 			}
 			if t.MAE == nil || lo < *t.MAE {
 				t.MAE = &lo
+				t.MAEAt = flowPtr(at)
 			}
 		}
 		t.Cursor = at.Add(5 * time.Minute)
@@ -232,9 +238,11 @@ func (h *Hub) advanceShortTrial(ctx context.Context, t *ShortTrial, now time.Tim
 				o.Return = ret
 				if t.MFE != nil {
 					o.MFE = flowPtr(*t.MFE)
+					o.MFEAt = t.MFEAt
 				}
 				if t.MAE != nil {
 					o.MAE = flowPtr(*t.MAE)
+					o.MAEAt = t.MAEAt
 				}
 			}
 		}

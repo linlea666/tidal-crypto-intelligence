@@ -69,3 +69,10 @@ Binance消息中的e/E、p/P及K线l/L是不同字段，必须分别解码，不
 短周期投影保存在既有 sf_records/state，旧hub行保留作兼容来源。研究登记不再依赖hub展示缓存写入，投影明确registered/unregistered；存储保护或失败不改变既有覆盖。发布后首次可读是提交后实际读取的上界观测，非精确SQLite提交瞬间，核心输入时间只描述所读取现货和价格事实，辅助因子沿用各自时钟。旧未知时间保持空。
 
 paper.feed.diagnostics是进程内有界诊断，重启清零且有startedAt，旧失败事件独立保留；报价溢出事件可含当刻diagnostics。回撤新增drawdownLowerBound/Percent与completeSampledDrawdown/Percent、drawdownComplete，原maximumObservedDrawdown字段保持连续片段定义，不再独立呈现为账户完整风险。
+
+
+## 分层候选与审查验收（2026-10-09）
+
+flow-layered-shadow-v1 独立起点、真实首次发布、自身两根闭合5m确认、同窗完整1h/4h同向、≤1.5 ATR、≤12分钟新鲜度；每父事件一次，拒绝不可改写，无新邮件/模拟入场。GET只读，不追认旧行情。审查页描述性现货观察与真实永续账本分开，旧未知时间和异常交易保留。8MiB子预算在研究总预算内，满后暂停，原始证据不删。
+
+本地固定案例与金融/恢复/存储race、API认证只读、类型构建、桌面/手机筛选分页已完成；GitHub最终检查/资源、v2.14.2之后的生产阻塞阶段诊断、真实消息突发回放、同一最终版本72小时仍待完成。生产实施期间collect，原A/B代次及账本保持；不得将停止新入场后的空仓质量称为持仓路径已验收。

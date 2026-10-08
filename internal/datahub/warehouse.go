@@ -41,6 +41,7 @@ type StorageStatus struct {
 	HotBytes       int       `json:"hotBytes"`
 }
 type Warehouse struct {
+	alertAuditError            string
 	radar                      *radarStore
 	paper                      *paperStore
 	onchain                    *costStore

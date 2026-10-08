@@ -72,8 +72,11 @@ func (h *Hub) signalsExtra(ctx context.Context, a string, rows []json.RawMessage
 		currentValue = current
 	}
 	ids := []string{}
+	meanings := map[string]AlertMeaning{}
 	for _, b := range rows {
-		ids = append(ids, decodeSignal(b).ID)
+		s := decodeSignal(b)
+		ids = append(ids, s.ID)
+		meanings[s.ID] = alertMeaning(s, false)
 	}
 	mail, e := h.signalMailResults(ctx, ids)
 	if e != nil {
@@ -116,7 +119,7 @@ func (h *Hub) signalsExtra(ctx context.Context, a string, rows []json.RawMessage
 	if e != nil {
 		return nil, e
 	}
-	return map[string]any{"progressRepairs": repairs, "progressEvaluationVersion": ProgressVersion, "latestFormal": latestFormal, "current": currentValue, "observation": h.shortObservationView(now), "notificationResults": mail, "prices": prices, "currentPrice": live}, nil
+	return map[string]any{"metricDefinitions": alertMetricDefinitions(), "meanings": meanings, "progressRepairs": repairs, "progressEvaluationVersion": ProgressVersion, "latestFormal": latestFormal, "current": currentValue, "observation": h.shortObservationView(now), "notificationResults": mail, "prices": prices, "currentPrice": live}, nil
 }
 func flowNoticeTitle(v noticePayload) string {
 	name, confirm := "买盘", "突破"
@@ -153,6 +156,8 @@ func multifactorNoticeBody(v noticePayload, dashboard string) string {
 	}
 	local := time.FixedZone("UTC+8", 8*3600)
 	b := flowNoticeTitle(v) + "\r\n" + s.Headline + "\r\n规则效果验证中。"
+	meaning := alertMeaning(*v.Signal, v.Kind == "confirmed")
+	b += "\r\n" + strings.Join(meaning.Labels, "；") + "\r\n" + meaning.Note
 	for _, m := range []string{"15", "60", "240"} {
 		w := s.Spot[m]
 		if w.Net == nil {

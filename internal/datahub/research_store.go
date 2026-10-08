@@ -35,6 +35,10 @@ func (w *Warehouse) initResearch() error {
 		return e
 	}
 	w.research = db
+	if e = w.initAlertAudit(); e != nil {
+		// Optional shadow research cannot take established collectors down.
+		w.alertAuditError = e.Error()
+	}
 	if e = w.initPaperPublications(); e != nil {
 		db.Close()
 		return e

@@ -567,6 +567,8 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 			return h.ActivityView(ctx, a, hours, activitySpan)
 		case "signals":
 			return h.SignalsView(ctx, a, "", q.Get("rules"))
+		case "alert-audit":
+			return h.alertAudit(ctx, q, time.Now().UTC())
 		case "studies":
 			return h.StudiesView(ctx, a, "")
 		case "wallet-trends":
