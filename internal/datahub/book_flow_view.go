@@ -386,3 +386,55 @@ func bookRelativeFormal(events []PriceEpisode, signals, formal []Signal, now tim
 	}
 	return map[string]any{"matchedPairs": len(values), "medianLeadMinutes": median, "pairs": pairs, "definition": "同一行情事件各自一对一匹配；正数表示该观察更早；未匹配不计算提前量"}
 }
+
+// Aggregate-only, bounded diagnostics for the existing five-minute sampler.
+// Never include raw levels, credentials, events or unbounded research results.
+func (h *Hub) bookFlowHealth(now time.Time) map[string]any {
+	h.mu.RLock()
+	runtime := h.bookFlowRuntime
+	h.mu.RUnlock()
+	runtime.Skipped = nil
+	v := map[string]any{"mode": h.bookFlowMode, "rulesVersion": BookFlowRules, "collectionVersion": BookFlowCollection, "runtime": runtime, "origin": nil, "coverage": nil}
+	if h.bookFlowMode == "off" {
+		return v
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	s := bookFlowState{}
+	if err := h.Store.bookFlowLoad(ctx, "state", BookFlowRules, &s); err != nil && err != sql.ErrNoRows {
+		v["error"] = err.Error()
+		return v
+	}
+	if !s.Origin.IsZero() {
+		v["origin"] = s.Origin
+		v["lastProcessedAt"] = s.Last
+	}
+	observed, timely := 0, 0
+	for _, d := range s.Days {
+		observed += d.Samples
+		timely += d.Timely
+	}
+	v["observedMinutes"], v["timelyMinutes"] = observed, timely
+	if observed > 0 {
+		v["coverage"] = float64(timely) / float64(observed)
+	}
+	contracts := []minuteContract{}
+	for _, venue := range []string{"Binance", "OKX"} {
+		c := minuteContract{Venue: venue}
+		if err := h.Store.bookFlowLoad(ctx, "contract", minuteFootID(venue), &c); err != nil && err != sql.ErrNoRows {
+			v["error"] = err.Error()
+			return v
+		}
+		contracts = append(contracts, c)
+	}
+	v["contracts"] = contracts
+	jobs := []map[string]any{}
+	for _, j := range h.Scheduler.State()["jobs"].([]Job) {
+		if j.Mode != "live" || (!coreBook(j.Dataset) && !minuteFoot(j.Dataset)) {
+			continue
+		}
+		jobs = append(jobs, map[string]any{"id": j.ID, "refreshSeconds": j.Dataset.Refresh, "lastSuccess": j.LastSuccess, "next": j.Next, "disabled": j.Disabled, "failures": j.Failures, "successIntervalSeconds": j.SuccessIntervalSeconds, "sourceLagSeconds": j.SourceLagSeconds, "queueWaitSeconds": j.QueueWaitSeconds, "fetchSeconds": j.FetchSeconds, "observedSamples": j.ObservedSamples, "timelySamples": j.TimelySamples, "lastFailureAt": j.LastFailureAt, "lastFailure": j.LastFailure})
+	}
+	v["jobs"] = jobs
+	return v
+}

@@ -24,6 +24,26 @@ func coreFiveFoot(d Dataset) bool {
 	return d.Kind == "footprint" && d.Asset == "BTC" && d.Market == "spot" && (d.Venue == "Binance" || d.Venue == "OKX") && !minuteFoot(d)
 }
 
+// Successful core requests and clean restarts return to the same minute
+// phases; failure backoff and global quota cooldown retain precedence.
+func bookFlowNext(d Dataset, now time.Time) (time.Time, bool) {
+	if d.Collection != BookFlowCollection || (!coreBook(d) && !minuteFoot(d)) {
+		return time.Time{}, false
+	}
+	seconds := 6
+	if d.Venue == "OKX" {
+		seconds += 26
+	}
+	if minuteFoot(d) {
+		seconds += 13
+	}
+	next := now.Truncate(time.Minute).Add(time.Duration(seconds) * time.Second)
+	if !next.After(now) {
+		next = next.Add(time.Minute)
+	}
+	return next, true
+}
+
 // Keep Registry's old identities and strict freshness limits. A slower polling
 // cadence is not permission to feed older evidence into existing strategies.
 func bookFlowRegistry(mode string) []Dataset {

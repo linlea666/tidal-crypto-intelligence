@@ -236,20 +236,8 @@ func NewScheduler(store *Warehouse, registry []Dataset, fetch Fetcher, enabled b
 				}
 			}
 		}
-		if d.Collection == BookFlowCollection && (coreBook(d) || minuteFoot(d)) {
-			phaseSeconds := 6
-			if d.Venue == "OKX" {
-				phaseSeconds += 26
-			}
-			if minuteFoot(d) {
-				phaseSeconds += 13
-			}
-			if _, exists := old[d.ID]; !exists || old[d.ID].Dataset.Collection != d.Collection {
-				j.Next = now.Truncate(time.Minute).Add(time.Duration(phaseSeconds) * time.Second)
-				if !j.Next.After(now) {
-					j.Next = j.Next.Add(time.Minute)
-				}
-			}
+		if fixed, ok := bookFlowNext(d, now); ok && j.Failures == 0 {
+			j.Next = fixed
 		}
 		if coreFiveFoot(d) && d.Collection == BookFlowCollection {
 			var c minuteContract
@@ -262,6 +250,10 @@ func NewScheduler(store *Warehouse, registry []Dataset, fetch Fetcher, enabled b
 	}
 	for _, j := range saved {
 		if j.Mode != "live" {
+			if minuteFoot(j.Dataset) && s.jobs[j.Dataset.ID] == nil {
+				j.Disabled = true
+				j.Error = "一分钟足迹采集配置已关闭"
+			}
 			if j.Dataset.Kind == "wallet" {
 				j.Dataset.TTL = WhaleTTLSeconds
 			}
@@ -590,6 +582,9 @@ func (s *Scheduler) run(ctx context.Context, j Job) {
 				next = next.Add(time.Duration(d.Refresh) * time.Second)
 			}
 			current.Next = next
+			if fixed, ok := bookFlowNext(d, now); ok {
+				current.Next = fixed
+			}
 			if d.Kind == "etf" {
 				current.Next = nextETF(now)
 			}

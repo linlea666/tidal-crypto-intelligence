@@ -113,7 +113,7 @@ func (h *Hub) writeReport() {
 	h.Store.LoadState("signals/error", &signalError)
 	h.Store.LoadState("studies/error", &studyError)
 	h.Store.LoadState("research/gap", &gap)
-	b, e := json.Marshal(map[string]any{"at": now, "generation": "v2", "markets": markets, "fx": metadata(d, fx, ok), "scheduler": quota, "storage": h.Store.Status(), "datasets": statuses, "legacyCollectorsRunning": false, "contracts": contracts, "researchAssets": ResearchAssets(), "signals": quality, "signalError": signalError, "studyError": studyError, "researchGap": gap, "mail": h.mailStatus(), "hlRadar": h.radarStatus(), "bookBaseline": h.baselineProgress()})
+	b, e := json.Marshal(map[string]any{"at": now, "generation": "v2", "markets": markets, "fx": metadata(d, fx, ok), "scheduler": quota, "storage": h.Store.Status(), "datasets": statuses, "legacyCollectorsRunning": false, "contracts": contracts, "researchAssets": ResearchAssets(), "signals": quality, "signalError": signalError, "studyError": studyError, "researchGap": gap, "mail": h.mailStatus(), "hlRadar": h.radarStatus(), "bookBaseline": h.baselineProgress(), "bookFlow": h.bookFlowHealth(now)})
 	if e != nil {
 		return
 	}

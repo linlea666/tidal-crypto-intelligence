@@ -534,3 +534,60 @@ func TestBookFlowFullRegistrySchedulingBounds(t *testing.T) {
 	}
 	t.Logf("2h full registry bounded replay: %d starts; preserved 12/min, 5.1s spacing and two inflight", requests)
 }
+
+func TestBookFlowRestartPhaseAndOffHistory(t *testing.T) {
+	w := testStore(t)
+	now := time.Now().UTC().Truncate(time.Minute).Add(50 * time.Second)
+	s := NewScheduler(w, bookFlowRegistry("collect"), nil, true, now)
+	for _, j := range s.jobs {
+		if next, ok := bookFlowNext(j.Dataset, now); ok {
+			if !j.Next.Equal(next) {
+				t.Fatal("initial phase", j.ID, j.Next, next)
+			}
+			j.Next = now.Add(-time.Minute)
+		}
+	}
+	m := *s.jobs[minuteFootID("Binance")]
+	m.ID, m.Mode = "test-minute-history", "history"
+	s.jobs[m.ID] = &m
+	if err := s.persistLocked(); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewScheduler(w, bookFlowRegistry("run"), nil, true, now)
+	for _, j := range restarted.jobs {
+		if j.Mode == "live" {
+			if next, ok := bookFlowNext(j.Dataset, now); ok && !j.Next.Equal(next) {
+				t.Fatal("restart phase", j.ID, j.Next, next)
+			}
+		}
+	}
+	off := NewScheduler(w, bookFlowRegistry("off"), nil, true, now)
+	if !off.jobs[m.ID].Disabled {
+		t.Fatal("off still schedules removed minute history")
+	}
+}
+
+func TestBookFootMissingInteriorMinuteAndLateBackfill(t *testing.T) {
+	now := time.Date(2026, 10, 9, 1, 10, 0, 0, time.UTC)
+	e := bookEvent{Venue: "Binance", At: now.Add(-10 * time.Minute), CompletePath: true}
+	rows := []Observation{}
+	for i := 5; i > 0; i-- {
+		at := now.Add(-time.Duration(i) * time.Minute)
+		rows = append(rows, footFixture("Binance", at, at.Add(time.Minute), "80000", "220000"))
+	}
+	if bookFootPathGap(e, rows, now, now) {
+		t.Fatal("complete minutes flagged")
+	}
+	missing := append([]Observation{}, rows[1:]...)
+	if !bookFootPathGap(e, missing, now, now) {
+		t.Fatal("fresh latest concealed missing interior")
+	}
+	rows[0].FetchedAt = now
+	if !bookFootPathGap(e, rows, now, now) {
+		t.Fatal("late backfill restored complete evidence")
+	}
+	rows[0].FetchedAt = rows[0].Time().Add(time.Minute)
+	if bookFootPathGap(e, rows[:4], now, now) {
+		t.Fatal("latest minute grace ignored")
+	}
+}

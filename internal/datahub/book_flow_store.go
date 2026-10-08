@@ -283,6 +283,12 @@ func (h *Hub) bookFlowStep(ctx context.Context, now time.Time) error {
 				if e.Venue != venue || e.Ended || !to.After(s.FootThrough[e.ID]) {
 					continue
 				}
+				if e.CompletePath && bookFootPathGap(*e, rows, to, now) {
+					e.CompletePath = false
+					appendBookUpdate(e, "foot_gap", now, to, nil)
+					updates[e.ID] = *e
+					changed = true
+				}
 				v := evaluateBookFoot(*e, rows, s.History[venue], rate, now)
 				if v == nil {
 					continue

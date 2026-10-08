@@ -252,6 +252,28 @@ func appendBookUpdate(e *bookEvent, kind string, now, source time.Time, evidence
 	e.Updates = append(e.Updates, bookUpdate{kind, now, source, evidence})
 }
 
+// A fresh latest minute does not prove that the interior minutes arrived.
+// Wait the same three-minute acquisition allowance used by coverage before
+// recording a gap; a later backfill cannot restore an event's complete path.
+func bookFootPathGap(e bookEvent, rows []Observation, to, now time.Time) bool {
+	valid := map[int64]bool{}
+	for _, o := range rows {
+		end := o.Time().Add(time.Minute)
+		if o.Dataset == minuteFootID(e.Venue) && o.Resolution == 60 && o.Quality == "valid" && !o.FetchedAt.Before(end) && !o.FetchedAt.After(end.Add(3*time.Minute)) {
+			valid[o.Time().Unix()] = true
+		}
+	}
+	for at := to.Add(-5 * time.Minute); at.Before(to); at = at.Add(time.Minute) {
+		if at.Before(e.At.Truncate(time.Minute).Add(time.Minute)) || at.Add(4*time.Minute).After(now) {
+			continue
+		}
+		if !valid[at.Unix()] {
+			return true
+		}
+	}
+	return false
+}
+
 func evaluateBookFoot(e bookEvent, rows []Observation, points []bookPoint, rate *string, now time.Time) *bookEvidence {
 	if len(rows) != 5 {
 		return nil
