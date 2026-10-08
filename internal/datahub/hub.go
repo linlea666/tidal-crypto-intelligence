@@ -38,6 +38,10 @@ type viewFlight struct {
 	err  error
 }
 type Hub struct {
+	layeredLastAttempt    *time.Time
+	layeredLastSuccess    *time.Time
+	layeredLastFailure    *time.Time
+	layeredFailure        string
 	radar                 *radarRuntime
 	radarInitError        string
 	onchainDisabled       bool
@@ -188,6 +192,9 @@ func (h *Hub) Run(ctx context.Context) {
 	var wg sync.WaitGroup
 	start := func(f func(context.Context)) { wg.Add(1); go func() { defer wg.Done(); f(ctx) }() }
 	start(h.Scheduler.Run)
+	if !h.offline {
+		start(h.layeredWorker)
+	}
 	start(h.researchWorker)
 	if !h.offline {
 		start(h.signalMailWorker)

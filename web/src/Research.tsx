@@ -646,7 +646,7 @@ export function StudiesPage({ asset }: { asset: Asset }) {
             value={`${q.data?.forward?.early ?? 0} / ${q.data?.forward?.following ?? 0} / ${q.data?.forward?.missed ?? 0}`}
           />
         </div>
-        <p className="helper">{q.data?.forward?.note}</p>
+        <p className="helper">{q.data?.forward?.note}</p><p className="helper">行情覆盖的分母是行情事件；方向收益的分母是已成熟完整价格窗口，均不是实际成交胜率。现货观察不含永续手续费、点差或资金费；全部模拟账户与完整路径样本分别查看模拟仓位。</p>
         <h4>候选规则独立观察 · {q.data?.forward?.candidateReady ? "仅达到人工审查门槛" : "样本未达门槛"}</h4>
         <p>{(q.data?.forward?.candidateDays ?? 0).toFixed(1)}天 / 覆盖 {((q.data?.forward?.candidateCoverage ?? 0)*100).toFixed(1)}% / {q.data?.forward?.candidateEpisodes ?? 0}个独立买方行情事件。旧规则观察天数不计入候选门槛。</p>
         {!!q.data?.forward?.comparisons?.length && <ComparisonTable items={q.data.forward.comparisons} />}

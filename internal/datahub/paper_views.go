@@ -474,5 +474,5 @@ func (p *paperStore) summary(ctx context.Context, now time.Time) (any, error) {
 		return nil, err
 	}
 	coverage := float64(s.CoveredSeconds) / float64(max(s.ObservedSeconds, 1)) * 100
-	return map[string]any{"enabled": p.mode != "off", "mode": p.mode, "contract": "Binance BTCUSDT USDT本位永续", "state": s, "feed": feed, "coveragePercent": coverage, "accounts": accounts, "quality": quality, "events": events, "intakeCounts": counts, "at": now, "parameters": s.Parameters}, nil
+	return map[string]any{"metricDefinitions": alertMetricDefinitions(), "enabled": p.mode != "off", "mode": p.mode, "contract": "Binance BTCUSDT USDT本位永续", "state": s, "feed": feed, "coveragePercent": coverage, "accounts": accounts, "quality": quality, "events": events, "intakeCounts": counts, "at": now, "parameters": s.Parameters}, nil
 }

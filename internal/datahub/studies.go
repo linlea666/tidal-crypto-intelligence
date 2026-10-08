@@ -202,7 +202,7 @@ func (h *Hub) StudiesView(ctx context.Context, a, id string) (any, error) {
 		return s, e
 	}
 	rows, e := h.Store.documents(ctx, "study", a, 20)
-	return map[string]any{"enabled": researchAsset(a), "enabledAssets": ResearchAssets(), "items": rows, "rulesVersion": SignalRules, "weightPolicy": "所有辅助指标为0；验证报告经确认后才可变更规则", "requiredShadowDays": 14, "forward": h.forwardReport(ctx, a), "shortTerm": h.shortStudyView(a)}, e
+	return map[string]any{"metricDefinitions": alertMetricDefinitions(), "enabled": researchAsset(a), "enabledAssets": ResearchAssets(), "items": rows, "rulesVersion": SignalRules, "weightPolicy": "所有辅助指标为0；验证报告经确认后才可变更规则", "requiredShadowDays": 14, "forward": h.forwardReport(ctx, a), "shortTerm": h.shortStudyView(a)}, e
 }
 func (h *Hub) studyCandles(ctx context.Context, s *Study, now time.Time) error {
 	if !s.CandleCursor.Before(s.To) {
