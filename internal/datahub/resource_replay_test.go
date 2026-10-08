@@ -356,6 +356,9 @@ func TestResourceReplay(t *testing.T) {
 		var m runtime.MemStats
 		runtime.ReadMemStats(&m)
 		sample := map[string]any{"at": time.Now().UTC(), "cycle": cycle, "heapBytes": m.HeapAlloc, "heapSysBytes": m.HeapSys, "heapReleasedBytes": m.HeapReleased, "totalAllocBytes": m.TotalAlloc, "sysBytes": m.Sys, "goroutines": runtime.NumGoroutine()}
+		ps := h.Store.paper.snapshot()
+		pd := h.Store.paper.diagnostics.snapshot()
+		sample["paper"] = map[string]any{"received": pd.Received, "processed": pd.Processed, "overflows": pd.Overflows, "queueHighWater": pd.HighWater, "observedSeconds": ps.ObservedSeconds, "coveredSeconds": ps.CoveredSeconds, "bytes": h.Store.paper.size(), "stages": pd.Stages}
 		if b, err := os.ReadFile("/proc/self/status"); err == nil {
 			for _, line := range strings.Split(string(b), "\n") {
 				if strings.HasPrefix(line, "VmRSS:") {

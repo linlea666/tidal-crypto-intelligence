@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -169,6 +171,41 @@ func paperResourceStart(t *testing.T, h *Hub) func() {
 		var fills int
 		if err := p.db.QueryRow("SELECT count(*) FROM paper_fills").Scan(&fills); err != nil || fills == 0 {
 			t.Error("paper replay produced no actual fills", fills, err)
+		}
+		state := p.snapshot()
+		var gaps, failures, closed, complete int
+		for _, q := range []struct {
+			sql  string
+			dest *int
+		}{
+			{"SELECT count(*) FROM paper_events WHERE kind='gap' AND json_extract(payload,'$.reason')<>'restart_gap'", &gaps},
+			{"SELECT count(*) FROM paper_events WHERE kind IN ('failure','fetch_failure')", &failures},
+			{"SELECT count(*) FROM paper_trades WHERE exited IS NOT NULL", &closed},
+			{"SELECT count(*) FROM paper_trades WHERE exited IS NOT NULL AND coalesce(json_array_length(payload,'$.quality'),0)=0", &complete},
+		} {
+			if err := p.db.QueryRow(q.sql).Scan(q.dest); err != nil {
+				t.Error(err)
+			}
+		}
+		coverage := 0.0
+		if state.ObservedSeconds > 0 {
+			coverage = 100 * float64(state.CoveredSeconds) / float64(state.ObservedSeconds)
+		}
+		report := map[string]any{"offered": offered, "accepted": accepted, "consumed": d.Processed, "overflows": d.Overflows, "bursts": bursts, "maxProducerLatenessMs": float64(maxLateness) / float64(time.Millisecond), "diagnostics": d, "bytes": p.size(), "cursor": state.Cursor, "fills": fills, "closed": closed, "completeClosed": complete, "gapsAfterRestart": gaps, "failures": failures, "observedSeconds": state.ObservedSeconds, "coveredSeconds": state.CoveredSeconds, "coveragePercent": coverage, "accounts": state.Accounts}
+		if dir := os.Getenv("TIDAL_RESOURCE_OUTPUT"); dir != "" {
+			raw, err := json.MarshalIndent(report, "", "  ")
+			if err == nil {
+				err = os.WriteFile(filepath.Join(dir, "paper.json"), raw, 0644)
+			}
+			if err != nil {
+				t.Error(err)
+			}
+		}
+		if gaps != 0 || failures != 0 {
+			t.Error("paper replay quality failed", gaps, failures)
+		}
+		if state.ObservedSeconds >= 60 && coverage < 95 {
+			t.Error("paper replay coverage below 95%", coverage)
 		}
 		t.Logf("paper production replay offered=%d accepted=%d consumed=%d overflow=%d bursts=%d maxLateness=%s bytes=%d cursor=%d fills=%d", offered, accepted, d.Processed, d.Overflows, bursts, maxLateness, p.size(), p.snapshot().Cursor, fills)
 	}
