@@ -105,7 +105,7 @@ func main() {
 		slog.Error(mailErr.Error())
 		os.Exit(1)
 	}
-	hub, err := datahub.Open(datahub.Config{PaperMode: env("TIDAL_PAPER_MODE", "off"), DisableOnchain: os.Getenv("TIDAL_ONCHAIN_DISABLED") == "true", DisableOnchainEvents: os.Getenv("TIDAL_ONCHAIN_EVENTS_DISABLED") == "true", Root: env("TIDAL_DATA", "data") + "/v2", BaseURL: env("COINGLASS_BASE_URL", "https://proxy.keystore.com.cn/api/v1/proxy/coinglass"), Key: key, Offline: os.Getenv("TIDAL_OFFLINE") == "true", Mail: mailConfig})
+	hub, err := datahub.Open(datahub.Config{BookFlowMode: env("TIDAL_BOOK_FLOW_MODE", "off"), PaperMode: env("TIDAL_PAPER_MODE", "off"), DisableOnchain: os.Getenv("TIDAL_ONCHAIN_DISABLED") == "true", DisableOnchainEvents: os.Getenv("TIDAL_ONCHAIN_EVENTS_DISABLED") == "true", Root: env("TIDAL_DATA", "data") + "/v2", BaseURL: env("COINGLASS_BASE_URL", "https://proxy.keystore.com.cn/api/v1/proxy/coinglass"), Key: key, Offline: os.Getenv("TIDAL_OFFLINE") == "true", Mail: mailConfig})
 	if err != nil {
 		panic(err)
 	}

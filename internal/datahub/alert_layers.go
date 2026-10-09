@@ -76,14 +76,15 @@ type LayeredInput struct {
 }
 
 type LayeredDecision struct {
-	ID        string       `json:"id"`
-	Rules     string       `json:"rulesVersion"`
-	ParentID  string       `json:"parentId"`
-	Direction string       `json:"direction"`
-	At        time.Time    `json:"at"`
-	Accepted  bool         `json:"accepted"`
-	Reasons   []string     `json:"reasons"`
-	Input     LayeredInput `json:"input"`
+	Collection string       `json:"collectionVersion,omitempty"`
+	ID         string       `json:"id"`
+	Rules      string       `json:"rulesVersion"`
+	ParentID   string       `json:"parentId"`
+	Direction  string       `json:"direction"`
+	At         time.Time    `json:"at"`
+	Accepted   bool         `json:"accepted"`
+	Reasons    []string     `json:"reasons"`
+	Input      LayeredInput `json:"input"`
 }
 
 func finiteDecimal(v *float64) *string {
@@ -101,7 +102,7 @@ func netDecimal(v *int64) *string {
 func evaluateLayered(s Signal, current FlowSnapshot, origin, now time.Time) LayeredDecision {
 	sign := float64(sideSign(s.Direction))
 	w1, w4 := current.Spot["60"], current.Spot["240"]
-	d := LayeredDecision{Rules: LayeredRules, ParentID: s.ID, Direction: s.Direction, At: now, Reasons: []string{}}
+	d := LayeredDecision{Rules: LayeredRules, Collection: s.Collection, ParentID: s.ID, Direction: s.Direction, At: now, Reasons: []string{}}
 	in := LayeredInput{Through: current.DataThrough, SnapshotAt: current.At, Fresh: current.Fresh, Net1H: netDecimal(w1.Net), Net4H: netDecimal(w4.Net), Coverage1H: w1.Coverage, Coverage4H: w4.Coverage, Price: finiteDecimal(current.Price.Close), ATR: finiteDecimal(current.Price.PriorATR), ConfirmationAt: s.ConfirmedAt, ConfirmationThrough: s.ConfirmedThrough}
 	line := s.FrozenHigh
 	if s.Direction == "sell" {
@@ -214,6 +215,7 @@ func (h *Hub) layeredStep(ctx context.Context, now time.Time) error {
 			continue
 		}
 		decision := evaluateLayered(s, current, origin, now)
+		decision.Collection = h.collectionVersion()
 		if e = h.saveLayeredDecision(ctx, decision); e != nil {
 			return e
 		}

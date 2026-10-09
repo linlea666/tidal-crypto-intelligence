@@ -1,3 +1,4 @@
+import { CollectionCohorts, type CollectionCohort } from "./CollectionCohorts";
 import { useState } from "react";
 import { Chart } from "./Chart";
 import { clock, useAPI } from "./data";
@@ -10,7 +11,7 @@ type Outcome = { start: string; referenceUsdt: string | null; note: string; outc
 type Paper = { id: string; group: string; actionableAt: string; enteredAt: string; exitedAt: string | null; entryPrice: string; netPnl: string | null; fees: string; exitReason: string; quality: string[]; fundingPending: boolean; fills: { id: string; at: string; kind: string; price: string; quantity: string }[] };
 type Item = { id: string; at: string; direction: string; dataThrough?: string; priceUsdt?: string | null; confirmedAt?: string | null; computedAt?: string | null; confirmationComputedAt?: string | null; coreInputFirstSeenAt?: string | null; coreInputAvailableAt?: string | null; initialInput?: { net1hUsd: string | null; net4hUsd: string | null; displacementAtr: string | null }; meaning?: Meaning; publicationClock?: { firstReadableAt: string }; decisions?: Decision[]; candidates?: Decision[]; notifications?: { id: string; status: string; kind: string; completedAt: string | null; error?: string }[]; candidateOutcome?: Outcome | null; observation?: Outcome; paper?: Paper[]; trials?: (Outcome & { minutes: string })[] };
 type Event = { at: string; kind: string; parentId: string; text: string; group?: string; priceUsdt: string | null };
-type Audit = { at: string; origin: string | null; rulesVersion: string; runtime: { lastSuccessAt: string | null; lastFailureAt: string | null; lastError: string }; storageBytes: number; budgetBytes: number; items: Item[]; events: Event[]; prices: { at: string; closeUsdt: string | null }[]; more: boolean; qualityMore?: boolean; note: string; timelineNote?: string };
+type Audit = { candidateByCollection?: CollectionCohort[]; candidateCollectionTruncated?: boolean; at: string; origin: string | null; rulesVersion: string; runtime: { lastSuccessAt: string | null; lastFailureAt: string | null; lastError: string }; storageBytes: number; budgetBytes: number; items: Item[]; events: Event[]; prices: { at: string; closeUsdt: string | null }[]; more: boolean; qualityMore?: boolean; note: string; timelineNote?: string };
 const stamp = (s?: string | null) => s ? new Date(s).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "未知 / 当时未记录";
 const number = (v?: string | null, digits = 2) => v == null ? "未知" : Number(v).toLocaleString("zh-CN", { maximumFractionDigits: digits });
 const level: Record<string, string> = { ordinary: "普通异动", large: "规模较大", supported: "多因素支持" };
@@ -50,6 +51,7 @@ export function AlertAudit() {
     {!!d?.prices.length && <><Chart option={chart} height={245} label="复盘价格与当前页关联事件时间；现货价格缺口不连线" /><small>{d.timelineNote}</small></>}
     {!!events.length && <details><summary>展开时间轴：首次提醒、确认、通知与实际成交</summary><ol className="audit-events">{events.map((e, i) => <li key={`${e.parentId}-${e.kind}-${i}`}><time>{stamp(e.at)}</time><b>{eventName[e.kind]}</b><span>{e.group === "risk" ? "固定风控组 · " : e.group === "opposite" ? "反向退出组 · " : ""}{e.text}{e.priceUsdt != null && ` · ${number(e.priceUsdt)} USDT`}</span></li>)}</ol></details>}
     {d?.qualityMore && <p>此范围质量事件超过200条，时间轴展示最早200条；请缩小时间范围继续核对，未展示部分不视为正常。</p>}
+    {layer !== "risk" && <CollectionCohorts title="本范围影子候选" items={d?.candidateByCollection} truncated={d?.candidateCollectionTruncated}/>}
     <div className="audit-records">{d?.items.map(i => <article key={i.id}>
       <div className="flow-section-title"><h4 className={i.direction === "buy" ? "buy" : "sell"}>{i.direction === "buy" ? "买盘" : "卖压"}{layer === "risk" ? "风险观察" : "正式异动"}</h4><time>{stamp(i.at)}</time></div>
       {i.meaning && <><p>首次发布：{level[i.meaning.publishedLevel] ?? "未知"}{i.meaning.laterLevel && ` · 后来升级：${level[i.meaning.laterLevel] ?? i.meaning.laterLevel}`}</p><div className="audit-tags">{i.meaning.labels.map(v => <span key={v}>{v}</span>)}</div><p>{i.meaning.note}</p></>}

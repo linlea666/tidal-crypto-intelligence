@@ -47,6 +47,7 @@ export type Zone = {
   changeCents: number;
 };
 export type Coverage = {
+ refreshSeconds?: number;
   fetchedAt?: string;
   rate?: string;
   fxAt?: string | null;

@@ -25,7 +25,7 @@ func TestPaperHTTPReadOnlyAndAuthentication(t *testing.T) {
 	server := NewServer(engine, store, NewWhales(NewCollector(engine)), string(hash), t.TempDir(), "test", false)
 	server.Hub = hub
 	handler := server.Handler()
-	for _, path := range []string{"paper", "paper/trades", "paper/trade?id=missing", "alert-audit"} {
+	for _, path := range []string{"paper", "paper/trades", "paper/trade?id=missing", "alert-audit", "book-flow", "alert-audit?layer=book"} {
 		r := httptest.NewRecorder()
 		handler.ServeHTTP(r, httptest.NewRequest("GET", "/api/v2/"+path, nil))
 		if r.Code != 401 {
@@ -39,7 +39,7 @@ func TestPaperHTTPReadOnlyAndAuthentication(t *testing.T) {
 	}
 	cookie := login.Result().Cookies()[0]
 	for _, method := range []string{"GET", "POST", "PUT", "DELETE"} {
-		for _, path := range []string{"paper", "paper/trades", "alert-audit"} {
+		for _, path := range []string{"paper", "paper/trades", "alert-audit", "book-flow", "alert-audit?layer=book"} {
 			req := httptest.NewRequest(method, "/api/v2/"+path, nil)
 			req.AddCookie(cookie)
 			r := httptest.NewRecorder()

@@ -20,6 +20,7 @@ import (
 )
 
 type Config struct {
+	BookFlowMode         string
 	PaperMode            string
 	DisableOnchain       bool
 	DisableOnchainEvents bool
@@ -38,6 +39,8 @@ type viewFlight struct {
 	err  error
 }
 type Hub struct {
+	bookFlowMode          string
+	bookFlowRuntime       bookFlowRuntime
 	layeredLastAttempt    *time.Time
 	layeredLastSuccess    *time.Time
 	layeredLastFailure    *time.Time
@@ -85,6 +88,16 @@ func Open(cfg Config) (*Hub, error) {
 		return nil, errors.New("CoinGlass base URL must use HTTPS")
 	}
 	h := &Hub{Store: w, registry: map[string]Dataset{}, views: map[string]cachedView{}, flights: map[string]*viewFlight{}, baselines: map[string]Baseline{}, boot: time.Now().UTC(), offline: cfg.Offline, mail: cfg.Mail}
+	h.bookFlowMode = cfg.BookFlowMode
+	_ = w.LoadState("book-flow/runtime", &h.bookFlowRuntime)
+	h.bookFlowRuntime.Registered = false
+	if h.bookFlowMode == "" {
+		h.bookFlowMode = "off"
+	}
+	if h.bookFlowMode != "off" && h.bookFlowMode != "collect" && h.bookFlowMode != "run" {
+		w.Close()
+		return nil, errors.New("TIDAL_BOOK_FLOW_MODE must be off, collect or run")
+	}
 	h.onchainDisabled, h.onchainEventsDisabled = cfg.DisableOnchain, cfg.DisableOnchainEvents
 	mode := cfg.PaperMode
 	if mode == "" {
@@ -109,10 +122,11 @@ func Open(cfg Config) (*Hub, error) {
 	w.LoadState("baselines", &h.baselines)
 	w.LoadState("wallHistory", &h.walls)
 	w.LoadState("wallContinuity", &h.continuity)
-	for _, d := range Registry() {
+	registry := bookFlowRegistry(h.bookFlowMode)
+	for _, d := range registry {
 		h.registry[d.ID] = d
 	}
-	h.Scheduler = NewScheduler(w, Registry(), NewFetcher(cfg.BaseURL, strings.TrimSpace(cfg.Key)), cfg.Key != "" && !cfg.Offline, h.boot)
+	h.Scheduler = NewScheduler(w, registry, NewFetcher(cfg.BaseURL, strings.TrimSpace(cfg.Key)), cfg.Key != "" && !cfg.Offline, h.boot)
 	var fingerprint string
 	keyHash := fmt.Sprintf("%x", sha256.Sum256([]byte(cfg.Key)))
 	if !w.LoadState("keyFingerprint", &fingerprint) || fingerprint != keyHash {
@@ -194,6 +208,9 @@ func (h *Hub) Run(ctx context.Context) {
 	start(h.Scheduler.Run)
 	if !h.offline {
 		start(h.layeredWorker)
+		if h.bookFlowMode != "off" {
+			start(h.bookFlowWorker)
+		}
 	}
 	start(h.researchWorker)
 	if !h.offline {

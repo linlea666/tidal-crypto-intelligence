@@ -1,3 +1,4 @@
+import { CollectionCohorts, type CollectionCohort } from "./CollectionCohorts";
 import { useState } from "react";
 import { Chart } from "./Chart";
 import { api, amount, price, useAPI } from "./data";
@@ -560,7 +561,7 @@ export function StudiesPage({ asset }: { asset: Asset }) {
     items: StudyItem[];
     shortTerm?: ShortStudy | null;
     forward?: {
-	  multifactor?: { days: number; coverage: number; episodes: number; reviewReady: boolean; comparisons: RuleComparison[]; equalBudget: RuleComparison[]; note: string };
+	  multifactor?: { byCollection?: CollectionCohort[]; days: number; coverage: number; episodes: number; reviewReady: boolean; comparisons: RuleComparison[]; equalBudget: RuleComparison[]; note: string };
       candidateDays?: number; candidateCoverage?: number; candidateEpisodes?: number;
       candidateReady?: boolean; comparisons?: RuleComparison[];
       evaluationVersion?: string; matches?: RuleComparison["matches"];
@@ -621,7 +622,7 @@ export function StudiesPage({ asset }: { asset: Asset }) {
       <LoadError error={error || q.error} />
       {d && <section className="data-section"><h3>研究输入与版本</h3><p>输入状态：{d.inputIntegrity || (d.inputSnapshotId ? "正在冻结" : "尚未冻结")}</p>{d.inputFrozenAt && <p>采集截止 {stamp(d.inputFrozenAt)} · 快照 {d.inputSnapshotId}</p>}{d.parentStudyId && <p>原研究 {d.parentStudyId}</p>}{d.terminalReason && <p>{d.terminalReason}</p>}<p className="helper">缺失范围保留；冻结结果不随滚动清理或后续补采改变。历史关联、行情覆盖率与交易胜率分别统计。</p><button className="action" disabled={busy || asset !== "BTC"} onClick={() => start(d.id)}>基于当前数据创建新版本</button></section>}
 
-	  {q.data?.forward?.multifactor && <section className="data-section"><h3>新双向规则 · {q.data.forward.multifactor.reviewReady ? "达到阶段审查样本门槛" : "效果验证中"}</h3><p>{q.data.forward.multifactor.days.toFixed(1)} 天 / {(q.data.forward.multifactor.coverage*100).toFixed(1)}%覆盖 / {q.data.forward.multifactor.episodes}个独立行情事件</p><p className="helper">{q.data.forward.multifactor.note}</p><details><summary>分买卖方向查看前向与延迟对照</summary><ComparisonTable items={q.data.forward.multifactor.comparisons}/><h4>相同提醒数量对照</h4><ComparisonTable items={q.data.forward.multifactor.equalBudget ?? []}/></details></section>}
+	  {q.data?.forward?.multifactor && <section className="data-section"><h3>新双向规则 · {q.data.forward.multifactor.reviewReady ? "达到阶段审查样本门槛" : "效果验证中"}</h3><p>{q.data.forward.multifactor.days.toFixed(1)} 天 / {(q.data.forward.multifactor.coverage*100).toFixed(1)}%覆盖 / {q.data.forward.multifactor.episodes}个独立行情事件</p><p className="helper">{q.data.forward.multifactor.note}</p><details><summary>分买卖方向查看前向与延迟对照</summary><ComparisonTable items={q.data.forward.multifactor.comparisons}/><h4>相同提醒数量对照</h4><ComparisonTable items={q.data.forward.multifactor.equalBudget ?? []}/></details><CollectionCohorts title="正式前向" items={q.data.forward.multifactor.byCollection}/><small>沿用原前向共同有效窗口；该分组不改变原研究起点或门槛。</small></section>}
       <section className="data-section">
         <h3>
           实时旁路观察 ·{" "}

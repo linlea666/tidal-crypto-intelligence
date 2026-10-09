@@ -1,3 +1,4 @@
+import { collectionLabel } from "./CollectionCohorts";
 import { useState } from "react";
 import { Chart } from "./Chart";
 import { age, price, useAPI } from "./data";
@@ -85,6 +86,7 @@ type Account = {
   clean: Stats;
   commonEntries: Stats;
   byDirection: Record<string, Stats>;
+  byCollection?: Record<string, Stats>;
   byPublishedLevel: Record<string, Stats>;
   curve: {
     points: { at: string; value: D }[];
@@ -433,6 +435,10 @@ function PaperAccount({
         <p className="paper-muted">
           仅使用发布时已知的等级，后续价格确认不作为入场条件。
         </p>
+      </details>
+      <details><summary>按原信号采集配置分组</summary>
+        <StatTable rows={Object.entries(a.byCollection ?? {}).map(([name, stats]) => ({name:collectionLabel(name),stats}))}/>
+        <p className="paper-muted">包含异常交易，完整路径数与待资金费另列；分组不重新开始账户。旧记录未保存配置时保持未知，不能用整个账户覆盖率代替此分组覆盖率。</p>
       </details>
       <h4>账户净值 · 最近24小时</h4>
       {a.curve.points.length ? (

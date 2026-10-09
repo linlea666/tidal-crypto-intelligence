@@ -10,6 +10,7 @@ import {
 } from "./Pages";
 import type { Asset } from "./types";
 import { SignalsPage, StudiesPage, WalletPage } from "./Research";
+import { BookFlowPage } from "./BookFlow";
 import { PaperPage } from "./Paper";
 
 type FlowWindow = {
@@ -76,6 +77,7 @@ type Activity = {
   derivatives: Derivatives;
   footprint: Record<string, [number, number]>;
   footprintVenues: string[];
+ footprintSources: Meta[];
   footprintPartial: boolean;
   matchedFootprintVenues: string[];
   orders: Order[];
@@ -121,6 +123,7 @@ export function ActivityPage({ asset }: { asset: Asset }) {
         {[
           ["snapshot", "当前动向"],
           ["signals", "异动预警"],
+          ["book-flow", "挂单与承接"],
           ["studies", "历史复盘"],
           ["paper", "模拟仓位"],
           ["wallet", "钱包趋势"],
@@ -131,11 +134,11 @@ export function ActivityPage({ asset }: { asset: Asset }) {
             className={tab === id ? "active" : ""}
             disabled={
               asset !== "BTC" &&
-              (id === "signals" || id === "studies" || id === "paper")
+              (id === "signals" || id === "studies" || id === "paper" || id === "book-flow")
             }
             title={
               asset !== "BTC" &&
-              (id === "signals" || id === "studies" || id === "paper")
+              (id === "signals" || id === "studies" || id === "paper" || id === "book-flow")
                 ? "仅BTC启用"
                 : ""
             }
@@ -143,13 +146,13 @@ export function ActivityPage({ asset }: { asset: Asset }) {
           >
             {name}
             {asset !== "BTC" &&
-            (id === "signals" || id === "studies" || id === "paper")
+            (id === "signals" || id === "studies" || id === "paper" || id === "book-flow")
               ? " · 仅BTC"
               : ""}
           </button>
         ))}
       </nav>
-      {tab === "paper" ? (
+      {tab === "book-flow" ? (asset === "BTC" ? <BookFlowPage /> : <p>挂单与承接观察仅支持BTC。</p>) : tab === "paper" ? (
         asset === "BTC" ? (
           <PaperPage />
         ) : (
@@ -354,13 +357,14 @@ function ActivitySnapshot({ asset }: { asset: Asset }) {
           ))}
           {!feet.length && <p className="empty">足迹数据暂缺</p>}
           <p className="helper">
-            5分钟粒度、约15分钟采集。足迹来源：
+            完整5分钟展示；验证切换后的核心来源由五个完整分钟汇总。足迹来源：
             {d?.footprintVenues.join("、") || "待补齐"}；
             {!d || d.footprintPartial ? "覆盖不完整" : "已获取"}
             。与五家盘口共同且新鲜的来源：
             {d?.matchedFootprintVenues.join("、") || "暂无"}
             。本图是独立成交分布，未将成交关联为某笔大单。
           </p>
+          {d?.footprintSources?.map((m,i) => <Status key={i} meta={m} />)}
         </section>
       </details>
       <section className="data-section">

@@ -15,15 +15,16 @@ import (
 )
 
 type MultifactorForward struct {
-	Rules       string             `json:"rulesVersion"`
-	Origin      *time.Time         `json:"origin"`
-	Days        float64            `json:"days"`
-	Coverage    float64            `json:"coverage"`
-	Episodes    int                `json:"episodes"`
-	ReviewReady bool               `json:"reviewReady"`
-	Comparisons []DirectionalTrial `json:"comparisons"`
-	EqualBudget []DirectionalTrial `json:"equalBudget"`
-	Note        string             `json:"note"`
+	ByCollection []collectionCohort `json:"byCollection"`
+	Rules        string             `json:"rulesVersion"`
+	Origin       *time.Time         `json:"origin"`
+	Days         float64            `json:"days"`
+	Coverage     float64            `json:"coverage"`
+	Episodes     int                `json:"episodes"`
+	ReviewReady  bool               `json:"reviewReady"`
+	Comparisons  []DirectionalTrial `json:"comparisons"`
+	EqualBudget  []DirectionalTrial `json:"equalBudget"`
+	Note         string             `json:"note"`
 }
 type DirectionalTrial struct {
 	CandidateTrial
@@ -74,6 +75,7 @@ func (h *Hub) multifactorForward(ctx context.Context, samples []ShadowSample, si
 	if expected > 0 {
 		r.Coverage = float64(len(valid)) / float64(expected)
 	}
+	cohorts := []collectionSample{}
 	for _, side := range []string{"buy", "sell"} {
 		eps := []PriceEpisode{}
 		for _, ev := range episodes {
@@ -95,6 +97,11 @@ func (h *Hub) multifactorForward(ctx context.Context, samples []ShadowSample, si
 					chosen = append(chosen, Signal{ID: ev.ID, Direction: side, At: ev.Detected, ATR: hourlyATR(c, ev.DataThrough)})
 				}
 			}
+			if rule == MultifactorRules {
+				for _, sig := range chosen {
+					cohorts = append(cohorts, formalCollectionSample(sig, c))
+				}
+			}
 			byRule[rule] = chosen
 			for _, delay := range []int{0, 5, 10} {
 				r.Comparisons = append(r.Comparisons, multifactorTrial(rule, side, chosen, eps, c, delay, now))
@@ -102,6 +109,7 @@ func (h *Hub) multifactorForward(ctx context.Context, samples []ShadowSample, si
 		}
 		r.EqualBudget = append(r.EqualBudget, equalBudgetTrials([]string{SignalRules, "price-breakout", MultifactorRules}, side, byRule, eps, c, now)...)
 	}
+	r.ByCollection = collectionCohorts(cohorts)
 	r.ReviewReady = r.Days >= 14 && r.Coverage >= .95 && r.Episodes >= 30
 	return r
 }

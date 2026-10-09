@@ -29,7 +29,7 @@ func auditSignal(s Signal) map[string]any {
 		v := s.Multifactor
 		input = map[string]any{"dataThrough": v.DataThrough, "net1hUsd": netDecimal(v.Spot["60"].Net), "net4hUsd": netDecimal(v.Spot["240"].Net), "priceUsdt": finiteDecimal(v.Price.Close), "priorAtrUsdt": finiteDecimal(v.Price.PriorATR), "displacementAtr": finiteDecimal(v.Price.DisplacementATR)}
 	}
-	return map[string]any{"id": s.ID, "direction": s.Direction, "rulesVersion": s.Rules, "at": s.At, "dataThrough": s.DataThrough, "expiresAt": s.Expires, "priceUsdt": finiteDecimal(price), "confirmedAt": s.ConfirmedAt, "confirmedDataThrough": s.ConfirmedThrough, "computedAt": s.ComputedAt, "confirmationComputedAt": s.ConfirmationComputedAt, "coreInputFirstSeenAt": s.CoreInputFirstSeenAt, "coreInputAvailableAt": s.CoreInputAvailableAt, "initialInput": input, "meaning": alertMeaning(s, false)}
+	return map[string]any{"id": s.ID, "direction": s.Direction, "rulesVersion": s.Rules, "collectionVersion": s.Collection, "at": s.At, "dataThrough": s.DataThrough, "expiresAt": s.Expires, "priceUsdt": finiteDecimal(price), "confirmedAt": s.ConfirmedAt, "confirmedDataThrough": s.ConfirmedThrough, "computedAt": s.ComputedAt, "confirmationComputedAt": s.ConfirmationComputedAt, "coreInputFirstSeenAt": s.CoreInputFirstSeenAt, "coreInputAvailableAt": s.CoreInputAvailableAt, "initialInput": input, "meaning": alertMeaning(s, false)}
 }
 func auditTrial(t ShortTrial) map[string]any {
 	outcomes := []any{}
@@ -111,6 +111,11 @@ func (h *Hub) alertAudit(ctx context.Context, q url.Values, now time.Time) (any,
 	if layer == "risk" {
 		return h.auditRisk(ctx, q, from, to, result)
 	}
+	cohorts, truncated, e := h.layeredCollectionCohorts(ctx, from, to, side)
+	if e != nil {
+		return nil, e
+	}
+	result["candidateByCollection"], result["candidateCollectionTruncated"] = cohorts, truncated
 	// Filter parent events, with confirmation/candidate/rejection time in range.
 	// id detail intentionally ignores the list interval, but cannot fetch upstream.
 	query := `SELECT d.payload FROM documents d WHERE d.kind='signal' AND d.asset='BTC' AND json_extract(d.payload,'$.rulesVersion')=? AND (?='' OR d.id=?) AND (?='' OR json_extract(d.payload,'$.direction')=?) AND (?<>'' OR (d.at>=? AND d.at<?))`

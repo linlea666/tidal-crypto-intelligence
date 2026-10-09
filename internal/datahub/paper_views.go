@@ -378,7 +378,7 @@ func (p *paperStore) summary(ctx context.Context, now time.Time) (any, error) {
 	feed := p.feed
 	feed.Error = p.err
 	p.mu.RUnlock()
-	trades, err := paperRows[paperTrade](ctx, tx, `SELECT json_object('id',id,'group',group_id,'enteredAt',json_extract(payload,'$.enteredAt'),'exitedAt',json_extract(payload,'$.exitedAt'),'entryPrice',json_extract(payload,'$.entryPrice'),'quantity',json_extract(payload,'$.quantity'),'grossPnl',json_extract(payload,'$.grossPnl'),'fees',json_extract(payload,'$.fees'),'slippageCost',json_extract(payload,'$.slippageCost'),'funding',json_extract(payload,'$.funding'),'quality',json_extract(payload,'$.quality'),'signal',json_object('id',json_extract(payload,'$.signal.id'),'direction',json_extract(payload,'$.signal.direction'),'level',json_extract(payload,'$.signal.level'))) FROM paper_trades ORDER BY entered,id`)
+	trades, err := paperRows[paperTrade](ctx, tx, `SELECT json_object('id',id,'group',group_id,'enteredAt',json_extract(payload,'$.enteredAt'),'exitedAt',json_extract(payload,'$.exitedAt'),'entryPrice',json_extract(payload,'$.entryPrice'),'quantity',json_extract(payload,'$.quantity'),'grossPnl',json_extract(payload,'$.grossPnl'),'fees',json_extract(payload,'$.fees'),'slippageCost',json_extract(payload,'$.slippageCost'),'funding',json_extract(payload,'$.funding'),'quality',json_extract(payload,'$.quality'),'signal',json_object('id',json_extract(payload,'$.signal.id'),'direction',json_extract(payload,'$.signal.direction'),'level',json_extract(payload,'$.signal.level'),'collectionVersion',json_extract(payload,'$.signal.collectionVersion'))) FROM paper_trades ORDER BY entered,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -398,6 +398,7 @@ func (p *paperStore) summary(ctx context.Context, now time.Time) (any, error) {
 		paired := []paperTrade{}
 		directions := map[string][]paperTrade{"buy": {}, "sell": {}}
 		levels := map[string][]paperTrade{}
+		collections := map[string][]paperTrade{}
 		for _, t := range all {
 			if common[t.Signal.ID] == 2 && closedCommon[t.Signal.ID] == 2 {
 				paired = append(paired, t)
@@ -408,6 +409,8 @@ func (p *paperStore) summary(ctx context.Context, now time.Time) (any, error) {
 				level = "unknown"
 			}
 			levels[level] = append(levels[level], t)
+			key := collectionKey(t.Signal.Collection)
+			collections[key] = append(collections[key], t)
 		}
 		byDirection := map[string]paperStats{}
 		byLevel := map[string]paperStats{}
@@ -416,6 +419,13 @@ func (p *paperStore) summary(ctx context.Context, now time.Time) (any, error) {
 		}
 		for k, v := range levels {
 			byLevel[k] = paperStatistics(v, s, now, false)
+		}
+		byCollection := map[string]paperStats{}
+		for k, v := range collections {
+			cohortState := s
+			// Overall coverage and experiment age cannot qualify a collection subgroup.
+			cohortState.Origin = nil
+			byCollection[k] = paperStatistics(v, cohortState, now, false)
 		}
 		var unrealized, equity, ret *decimal.Decimal
 		if a.Position == nil || feed.Quote != nil && feed.Quote.valid(now) {
@@ -444,7 +454,7 @@ func (p *paperStore) summary(ctx context.Context, now time.Time) (any, error) {
 				curve.ExposedSeconds += int64(end.Sub(t.Entered).Seconds())
 			}
 		}
-		accounts = append(accounts, map[string]any{"account": a, "initialCapital": paperInitial, "unrealizedPnl": unrealized, "equity": equity, "accountReturnPercent": ret, "fundingPending": !paperFundingKnown(s, now, true), "all": paperStatistics(all, s, now, false), "clean": paperStatistics(all, s, now, true), "commonEntries": paperStatistics(paired, s, now, false), "byDirection": byDirection, "byPublishedLevel": byLevel, "curve": curve})
+		accounts = append(accounts, map[string]any{"account": a, "initialCapital": paperInitial, "unrealizedPnl": unrealized, "equity": equity, "accountReturnPercent": ret, "fundingPending": !paperFundingKnown(s, now, true), "all": paperStatistics(all, s, now, false), "clean": paperStatistics(all, s, now, true), "commonEntries": paperStatistics(paired, s, now, false), "byCollection": byCollection, "byDirection": byDirection, "byPublishedLevel": byLevel, "curve": curve})
 	}
 	quality, err := paperRows[paperIntake](ctx, tx, "SELECT payload FROM paper_intakes ORDER BY at DESC,id DESC LIMIT 100")
 	if err != nil {
