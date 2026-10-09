@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { amount, price, age, clock, useAPI } from "./data";
 import { Chart } from "./Chart";
 import { LargeOrderBoard } from "./LargeOrders";
+import { Status, type Meta } from "./Pages";
 import type { Asset } from "./types";
 import "./orderZones.css";
 
@@ -79,13 +80,13 @@ type Board = {
   validCount: number;
   excludedCount: number;
   eventsPartial: boolean;
-  sources: {
+  sources: (Meta & {
     venue: string;
     usable: boolean;
     fxAt: string | null;
     fetchedAt: string;
     status: string;
-  }[];
+  })[];
   trades: {
     from: string;
     to: string;
@@ -528,8 +529,8 @@ function ZoneBoard({
         <ul>
           {d?.sources.map((s) => (
             <li key={s.venue}>
-              {s.venue} · {s.usable ? "可用" : "状态不完整／过期"} · 最新获取{" "}
-              {stamp(s.fetchedAt)} · 汇率{" "}
+              <Status meta={s} />
+              {s.usable ? "当前区域可用" : "状态不完整／过期"} · 汇率{" "}
               {s.fxAt ? stamp(s.fxAt) : "原生美元或缺失"}
             </li>
           ))}
