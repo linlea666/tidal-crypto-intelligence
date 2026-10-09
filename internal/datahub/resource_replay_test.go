@@ -256,9 +256,10 @@ func TestResourceReplay(t *testing.T) {
 			}
 			ingest(pd, Observation{Dataset: pd.ID, Source: pd.Source, ObservedAt: &current, FetchedAt: current, Quality: "valid", Payload: Payload{Price: &Price{value, "USDT"}}})
 		}
-		if current.Sub(lastBookFlow) >= time.Minute {
+		if bookFlowResourceDue(current, lastBookFlow) {
 			bookFlowResourceInput(t, h, current)
 			lastBookFlow = current
+			t.Logf("book flow input source=%s received=%s", current.Truncate(time.Minute).Format(time.RFC3339), current.Format(time.RFC3339Nano))
 		}
 		if current.Sub(lastBooks) >= 2*time.Minute {
 			for _, asset := range Assets() {

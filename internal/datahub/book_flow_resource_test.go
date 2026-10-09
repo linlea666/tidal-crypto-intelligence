@@ -148,3 +148,34 @@ func TestBookFlowBrowserFixture(t *testing.T) {
 	}
 	t.Log("offline fixture only; no upstream calls, orders or email")
 }
+
+// Production core tasks use minute phases. An elapsed-since-last-input check
+// accumulates serial maintenance time and can skip a source minute entirely.
+func bookFlowResourceDue(now, last time.Time) bool {
+	return now.Truncate(time.Minute).After(last.Truncate(time.Minute))
+}
+func TestBookFlowResourceMaintenancePhaseDoesNotSkipMinute(t *testing.T) {
+	times := []string{"2026-10-08T23:52:58.410885549Z", "2026-10-08T23:53:22.143700722Z", "2026-10-08T23:53:54.550488934Z", "2026-10-08T23:54:04.550488934Z"}
+	last, oldLast := time.Time{}, time.Time{}
+	minutes, oldMinutes := []int{}, []int{}
+	for _, v := range times {
+		at, err := time.Parse(time.RFC3339Nano, v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bookFlowResourceDue(at, last) {
+			minutes = append(minutes, at.Minute())
+			last = at
+		}
+		if at.Sub(oldLast) >= time.Minute {
+			oldMinutes = append(oldMinutes, at.Minute())
+			oldLast = at
+		}
+	}
+	if len(oldMinutes) != 2 || oldMinutes[0] != 52 || oldMinutes[1] != 54 {
+		t.Fatal("old defect not reproduced", oldMinutes)
+	}
+	if len(minutes) != 3 || minutes[0] != 52 || minutes[1] != 53 || minutes[2] != 54 {
+		t.Fatal("source minute lost", minutes)
+	}
+}

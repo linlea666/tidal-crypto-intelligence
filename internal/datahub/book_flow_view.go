@@ -173,7 +173,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 			jobs = append(jobs, j)
 		}
 	}
-	return map[string]any{"prices": prices, "at": now, "mode": h.bookFlowMode, "rulesVersion": BookFlowRules, "collectionVersion": BookFlowCollection, "origin": origin, "lastProcessedAt": last, "runtime": runtime, "contracts": contracts, "current": current, "items": items, "more": more, "limit": limit, "offset": offset, "from": from, "to": to, "storageBytes": used, "budgetBytes": bookFlowBudget, "scheduler": map[string]any{"jobs": jobs, "limitPerMinute": scheduler["limitPerMinute"], "usedLastMinute": scheduler["usedLastMinute"], "rateLimited": scheduler["rateLimited"]}, "report": report, "note": "原始盘口快照与同交易所成交的承接线索；不证明同一委托、撤单或资金身份，不是做多做空指令。站内观察，不发邮件、不进入模拟。", "metricDefinitions": map[string]string{"baseline": "此前30分钟同交易所同固定区域数量中位数，至少29个有效分钟", "return": "阶段实际发布后下一根完整5分钟现货K线开盘，无费用，非可成交价", "coverage": "实验起点后完整源分钟，两家盘口及足迹各自首次在三分钟内取得；等待取得期限结束后冻结，缺口不追认，最初不足一分钟不纳入", "independent": "每方向每阶段按时间取最早事件，其后4小时窗口内其他事件单列为重叠样本", "absorption": "五个完整分钟成交冲击且快照深度保持；不能确定成交与后续挂单来自同一订单"}}, nil
+	return map[string]any{"prices": prices, "at": now, "mode": h.bookFlowMode, "rulesVersion": BookFlowRules, "collectionVersion": h.collectionVersion(), "origin": origin, "lastProcessedAt": last, "runtime": runtime, "contracts": contracts, "current": current, "items": items, "more": more, "limit": limit, "offset": offset, "from": from, "to": to, "storageBytes": used, "budgetBytes": bookFlowBudget, "scheduler": map[string]any{"jobs": jobs, "limitPerMinute": scheduler["limitPerMinute"], "usedLastMinute": scheduler["usedLastMinute"], "rateLimited": scheduler["rateLimited"]}, "report": report, "note": "原始盘口快照与同交易所成交的承接线索；不证明同一委托、撤单或资金身份，不是做多做空指令。站内观察，不发邮件、不进入模拟。", "metricDefinitions": map[string]string{"baseline": "此前30分钟同交易所同固定区域数量中位数，至少29个有效分钟", "return": "阶段实际发布后下一根完整5分钟现货K线开盘，无费用，非可成交价", "coverage": "实验起点后完整源分钟，两家盘口及足迹各自首次在三分钟内取得；等待取得期限结束后冻结，缺口不追认，最初不足一分钟不纳入", "independent": "每方向每阶段按时间取最早事件，其后4小时窗口内其他事件单列为重叠样本", "absorption": "五个完整分钟成交冲击且快照深度保持；不能确定成交与后续挂单来自同一订单"}}, nil
 }
 func bookTrialView(t ShortTrial) any {
 	outcomes := []any{}
@@ -394,7 +394,7 @@ func (h *Hub) bookFlowHealth(now time.Time) map[string]any {
 	runtime := h.bookFlowRuntime
 	h.mu.RUnlock()
 	runtime.Skipped = nil
-	v := map[string]any{"mode": h.bookFlowMode, "rulesVersion": BookFlowRules, "collectionVersion": BookFlowCollection, "runtime": runtime, "origin": nil, "coverage": nil}
+	v := map[string]any{"mode": h.bookFlowMode, "rulesVersion": BookFlowRules, "collectionVersion": h.collectionVersion(), "runtime": runtime, "origin": nil, "coverage": nil}
 	if h.bookFlowMode == "off" {
 		return v
 	}

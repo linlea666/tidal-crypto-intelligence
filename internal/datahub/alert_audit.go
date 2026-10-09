@@ -111,6 +111,11 @@ func (h *Hub) alertAudit(ctx context.Context, q url.Values, now time.Time) (any,
 	if layer == "risk" {
 		return h.auditRisk(ctx, q, from, to, result)
 	}
+	cohorts, truncated, e := h.layeredCollectionCohorts(ctx, from, to, side)
+	if e != nil {
+		return nil, e
+	}
+	result["candidateByCollection"], result["candidateCollectionTruncated"] = cohorts, truncated
 	// Filter parent events, with confirmation/candidate/rejection time in range.
 	// id detail intentionally ignores the list interval, but cannot fetch upstream.
 	query := `SELECT d.payload FROM documents d WHERE d.kind='signal' AND d.asset='BTC' AND json_extract(d.payload,'$.rulesVersion')=? AND (?='' OR d.id=?) AND (?='' OR json_extract(d.payload,'$.direction')=?) AND (?<>'' OR (d.at>=? AND d.at<?))`

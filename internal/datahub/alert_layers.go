@@ -215,6 +215,7 @@ func (h *Hub) layeredStep(ctx context.Context, now time.Time) error {
 			continue
 		}
 		decision := evaluateLayered(s, current, origin, now)
+		decision.Collection = h.collectionVersion()
 		if e = h.saveLayeredDecision(ctx, decision); e != nil {
 			return e
 		}

@@ -662,9 +662,7 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 		}
 		if notices[s.ID] == "anomaly" && s.ComputedAt == nil && !existing {
 			s.ComputedAt = &computed
-			if h.bookFlowMode != "off" {
-				s.Collection = BookFlowCollection
-			}
+			s.Collection = h.collectionVersion()
 		}
 		if notices[s.ID] == "confirmed" && s.ConfirmationComputedAt == nil {
 			s.ConfirmationComputedAt = &computed
