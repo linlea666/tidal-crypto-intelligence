@@ -96,7 +96,7 @@ func (h *Hub) vixFeed(ctx context.Context, source string) (VIXFeed, error) {
 func (h *Hub) vixFailure(ctx context.Context, source, message string, now time.Time) error {
 	h.vixMu.Lock()
 	defer h.vixMu.Unlock()
-	tx, err := h.Store.research.BeginTx(ctx, nil)
+	tx, err := h.Store.research.BeginNamedTx(ctx, nil, "vixFailure")
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func (h *Hub) ingestVIX(ctx context.Context, points []VIXPoint, now time.Time) e
 	}
 	h.vixMu.Lock()
 	defer h.vixMu.Unlock()
-	tx, err := h.Store.research.BeginTx(ctx, nil)
+	tx, err := h.Store.research.BeginNamedTx(ctx, nil, "ingestVIX")
 	if err != nil {
 		return err
 	}
@@ -275,7 +275,7 @@ func (h *Hub) ingestVIXDaily(ctx context.Context, rows []VIXDaily, now time.Time
 	if h.Store.Status().Paused || h.Store.Status().ResearchPaused {
 		return errors.New("存储容量保护，Cboe日线暂停")
 	}
-	tx, err := h.Store.research.BeginTx(ctx, nil)
+	tx, err := h.Store.research.BeginNamedTx(ctx, nil, "ingestVIXDaily")
 	if err != nil {
 		return err
 	}
@@ -307,7 +307,7 @@ func (h *Hub) ingestVIXDaily(ctx context.Context, rows []VIXDaily, now time.Time
 func (h *Hub) SetVIXSettings(ctx context.Context, settings VIXSettings, now time.Time) (any, error) {
 	h.vixMu.Lock()
 	err := func() error {
-		tx, err := h.Store.research.BeginTx(ctx, nil)
+		tx, err := h.Store.research.BeginNamedTx(ctx, nil, "SetVIXSettings")
 		if err != nil {
 			return err
 		}

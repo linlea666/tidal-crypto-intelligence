@@ -196,7 +196,12 @@ func (w *Warehouse) putHot(id string, o Observation) {
 	b, _ := json.Marshal(o)
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	size := len(b)
+	w.putHotLocked(id, o, len(b))
+}
+
+// The caller holds mu; comparing source time and replacing a price must be one
+// operation when price ingestion no longer shares the persistent writer lock.
+func (w *Warehouse) putHotLocked(id string, o Observation, size int) {
 	old := w.sizes[id]
 	if w.status.HotBytes-old+size > HotLimit {
 		w.status.Error = "热数据缓存达到128MiB上限"
@@ -206,6 +211,18 @@ func (w *Warehouse) putHot(id string, o Observation) {
 	w.latest[id] = o
 	w.sizes[id] = size
 	w.epoch++
+}
+
+func (w *Warehouse) ingestPrice(o Observation) bool {
+	b, _ := json.Marshal(o)
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	previous, exists := w.latest[o.Dataset]
+	changed := !exists || previous.Revision != o.Revision
+	if !exists || !o.Time().Before(previous.Time()) {
+		w.putHotLocked(o.Dataset, o, len(b))
+	}
+	return changed
 }
 func (w *Warehouse) SaveState(key string, v any) error {
 	if strings.HasPrefix(key, "short-flow/") && w.shortResearch != nil {
@@ -383,6 +400,11 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (didChange bool, err error)
 		return false, errors.New("invalid observation identity/time")
 	}
 	o.Revision = digest(o)
+	// Prices have no research fact, disk history or derived snapshot. A slow
+	// persistent ingest must not stop the shared BTC/ETH WebSocket reader.
+	if d.Kind == "price" {
+		return w.ingestPrice(o), nil
+	}
 	w.write.Lock()
 	defer w.write.Unlock()
 	phase = "research fact"

@@ -252,7 +252,7 @@ func (h *Hub) selectLiquidationStudyAt(ctx context.Context, s LiquidationMapSnap
 		if e != nil {
 			return e
 		}
-		tx, e := h.Store.research.BeginTx(ctx, nil)
+		tx, e := h.Store.research.BeginNamedTx(ctx, nil, "selectLiquidationStudyAt")
 		if e != nil {
 			return e
 		}

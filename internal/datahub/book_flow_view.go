@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net/url"
 	"sort"
@@ -11,7 +12,7 @@ import (
 	"time"
 )
 
-func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (any, error) {
+func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (result any, resultErr error) {
 	if q.Get("asset") != "" && q.Get("asset") != "BTC" {
 		return nil, errors.New("挂单承接观察仅支持BTC")
 	}
@@ -28,6 +29,12 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
+	phase := "state"
+	defer func() {
+		if resultErr != nil {
+			resultErr = fmt.Errorf("book-flow read %s: %w", phase, resultErr)
+		}
+	}()
 	if h.Store.bookFlowError != "" {
 		return nil, errors.New(h.Store.bookFlowError)
 	}
@@ -36,6 +43,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 		return nil, err
 	}
 	contracts := []minuteContract{}
+	phase = "contracts"
 	for _, venue := range []string{"Binance", "OKX"} {
 		c := minuteContract{Venue: venue}
 		err = h.Store.bookFlowLoad(ctx, "contract", minuteFootID(venue), &c)
@@ -45,6 +53,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 		contracts = append(contracts, currentMinuteContract(c, now))
 	}
 	limit, offset := parseInt(q, "limit", 20, 1, 50), parseInt(q, "offset", 0, 0, 10000)
+	phase = "events"
 	events, err := paperRows[bookEvent](ctx, h.Store.shortDB(), `SELECT e.payload FROM book_flow e JOIN book_flow c ON c.kind='clock' AND c.id=e.id||'/enhanced' WHERE e.kind='event' AND json_extract(e.payload,'$.rulesVersion')=? AND (?='' OR e.id=?) AND (?='' OR json_extract(e.payload,'$.direction')=?) AND (?<>'' OR (c.at>=? AND c.at<?)) ORDER BY c.at DESC,e.id LIMIT ? OFFSET ?`, BookFlowRules, id, id, side, side, id, from.Unix(), to.Unix(), limit+1, offset)
 	if err != nil {
 		return nil, err
@@ -55,6 +64,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 	}
 	items := []any{}
 	for eventIndex, e := range events {
+		phase = "publication_clocks"
 		var readable time.Time
 		if err = h.Store.bookFlowLoad(ctx, "clock", e.ID+"/enhanced", &readable); err != nil {
 			return nil, err
@@ -76,6 +86,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 			published = append(published, u)
 		}
 		e.Updates = published
+		phase = "event_trials"
 		trials, er := paperRows[ShortTrial](ctx, h.Store.shortDB(), "SELECT payload FROM book_flow WHERE kind='trial' AND id LIKE ? ORDER BY at,id", e.ID+"/%")
 		if er != nil {
 			return nil, er
@@ -84,12 +95,14 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 		for _, t := range trials {
 			observations = append(observations, bookTrialView(t))
 		}
+		phase = "event_notifications"
 		notifications, er := h.bookNoticeViews(ctx, e.ID)
 		if er != nil {
 			return nil, er
 		}
 		item := map[string]any{"event": e, "observations": observations, "notifications": notifications}
 		if id != "" {
+			phase = "related_signals"
 			// Relations are temporal associations, never proof of causality.
 			formal, er := paperRows[Signal](ctx, h.Store.shortDB(), "SELECT payload FROM documents WHERE kind='signal' AND asset='BTC' AND at>=? AND at<? ORDER BY at LIMIT 6", e.At.Add(-30*time.Minute).Unix(), e.Expires.Unix())
 			if er != nil {
@@ -100,6 +113,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 			for _, sig := range formal {
 				ids = append(ids, sig.ID)
 			}
+			phase = "related_mail"
 			mails, er := h.signalMailResults(ctx, ids)
 			if er != nil {
 				return nil, er
@@ -114,6 +128,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 					}
 				}
 				x["notifications"] = notices
+				phase = "related_paper"
 				trades, er := h.auditPaper(ctx, sig.ID, &related)
 				if er != nil {
 					return nil, er
@@ -127,6 +142,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 		items = append(items, item)
 	}
 	var used int64
+	phase = "storage_budget"
 	if err = h.Store.shortDB().QueryRowContext(ctx, "SELECT used FROM book_flow_budget WHERE id=1").Scan(&used); err != nil {
 		return nil, err
 	}
@@ -146,6 +162,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 	for venue, p := range s.Current {
 		current[venue] = map[string]any{"snapshot": p, "fresh": now.Sub(p.At) <= 3*time.Minute && now.Sub(p.Fetched) <= 3*time.Minute && p.FX != nil, "ageSeconds": max(0, now.Sub(p.At).Seconds())}
 	}
+	phase = "report"
 	report, err := h.bookFlowReport(ctx, s, now)
 	if err != nil {
 		return nil, err
@@ -157,6 +174,7 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 	}
 	prices := []any{}
 	byTime := map[int64]*string{}
+	phase = "price_history"
 	err = factsAsOf(ctx, h.Store.shortDB(), ID("candles", "BTC", "Binance", "spot"), chartFrom.Truncate(5*time.Minute), chartTo, now, func(o Observation) error {
 		at := recordTime(o)
 		if o.Quality == "valid" && o.Resolution == 300 && o.Payload.Candle != nil && !at.Add(5*time.Minute).After(chartTo) {
@@ -177,10 +195,12 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 			jobs = append(jobs, j)
 		}
 	}
+	phase = "run_status"
 	runStatus, err := h.bookFlowRunStatus(ctx, s, now)
 	if err != nil {
 		return nil, err
 	}
+	phase = "notifications"
 	notices, err := h.bookNoticeViews(ctx, id)
 	if err != nil {
 		return nil, err

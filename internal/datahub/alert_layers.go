@@ -239,7 +239,7 @@ func (h *Hub) layeredStep(ctx context.Context, now time.Time) error {
 }
 func (h *Hub) saveLayeredDecision(ctx context.Context, d LayeredDecision) error {
 	db := h.Store.shortDB()
-	tx, e := db.BeginTx(ctx, nil)
+	tx, e := db.BeginNamedTx(ctx, nil, "saveLayeredDecision")
 	if e != nil {
 		return e
 	}

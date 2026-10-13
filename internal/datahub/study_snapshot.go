@@ -87,7 +87,7 @@ func (w *Warehouse) beginStudySnapshot(ctx context.Context, s Study, now time.Ti
 	} else if err != sql.ErrNoRows {
 		return m, err
 	}
-	tx, err := w.research.BeginTx(ctx, nil)
+	tx, err := w.research.BeginNamedTx(ctx, nil, "beginStudySnapshot")
 	if err != nil {
 		return studySnapshot{}, err
 	}
@@ -146,7 +146,7 @@ func (w *Warehouse) advanceStudySnapshot(ctx context.Context, m studySnapshot, n
 	}
 	fail := func(reason string) (studySnapshot, error) {
 		m.State, m.Reason = "failed", reason
-		tx, err := w.research.BeginTx(ctx, nil)
+		tx, err := w.research.BeginNamedTx(ctx, nil, "advanceStudySnapshot")
 		if err != nil {
 			return m, err
 		}
@@ -229,7 +229,7 @@ func (w *Warehouse) advanceStudySnapshot(ctx context.Context, m studySnapshot, n
 		m.Rows += int64(len(items))
 		m.Hash = fmt.Sprintf("%x", sha256.Sum256([]byte(m.Hash+hash)))
 	}
-	tx, err := w.research.BeginTx(ctx, nil)
+	tx, err := w.research.BeginNamedTx(ctx, nil, "advanceStudySnapshot")
 	if err != nil {
 		return m, err
 	}
@@ -354,7 +354,7 @@ func (w *Warehouse) pruneStudySnapshots(ctx context.Context, now time.Time) erro
 	}
 	// Failed builds release their payloads; ready inputs are immutable and the
 	// aggregate budget rejects new captures rather than evicting active evidence.
-	tx, err := w.research.BeginTx(ctx, nil)
+	tx, err := w.research.BeginNamedTx(ctx, nil, "pruneStudySnapshots")
 	if err != nil {
 		return err
 	}

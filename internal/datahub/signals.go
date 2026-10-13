@@ -625,7 +625,7 @@ func (h *Hub) commitSignals(ctx context.Context, a string, state signalState, up
 		return cutoverErr
 	}
 	cutoverActive := cutoverErr == nil
-	tx, e := h.Store.research.BeginTx(ctx, nil)
+	tx, e := h.Store.research.BeginNamedTx(ctx, nil, "commitSignals")
 	if e != nil {
 		return e
 	}

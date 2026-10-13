@@ -160,7 +160,7 @@ func (h *Hub) recordShortObservation(ctx context.Context, s ShortObservation, no
 			}
 		}
 	}
-	tx, e := h.Store.shortDB().BeginTx(ctx, nil)
+	tx, e := h.Store.shortDB().BeginNamedTx(ctx, nil, "recordShortObservation")
 	if e != nil {
 		return shortWriteError(e)
 	}

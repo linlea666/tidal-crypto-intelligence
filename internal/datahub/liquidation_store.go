@@ -242,7 +242,7 @@ func (h *Hub) processLiquidationMap(ctx context.Context, s LiquidationMapSnapsho
 	}
 	s.Zones = zones
 	// Freeze the source map and transition log together with the restart cursor.
-	tx, e := h.Store.research.BeginTx(ctx, nil)
+	tx, e := h.Store.research.BeginNamedTx(ctx, nil, "processLiquidationMap")
 	if e != nil {
 		return e
 	}
@@ -399,7 +399,7 @@ func (h *Hub) advanceLiquidationStates(ctx context.Context, now time.Time) error
 				}
 			}
 			if changed {
-				tx, e := h.Store.research.BeginTx(ctx, nil)
+				tx, e := h.Store.research.BeginNamedTx(ctx, nil, "advanceLiquidationStates")
 				if e != nil {
 					return e
 				}

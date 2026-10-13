@@ -474,7 +474,7 @@ func (h *Hub) commitBookFlow(ctx context.Context, s bookFlowState, events map[st
 	if err = put("state", BookFlowRules, "", s.Last, s, false); err != nil {
 		return err
 	}
-	tx, err := h.Store.shortDB().BeginTx(ctx, nil)
+	tx, err := h.Store.shortDB().BeginNamedTx(ctx, nil, "commitBookFlow")
 	if err != nil {
 		return err
 	}
@@ -533,7 +533,7 @@ func (h *Hub) publishBookFlow(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	tx, err := h.Store.shortDB().BeginTx(ctx, nil)
+	tx, err := h.Store.shortDB().BeginNamedTx(ctx, nil, "publishBookFlow")
 	if err != nil {
 		return err
 	}
