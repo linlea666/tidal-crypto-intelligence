@@ -13,6 +13,19 @@ import (
 	"time"
 )
 
+func TestBookCurrentHealthExpiresWithoutInventingFailureHistory(t *testing.T) {
+	now := time.Now().UTC()
+	at := now.Add(-4 * time.Minute)
+	c := minuteContract{Healthy: flowPtr(true), LastSuccessAt: &at, VerifiedAt: &at, ActivatedAt: &at}
+	projected := currentMinuteContract(c, now)
+	if projected.Healthy == nil || *projected.Healthy || projected.Failure == "" || projected.LastFailureAt != nil || !*c.Healthy {
+		t.Fatal(c, projected)
+	}
+	if currentMinuteContract(minuteContract{}, now).Healthy != nil {
+		t.Fatal("legacy unknown became zero/false")
+	}
+}
+
 func TestResearchWritersCoordinateAndCancel(t *testing.T) {
 	w := testStore(t)
 	ctx := context.Background()

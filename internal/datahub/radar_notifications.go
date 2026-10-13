@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Existing topics retain their shared six attempts. Radar owns the other six.
+// Retain historical topic counters; all topics now share six total attempts.
 // Legacy rows have no topic, and always remain in the existing pool.
 func (h *Hub) mailAttempts(ctx context.Context, now time.Time) (int, error) {
 	total, e := h.totalMailAttempts(ctx, now)

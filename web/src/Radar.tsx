@@ -299,7 +299,7 @@ export function RadarPage() {
         <div>
           <small>邮件</small>
           <strong>{settings?.emailEnabled ? "已启用" : "关闭"}</strong>
-          <span>雷达 6 次／小时 · 全站 12 次</span>
+          <span>雷达 {settings?.limitPerHour ?? "—"} 次／小时 · 全站 {settings?.totalLimitPerHour ?? "—"} 次</span>
         </div>
       </section>
       <section className="radar-controls" aria-label="事件筛选">
