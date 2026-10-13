@@ -26,6 +26,81 @@ func TestBookCurrentHealthExpiresWithoutInventingFailureHistory(t *testing.T) {
 	}
 }
 
+// Replay 38353087979: tick 06:02:07.518 read a book fetched at
+// 06:02:07.522. A concurrent arrival is not a loss of the still-fresh
+// previously observed book, and cannot be used before its acquisition time.
+func TestBookFlowArrivalAfterTickDoesNotBreakKnownPath(t *testing.T) {
+	h, err := Open(Config{Root: t.TempDir(), Offline: true, BookFlowMode: "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Store.Close()
+	ctx := context.Background()
+	start := time.Now().UTC().Truncate(time.Minute).Add(-20*time.Minute + 7522*time.Millisecond)
+	h.boot = start.Add(-time.Hour)
+	seedBookFlowBaseline(t, h, start)
+	for i := 0; i < 7; i++ {
+		at := start.Add(time.Duration(i) * time.Minute)
+		fx, _ := h.Dataset("fx.usd.kraken")
+		if _, err = h.Store.Ingest(fx, Observation{Dataset: fx.ID, Source: fx.Source, ObservedAt: &at, FetchedAt: at, Quality: "valid", Payload: Payload{Rates: []Rate{{Quote: "USDT", USD: "1"}}}}); err != nil {
+			t.Fatal(err)
+		}
+		bookFlowResourceInput(t, h, at)
+		if i == 5 {
+			if err = h.bookFlowStep(ctx, at.Add(-4*time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			var s bookFlowState
+			if err = h.Store.bookFlowLoad(ctx, "state", BookFlowRules, &s); err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range s.Blocked {
+				if e.Ended || !e.CompletePath || hasBookUpdate(e, "data_gap") {
+					t.Fatal("concurrent arrival destroyed known path", e.Venue)
+				}
+				if s.Current[e.Venue].At.Equal(at.Truncate(time.Minute)) || hasBookUpdate(e, "absorption") {
+					t.Fatal("future arrival used early", e.Venue)
+				}
+			}
+		}
+		if err = h.bookFlowStep(ctx, at.Add(10*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, err := paperRows[bookEvent](ctx, h.Store.shortDB(), "SELECT payload FROM book_flow WHERE kind='event'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatal("missing venue", len(events))
+	}
+	for _, e := range events {
+		if !e.CompletePath || !hasBookUpdate(e, "absorption") {
+			t.Fatal("valid path failed to advance", e.Venue)
+		}
+		for _, u := range e.Updates {
+			if u.Kind == "absorption" && (u.At.Before(start.Add(5*time.Minute)) || u.Evidence == nil || len(u.Evidence.BeforeLevels) == 0 || len(u.Evidence.AfterLevels) == 0) {
+				t.Fatal("unproven absorption", e.Venue)
+			}
+		}
+	}
+	// A future latest record must not prolong an expired previous snapshot.
+	later := start.Add(10 * time.Minute)
+	bookFlowResourceInput(t, h, later.Add(4*time.Millisecond))
+	if err = h.bookFlowStep(ctx, later); err != nil {
+		t.Fatal(err)
+	}
+	events, err = paperRows[bookEvent](ctx, h.Store.shortDB(), "SELECT payload FROM book_flow WHERE kind='event'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if !e.Ended || e.CompletePath || !hasBookUpdate(e, "data_gap") {
+			t.Fatal("expired evidence prolonged", e.Venue)
+		}
+	}
+}
+
 func TestResearchWritersCoordinateAndCancel(t *testing.T) {
 	w := testStore(t)
 	ctx := context.Background()

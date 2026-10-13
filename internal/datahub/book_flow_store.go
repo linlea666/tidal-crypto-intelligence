@@ -107,10 +107,18 @@ func (h *Hub) bookFlowStep(ctx context.Context, now time.Time) error {
 		}
 		d, _ := h.Dataset(ID("book", "BTC", venue, "spot"))
 		o, exists := h.Store.Latest(d.ID)
+		previous := s.Current[venue]
 		fresh := exists && o.Quality == "valid" && !o.Time().After(now) && now.Sub(o.Time()) <= 3*time.Minute && !o.FetchedAt.After(now) && now.Sub(o.FetchedAt) <= 3*time.Minute
 		p := buildBookPoint(o, rate, now)
+		if exists && o.FetchedAt.After(now) {
+			// Latest can change after this cycle's cutoff. The new request is
+			// not known yet; retain only the previously registered snapshot
+			// at its original clocks. It creates no new point or coverage bit
+			// and still expires after the unchanged three-minute allowance.
+			p = previous
+			fresh = !p.At.IsZero() && !p.At.After(now) && !p.Fetched.After(now) && !p.Known.After(now) && now.Sub(p.At) <= 3*time.Minute && now.Sub(p.Fetched) <= 3*time.Minute
+		}
 		fresh = fresh && p.Reference != nil && rate != nil
-		previous := s.Current[venue]
 		newPoint := fresh && p.At.After(previous.At) && p.At.After(skip[venue]) && !p.At.Before(h.boot) && !p.At.Before(s.Origin)
 		gap := !s.Last.IsZero() && (now.Sub(s.Last) > 3*time.Minute || h.boot.After(s.Last)) || !fresh
 		if newPoint && !previous.At.IsZero() && p.At.Sub(previous.At) > 90*time.Second {
