@@ -104,7 +104,9 @@ func (w *Warehouse) recordFact(d Dataset, o *Observation) error {
 	}
 	first := o.FetchedAt
 	var available int64
-	e := w.research.QueryRow("SELECT available FROM facts WHERE dataset=? AND ts=? AND res=? AND revision=?", d.ID, recordTime(*o).Unix(), o.Resolution, o.Revision).Scan(&available)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	e := w.shortDB().QueryRowContext(ctx, "SELECT available FROM facts WHERE dataset=? AND ts=? AND res=? AND revision=?", d.ID, recordTime(*o).Unix(), o.Resolution, o.Revision).Scan(&available)
 	if e == nil {
 		first = time.Unix(0, available).UTC()
 		o.FirstFetchedAt = &first
@@ -127,7 +129,7 @@ func (w *Warehouse) recordFact(d Dataset, o *Observation) error {
 	}
 	w.status.ResearchBytes += int64(len(b) + 160)
 	w.mu.Unlock()
-	_, e = w.research.Exec("INSERT OR IGNORE INTO facts VALUES(?,?,?,?,?,?)", d.ID, recordTime(*o).Unix(), o.Resolution, o.Revision, first.UnixNano(), b)
+	_, e = w.research.ExecContext(ctx, "INSERT OR IGNORE INTO facts VALUES(?,?,?,?,?,?)", d.ID, recordTime(*o).Unix(), o.Resolution, o.Revision, first.UnixNano(), b)
 	// SQLite may hit its page ceiling before the byte estimate. This must stop
 	// research history, not the independent current market snapshot write.
 	if e != nil && strings.Contains(e.Error(), "SQLITE_FULL") {

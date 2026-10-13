@@ -230,6 +230,8 @@ func TestResourceReplay(t *testing.T) {
 		}
 	}
 	phaseStarted := time.Now()
+	phaseCompleted := false
+
 	layeredCtx, stopLayered := context.WithCancel(ctx)
 	layeredDone := make(chan struct{})
 	go func() { defer close(layeredDone); h.layeredWorker(layeredCtx) }()
@@ -240,6 +242,17 @@ func TestResourceReplay(t *testing.T) {
 	defer stopPaper()
 	stopRadar := radarResourceStart(t, h)
 	defer stopRadar()
+	defer func() {
+		if out := os.Getenv("TIDAL_RESOURCE_OUTPUT"); out != "" {
+			phase, err := json.Marshal(map[string]any{"startedAt": phaseStarted.UTC(), "endedAt": time.Now().UTC(), "elapsedSeconds": time.Since(phaseStarted).Seconds(), "completed": phaseCompleted, "failed": t.Failed()})
+			if err == nil {
+				err = os.WriteFile(filepath.Join(out, "phase.json"), phase, 0644)
+			}
+			if err != nil {
+				t.Error(err)
+			}
+		}
+	}()
 	until := phaseStarted.Add(duration)
 	lastMaintenance, lastBooks, lastBookFlow := time.Time{}, time.Time{}, time.Time{}
 	for cycle := 0; time.Now().Before(until); cycle++ {
@@ -419,13 +432,6 @@ func TestResourceReplay(t *testing.T) {
 		t.Fatal("short study checkpoints did not complete", shortDone, e)
 	}
 	if out := os.Getenv("TIDAL_RESOURCE_OUTPUT"); out != "" {
-		phase, err := json.Marshal(map[string]any{"startedAt": phaseStarted.UTC(), "endedAt": time.Now().UTC(), "elapsedSeconds": time.Since(phaseStarted).Seconds()})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(out, "phase.json"), phase, 0644); err != nil {
-			t.Fatal(err)
-		}
 		f, e := os.Create(filepath.Join(out, "heap.pprof"))
 		if e != nil {
 			t.Fatal(e)
@@ -433,4 +439,5 @@ func TestResourceReplay(t *testing.T) {
 		pprof.WriteHeapProfile(f)
 		f.Close()
 	}
+	phaseCompleted = true
 }

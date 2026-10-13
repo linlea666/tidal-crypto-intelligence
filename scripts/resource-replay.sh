@@ -60,6 +60,7 @@ assert state['ExitCode']==0 and not state['OOMKilled'],'resource replay failed'
 if os.getenv('TIDAL_REPLAY_MODE') != 'reference':
  assert max(memory)<600,'resource target exceeded'
  if os.getenv('TIDAL_REPLAY_LONG') == '1':
+  assert json.loads((p/'phase.json').read_text()).get('completed',False),'full maintenance phase did not complete'
   assert result.get('maintenancePhaseSeconds',0)>=5.25*3600,'long replay did not complete 5h15m of full maintenance'
   assert result.get('wallHours',0)>=5.1,'long replay samples did not cover observed failure span'
 PY
