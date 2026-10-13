@@ -6,7 +6,7 @@
 
 ![V2沿用的柱状布局，图为早期真实运行界面](docs/qa/production-desktop.png)
 
-v2.17.0 已正式发布，生产处于collect采集验收。挂单承接使用独立v2研究、60分钟采集验收和两阶段提醒；早期运行超时仍在核查，run、新邮件及72小时尚未验收，见 [BOOK-FLOW](docs/BOOK-FLOW.md) 与 [STATUS](docs/STATUS.md)。
+v2.17.1 已部署，首次大历史库索引初始化故障已处理，失败记录保留。生产处于collect，待部署后的核心覆盖恢复至95%后启动真实run、预热30分钟并完成收件验收；新邮件尚未开启。72小时观察已按用户指令取消，长期效果尚未验收，见 [BOOK-FLOW](docs/BOOK-FLOW.md) 与 [STATUS](docs/STATUS.md)。
 
 ## 数据说明
 
