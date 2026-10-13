@@ -20,17 +20,18 @@ type researchWriter struct {
 	waiting int
 }
 type researchWriteStats struct {
-	Writes           int64      `json:"writes"`
-	Failures         int64      `json:"failures"`
-	WaitMS           float64    `json:"waitMs"`
-	TransactionMS    float64    `json:"transactionMs"`
-	CommitMS         float64    `json:"commitMs"`
-	LastOperation    string     `json:"lastOperation"`
-	LastFailure      string     `json:"lastFailure,omitempty"`
-	LastFailureAt    *time.Time `json:"lastFailureAt"`
-	MaxWaitMS        float64    `json:"maxWaitMs"`
-	MaxTransactionMS float64    `json:"maxTransactionMs"`
-	MaxCommitMS      float64    `json:"maxCommitMs"`
+	Writes               int64      `json:"writes"`
+	Failures             int64      `json:"failures"`
+	WaitMS               float64    `json:"waitMs"`
+	TransactionMS        float64    `json:"transactionMs"`
+	CommitMS             float64    `json:"commitMs"`
+	LastOperation        string     `json:"lastOperation"`
+	LastFailure          string     `json:"lastFailure,omitempty"`
+	LastFailureOperation string     `json:"lastFailureOperation,omitempty"`
+	LastFailureAt        *time.Time `json:"lastFailureAt"`
+	MaxWaitMS            float64    `json:"maxWaitMs"`
+	MaxTransactionMS     float64    `json:"maxTransactionMs"`
+	MaxCommitMS          float64    `json:"maxCommitMs"`
 }
 type researchDB struct {
 	*sql.DB
@@ -104,6 +105,7 @@ func (w *researchWriter) acquire(ctx context.Context, op string) (func(error, ti
 			at := time.Now().UTC()
 			w.stats.Failures++
 			w.stats.LastFailure = e.Error()
+			w.stats.LastFailureOperation = op
 			w.stats.LastFailureAt = &at
 			w.stats.LastOperation = op
 		}
@@ -124,6 +126,19 @@ func sqlOperation(q string) string {
 }
 func retryResearchExec(ctx context.Context, db sqlExecutor, query string, args ...any) (sql.Result, error) {
 	for attempt := 0; ; attempt++ {
+		// Recalculate the tail budget after every retry; a fixed 50ms SQLite
+		// busy handler must not run past an almost exhausted stage deadline.
+		if deadline, ok := ctx.Deadline(); ok {
+			remaining := int(time.Until(deadline).Milliseconds()) - 5
+			if remaining <= 0 {
+				return nil, context.DeadlineExceeded
+			}
+			if remaining < 50 {
+				if _, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", remaining)); err != nil {
+					return nil, err
+				}
+			}
+		}
 		r, err := db.ExecContext(ctx, query, args...)
 		// Never retry a snapshot conflict or an ambiguous commit. SQLite BUSY
 		// statements have made no change; all retries share the caller's budget.

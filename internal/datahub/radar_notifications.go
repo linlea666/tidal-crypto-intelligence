@@ -324,7 +324,10 @@ func (h *Hub) radarBackground(ctx context.Context) {
 				step, cancel = context.WithTimeout(ctx, 2*time.Second)
 				e = h.Store.radar.maintain(step, now)
 				if e == nil {
-					_, e = h.Store.research.ExecContext(step, "DELETE FROM notices WHERE kind LIKE 'hl-radar:%' AND created<?", now.Add(-90*24*time.Hour).Unix())
+					_, e = h.Store.research.ExecContext(context.WithValue(step, maintenanceWriteKey{}, true), "DELETE FROM notices WHERE id IN (SELECT id FROM notices WHERE kind LIKE 'hl-radar:%' AND created<? ORDER BY created LIMIT 256)", now.Add(-90*24*time.Hour).Unix())
+					if errors.Is(e, errMaintenanceDeferred) {
+						e = nil
+					}
 				}
 				if e == nil {
 					h.radar.mu.Lock()

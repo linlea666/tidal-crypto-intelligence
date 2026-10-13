@@ -360,7 +360,8 @@ func (h *Hub) shortStudyStep(ctx context.Context, now time.Time) error {
 	if e := h.Store.shortLoad(ctx, "origin", ShortFlowRules, &origin); e != nil {
 		return e
 	}
-	if _, e := h.Store.shortDB().ExecContext(ctx, "DELETE FROM sf_records WHERE kind IN ('coverage','episode','control','publication') AND at<?", now.Add(-30*24*time.Hour).Unix()); e != nil {
+	maintenance := context.WithValue(ctx, maintenanceWriteKey{}, true)
+	if _, e := h.Store.shortDB().ExecContext(maintenance, "DELETE FROM sf_records WHERE (kind,id) IN (SELECT kind,id FROM sf_records WHERE kind IN ('coverage','episode','control','publication') AND at<? ORDER BY at LIMIT 256)", now.Add(-30*24*time.Hour).Unix()); e != nil && !errors.Is(e, errMaintenanceDeferred) {
 		return shortWriteError(e)
 	}
 	if e := h.shortControls(ctx, origin, now); e != nil {

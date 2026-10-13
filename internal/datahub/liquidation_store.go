@@ -137,7 +137,7 @@ func (w *Warehouse) liquidationRows(ctx context.Context, kind, asset string, fro
 	return out, rows.Err()
 }
 func (w *Warehouse) pruneLiquidations(ctx context.Context, now time.Time) error {
-	_, e := w.research.ExecContext(ctx, "DELETE FROM lz_records WHERE (kind!='origin' AND at<?) OR (kind='map' AND done=1 AND at<?)", now.Add(-30*24*time.Hour).UnixNano(), now.Add(-24*time.Hour).UnixNano())
+	_, e := w.research.ExecContext(ctx, "DELETE FROM lz_records WHERE (kind,id) IN (SELECT kind,id FROM lz_records WHERE (kind!='origin' AND at<?) OR (kind='map' AND done=1 AND at<?) ORDER BY at LIMIT 256)", now.Add(-30*24*time.Hour).UnixNano(), now.Add(-24*time.Hour).UnixNano())
 	return e
 }
 

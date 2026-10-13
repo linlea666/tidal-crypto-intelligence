@@ -324,7 +324,7 @@ func (w *Warehouse) snapshotFacts(ctx context.Context, snapshot, id string, from
 	return flush()
 }
 func (w *Warehouse) pruneStudySnapshots(ctx context.Context, now time.Time) error {
-	rows, err := w.research.QueryContext(ctx, "SELECT id FROM study_inputs WHERE state='building' AND deadline<=?", now.Unix())
+	rows, err := w.research.QueryContext(ctx, "SELECT id FROM study_inputs WHERE state='building' AND deadline<=? ORDER BY deadline LIMIT 4", now.Unix())
 	if err != nil {
 		return err
 	}
@@ -359,7 +359,7 @@ func (w *Warehouse) pruneStudySnapshots(ctx context.Context, now time.Time) erro
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, "DELETE FROM study_input_chunks WHERE id IN (SELECT id FROM study_inputs WHERE state='failed')")
+	_, err = tx.ExecContext(ctx, "DELETE FROM study_input_chunks WHERE (id,n) IN (SELECT c.id,c.n FROM study_input_chunks c JOIN study_inputs i ON i.id=c.id WHERE i.state='failed' LIMIT 64)")
 	if err != nil {
 		return err
 	}

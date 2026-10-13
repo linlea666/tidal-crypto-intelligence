@@ -521,19 +521,27 @@ func (h *Hub) vixHealth() any {
 	daily, _ := h.vixFeed(ctx, "cboe")
 	return map[string]any{"status": status, "reason": reason, "feed": f, "daily": daily}
 }
-func (w *Warehouse) maintainVIX(ctx context.Context, now time.Time) error {
+func (w *Warehouse) maintainVIX(ctx context.Context, now time.Time) (result error) {
+	ctx = context.WithValue(ctx, maintenanceWriteKey{}, true)
+	defer func() {
+		if errors.Is(result, errMaintenanceDeferred) {
+			result = nil
+		}
+	}()
 	for _, s := range []struct {
 		q   string
 		arg any
 	}{
-		{"DELETE FROM vix_minute WHERE ts<?", now.Add(-30 * 24 * time.Hour).Unix()},
-		{"DELETE FROM vix_daily WHERE day<?", now.In(vixNewYork).AddDate(-1, 0, -1).Format("2006-01-02")},
-		{"DELETE FROM vix_events WHERE created<?", now.Add(-90 * 24 * time.Hour).UnixNano()},
-		{"DELETE FROM notices WHERE kind LIKE 'vix:%' AND created<?", now.Add(-90 * 24 * time.Hour).Unix()},
-		{"DELETE FROM mail_batch_items WHERE batch_id IN (SELECT id FROM mail_batches WHERE attempted<?)", now.Add(-90 * 24 * time.Hour).UnixNano()},
-		{"DELETE FROM mail_results WHERE batch_id IN (SELECT id FROM mail_batches WHERE attempted<?)", now.Add(-90 * 24 * time.Hour).UnixNano()},
-		{"DELETE FROM mail_batch_topics WHERE batch_id IN (SELECT id FROM mail_batches WHERE attempted<?)", now.Add(-90 * 24 * time.Hour).UnixNano()},
-		{"DELETE FROM mail_batches WHERE attempted<?", now.Add(-90 * 24 * time.Hour).UnixNano()},
+		{"DELETE FROM vix_minute WHERE ts IN (SELECT ts FROM vix_minute WHERE ts<? ORDER BY ts LIMIT 256)", now.Add(-30 * 24 * time.Hour).Unix()},
+		{"DELETE FROM vix_daily WHERE day IN (SELECT day FROM vix_daily WHERE day<? ORDER BY day LIMIT 256)", now.In(vixNewYork).AddDate(-1, 0, -1).Format("2006-01-02")},
+		{"DELETE FROM vix_events WHERE id IN (SELECT id FROM vix_events WHERE created<? ORDER BY created LIMIT 256)", now.Add(-90 * 24 * time.Hour).UnixNano()},
+		{"DELETE FROM notices WHERE id IN (SELECT id FROM notices WHERE (kind LIKE 'vix:%' OR kind LIKE 'book-flow:%') AND created<? ORDER BY created LIMIT 256)", now.Add(-90 * 24 * time.Hour).Unix()},
+		{"DELETE FROM mail_batch_items WHERE notice_id IN (SELECT i.notice_id FROM mail_batch_items i JOIN mail_batches b ON b.id=i.batch_id WHERE b.attempted<? ORDER BY b.attempted LIMIT 256)", now.Add(-90 * 24 * time.Hour).UnixNano()},
+		{"DELETE FROM mail_results WHERE batch_id IN (SELECT id FROM mail_batches WHERE attempted<? ORDER BY attempted LIMIT 256)", now.Add(-90 * 24 * time.Hour).UnixNano()},
+		{"DELETE FROM mail_batch_topics WHERE batch_id IN (SELECT id FROM mail_batches WHERE attempted<? ORDER BY attempted LIMIT 256)", now.Add(-90 * 24 * time.Hour).UnixNano()},
+		// A partially pruned batch must remain discoverable next time. Never
+		// orphan members by deleting their parent before the bounded batches end.
+		{"DELETE FROM mail_batches WHERE id IN (SELECT b.id FROM mail_batches b WHERE attempted<? AND NOT EXISTS(SELECT 1 FROM mail_batch_items i WHERE i.batch_id=b.id) AND NOT EXISTS(SELECT 1 FROM mail_results r WHERE r.batch_id=b.id) AND NOT EXISTS(SELECT 1 FROM mail_batch_topics t WHERE t.batch_id=b.id) ORDER BY attempted LIMIT 256)", now.Add(-90 * 24 * time.Hour).UnixNano()},
 	} {
 		if _, err := w.research.ExecContext(ctx, s.q, s.arg); err != nil {
 			return fmt.Errorf("VIX维护: %w", err)
