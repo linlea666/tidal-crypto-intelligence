@@ -107,10 +107,18 @@ func (h *Hub) bookFlowStep(ctx context.Context, now time.Time) error {
 		}
 		d, _ := h.Dataset(ID("book", "BTC", venue, "spot"))
 		o, exists := h.Store.Latest(d.ID)
+		previous := s.Current[venue]
 		fresh := exists && o.Quality == "valid" && !o.Time().After(now) && now.Sub(o.Time()) <= 3*time.Minute && !o.FetchedAt.After(now) && now.Sub(o.FetchedAt) <= 3*time.Minute
 		p := buildBookPoint(o, rate, now)
+		if exists && o.FetchedAt.After(now) {
+			// Latest can change after this cycle's cutoff. The new request is
+			// not known yet; retain only the previously registered snapshot
+			// at its original clocks. It creates no new point or coverage bit
+			// and still expires after the unchanged three-minute allowance.
+			p = previous
+			fresh = !p.At.IsZero() && !p.At.After(now) && !p.Fetched.After(now) && !p.Known.After(now) && now.Sub(p.At) <= 3*time.Minute && now.Sub(p.Fetched) <= 3*time.Minute
+		}
 		fresh = fresh && p.Reference != nil && rate != nil
-		previous := s.Current[venue]
 		newPoint := fresh && p.At.After(previous.At) && p.At.After(skip[venue]) && !p.At.Before(h.boot) && !p.At.Before(s.Origin)
 		gap := !s.Last.IsZero() && (now.Sub(s.Last) > 3*time.Minute || h.boot.After(s.Last)) || !fresh
 		if newPoint && !previous.At.IsZero() && p.At.Sub(previous.At) > 90*time.Second {
@@ -212,7 +220,7 @@ func (h *Hub) bookFlowStep(ctx context.Context, now time.Time) error {
 				return dec(a.Low).LessThan(dec(b.Low))
 			})
 			for _, z := range candidates {
-				if !z.Enhanced {
+				if !z.Enhanced || now.Before(s.Origin.Add(30*time.Minute)) {
 					continue
 				}
 				blocked := false
@@ -417,24 +425,12 @@ func (h *Hub) commitBookFlow(ctx context.Context, s bookFlowState, events map[st
 	if h.Store.Status().ResearchPaused || h.Store.Status().Paused {
 		return errors.New("研究容量保护，观察未登记")
 	}
-	conn, err := h.Store.shortDB().Conn(ctx)
-	if err != nil {
-		return err
+	var err error
+	type write struct {
+		query string
+		args  []any
 	}
-	defer conn.Close()
-	if _, err = conn.ExecContext(ctx, "PRAGMA busy_timeout=50"); err != nil {
-		return err
-	}
-	defer func() {
-		reset, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		_, _ = conn.ExecContext(reset, "PRAGMA busy_timeout=1500")
-	}()
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
+	writes := []write{}
 	put := func(kind, id, parent string, at time.Time, v any, immutable bool) error {
 		b, e := json.Marshal(v)
 		if e != nil {
@@ -447,8 +443,8 @@ func (h *Hub) commitBookFlow(ctx context.Context, s bookFlowState, events map[st
 		if immutable {
 			q = "INSERT OR IGNORE INTO book_flow VALUES(?,?,?,?,?)"
 		}
-		_, e = tx.ExecContext(ctx, q, kind, id, parent, at.Unix(), b)
-		return e
+		writes = append(writes, write{q, []any{kind, id, parent, at.Unix(), b}})
+		return nil
 	}
 	if err = put("origin", BookFlowRules, "", s.Origin, s.Origin, true); err != nil {
 		return err
@@ -478,6 +474,16 @@ func (h *Hub) commitBookFlow(ctx context.Context, s bookFlowState, events map[st
 	if err = put("state", BookFlowRules, "", s.Last, s, false); err != nil {
 		return err
 	}
+	tx, err := h.Store.shortDB().BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, w := range writes {
+		if _, err = tx.ExecContext(ctx, w.query, w.args...); err != nil {
+			return err
+		}
+	}
 	return tx.Commit()
 }
 
@@ -485,7 +491,7 @@ func (h *Hub) commitBookFlow(ctx context.Context, s bookFlowState, events map[st
 // Clocks and outcome enrollment share one transaction; retry never backdates a
 // missing clock to its input or computation time. The API hides unclocked rows.
 func (h *Hub) publishBookFlow(ctx context.Context, now time.Time) error {
-	rows, err := h.Store.shortDB().QueryContext(ctx, `SELECT u.id,u.parent,u.payload,e.payload FROM book_flow u JOIN book_flow e ON e.kind='event' AND e.id=u.parent WHERE u.kind='update' AND NOT EXISTS(SELECT 1 FROM book_flow c WHERE c.kind='clock' AND c.id=u.id) ORDER BY u.at,u.id LIMIT 64`)
+	rows, err := h.Store.shortDB().QueryContext(ctx, `SELECT u.id,u.parent,u.payload,e.payload FROM book_flow u JOIN book_flow e ON e.kind='event' AND e.id=u.parent WHERE u.kind='update' AND u.id LIKE ? AND NOT EXISTS(SELECT 1 FROM book_flow c WHERE c.kind IN ('clock','publication-gap') AND c.id=u.id) ORDER BY u.at,u.id LIMIT 64`, BookFlowRules+"/%")
 	if err != nil {
 		return err
 	}
@@ -523,25 +529,35 @@ func (h *Hub) publishBookFlow(ctx context.Context, now time.Time) error {
 	if !h.offline {
 		readable = time.Now().UTC()
 	}
-	conn, err := h.Store.shortDB().Conn(ctx)
+	settings, err := h.bookSettings(ctx)
 	if err != nil {
 		return err
 	}
-	defer conn.Close()
-	if _, err = conn.ExecContext(ctx, "PRAGMA busy_timeout=50"); err != nil {
-		return err
-	}
-	defer func() {
-		reset, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-		defer cancel()
-		_, _ = conn.ExecContext(reset, "PRAGMA busy_timeout=1500")
-	}()
-	tx, err := conn.BeginTx(ctx, nil)
+	tx, err := h.Store.shortDB().BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	gaps := 0
 	for _, p := range items {
+		expired := readable.Sub(p.update.At) > 2*time.Second || readable.Before(p.update.At) || (!h.offline && p.update.At.Before(h.boot))
+		if p.update.Kind != "enhanced" {
+			var n int
+			if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM book_flow WHERE kind='clock' AND id=?", p.parent+"/enhanced").Scan(&n); err != nil {
+				return err
+			}
+			if n == 0 {
+				expired = true
+			}
+		}
+		if expired {
+			gap, _ := json.Marshal(map[string]any{"at": readable, "computedAt": p.update.At, "reason": "publication deadline missed; never enrolled"})
+			if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO book_flow VALUES('publication-gap',?,?,?,?)", p.key, p.parent, readable.Unix(), gap); err != nil {
+				return err
+			}
+			gaps++
+			continue
+		}
 		b, _ := json.Marshal(readable)
 		res, e := tx.ExecContext(ctx, "INSERT OR IGNORE INTO book_flow VALUES('clock',?,?,?,?)", p.key, p.parent, readable.Unix(), b)
 		if e != nil {
@@ -554,8 +570,11 @@ func (h *Hub) publishBookFlow(ctx context.Context, now time.Time) error {
 		if n == 0 {
 			continue
 		}
-		if p.update.Kind != "enhanced" && p.update.Kind != "absorption" && p.update.Kind != "following" {
+		if p.update.Kind != "enhanced" && p.update.Kind != "persistent" && p.update.Kind != "absorption" && p.update.Kind != "following" {
 			continue
+		}
+		if err = queueBookNotice(ctx, tx, settings, p.event, p.update, readable); err != nil {
+			return err
 		}
 		t := newShortTrial(p.key, BookFlowRules+"/"+p.update.Kind, p.event.Direction, readable, p.update.SourceAt, nil)
 		t.Outcomes = append([]ShortOutcome{{Minutes: 5, State: "pending"}}, t.Outcomes...)
@@ -567,7 +586,13 @@ func (h *Hub) publishBookFlow(ctx context.Context, now time.Time) error {
 			return err
 		}
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	if gaps > 0 {
+		return fmt.Errorf("book flow publication deadline: %d stages not enrolled", gaps)
+	}
+	return nil
 }
 
 func (h *Hub) advanceBookTrials(ctx context.Context, now time.Time) error {
@@ -600,7 +625,7 @@ func (h *Hub) bookFlowWorker(ctx context.Context) {
 		case <-t.C:
 			now := time.Now().UTC()
 			step, cancel := context.WithTimeout(ctx, 2*time.Second)
-			err := h.bookFlowStep(step, now)
+			err := h.bookFlowCycle(step, now)
 			cancel()
 			h.mu.Lock()
 			h.bookFlowRuntime.At = &now
@@ -645,5 +670,5 @@ func (h *Hub) saveBookFlowRuntime(ctx context.Context) {
 	b, _ := json.Marshal(r)
 	save, stop := context.WithTimeout(ctx, 150*time.Millisecond)
 	defer stop()
-	_, _ = boundedExec(save, h.Store.db, 5000, "INSERT INTO state VALUES('book-flow/runtime',?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", b)
+	_, _ = boundedExec(save, h.Store.db, 5000, "INSERT INTO state VALUES(?,?) ON CONFLICT(key) DO UPDATE SET payload=excluded.payload", "book-flow/runtime/"+BookFlowRules, b)
 }

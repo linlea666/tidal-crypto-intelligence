@@ -34,7 +34,7 @@ func (w *Warehouse) initResearch() error {
 		db.Close()
 		return e
 	}
-	w.research = db
+	w.research = newResearchDB(db, nil)
 	if e = w.initBookFlow(); e != nil {
 		w.bookFlowError = e.Error()
 	}
@@ -153,7 +153,7 @@ func (w *Warehouse) FactsAsOf(ctx context.Context, id string, from, to, asOf tim
 	return factsAsOf(ctx, w.research, id, from, to, asOf, fn)
 }
 
-func factsAsOf(ctx context.Context, db *sql.DB, id string, from, to, asOf time.Time, fn func(Observation) error) error {
+func factsAsOf(ctx context.Context, db sqlReader, id string, from, to, asOf time.Time, fn func(Observation) error) error {
 	rows, e := db.QueryContext(ctx, `SELECT f.payload FROM facts f WHERE f.dataset=? AND f.ts>=? AND f.ts<? AND f.available<=? AND f.available=(SELECT max(g.available) FROM facts g WHERE g.dataset=f.dataset AND g.ts=f.ts AND g.res=f.res AND g.available<=?) ORDER BY f.ts,f.res`, id, from.Unix(), to.Unix(), asOf.UnixNano(), asOf.UnixNano())
 	if e != nil {
 		return e
@@ -211,7 +211,13 @@ func (w *Warehouse) documents(ctx context.Context, kind, asset string, limit int
 	}
 	return out, rows.Err()
 }
-func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days int) error {
+func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days int) (result error) {
+	ctx = context.WithValue(ctx, maintenanceWriteKey{}, true)
+	defer func() {
+		if errors.Is(result, errMaintenanceDeferred) {
+			result = nil
+		}
+	}()
 	if e := w.pruneLiquidations(ctx, now); e != nil {
 		return e
 	}
@@ -226,12 +232,18 @@ func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days in
 	if _, err := w.research.ExecContext(ctx, "DELETE FROM signal_publications WHERE seq IN (SELECT seq FROM signal_publications WHERE at<? ORDER BY at LIMIT 1000)", now.Add(-90*24*time.Hour).UnixMilli()); err != nil {
 		return err
 	}
-	for _, q := range []string{"DELETE FROM facts WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND facts.ts>=i.from_ts AND facts.ts<i.to_ts)", "DELETE FROM documents WHERE at<?", "DELETE FROM notices WHERE created<? AND (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'hl-radar:%'))", "DELETE FROM gaps WHERE end<?", "DELETE FROM shadow WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND shadow.ts>=i.from_ts AND shadow.ts<i.to_ts)"} {
+	for _, q := range []string{
+		"DELETE FROM facts WHERE (dataset,ts,res,revision) IN (SELECT dataset,ts,res,revision FROM facts WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND facts.ts>=i.from_ts AND facts.ts<i.to_ts) LIMIT 256)",
+		"DELETE FROM documents WHERE (kind,id) IN (SELECT kind,id FROM documents WHERE at<? LIMIT 256)",
+		"DELETE FROM notices WHERE id IN (SELECT id FROM notices WHERE created<? AND (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'hl-radar:%' AND kind NOT LIKE 'book-flow:%')) LIMIT 256)",
+		"DELETE FROM gaps WHERE start IN (SELECT start FROM gaps WHERE end<? LIMIT 256)",
+		"DELETE FROM shadow WHERE (asset,ts) IN (SELECT asset,ts FROM shadow WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND shadow.ts>=i.from_ts AND shadow.ts<i.to_ts) LIMIT 256)",
+	} {
 		if _, e := w.research.ExecContext(ctx, q, cutoff); e != nil {
 			return e
 		}
 	}
-	if _, e := w.research.ExecContext(ctx, "PRAGMA incremental_vacuum(4096)"); e != nil {
+	if _, e := w.research.ExecContext(ctx, "PRAGMA incremental_vacuum(64)"); e != nil {
 		return e
 	}
 	if _, e := w.research.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)"); e != nil {

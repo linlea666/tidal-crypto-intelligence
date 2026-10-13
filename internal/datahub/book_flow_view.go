@@ -42,10 +42,10 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 		if err != nil && err != sql.ErrNoRows {
 			return nil, err
 		}
-		contracts = append(contracts, c)
+		contracts = append(contracts, currentMinuteContract(c, now))
 	}
 	limit, offset := parseInt(q, "limit", 20, 1, 50), parseInt(q, "offset", 0, 0, 10000)
-	events, err := paperRows[bookEvent](ctx, h.Store.shortDB(), `SELECT e.payload FROM book_flow e JOIN book_flow c ON c.kind='clock' AND c.id=e.id||'/enhanced' WHERE e.kind='event' AND (?='' OR e.id=?) AND (?='' OR json_extract(e.payload,'$.direction')=?) AND (?<>'' OR (c.at>=? AND c.at<?)) ORDER BY c.at DESC,e.id LIMIT ? OFFSET ?`, id, id, side, side, id, from.Unix(), to.Unix(), limit+1, offset)
+	events, err := paperRows[bookEvent](ctx, h.Store.shortDB(), `SELECT e.payload FROM book_flow e JOIN book_flow c ON c.kind='clock' AND c.id=e.id||'/enhanced' WHERE e.kind='event' AND json_extract(e.payload,'$.rulesVersion')=? AND (?='' OR e.id=?) AND (?='' OR json_extract(e.payload,'$.direction')=?) AND (?<>'' OR (c.at>=? AND c.at<?)) ORDER BY c.at DESC,e.id LIMIT ? OFFSET ?`, BookFlowRules, id, id, side, side, id, from.Unix(), to.Unix(), limit+1, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +84,11 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 		for _, t := range trials {
 			observations = append(observations, bookTrialView(t))
 		}
-		item := map[string]any{"event": e, "observations": observations}
+		notifications, er := h.bookNoticeViews(ctx, e.ID)
+		if er != nil {
+			return nil, er
+		}
+		item := map[string]any{"event": e, "observations": observations, "notifications": notifications}
 		if id != "" {
 			// Relations are temporal associations, never proof of causality.
 			formal, er := paperRows[Signal](ctx, h.Store.shortDB(), "SELECT payload FROM documents WHERE kind='signal' AND asset='BTC' AND at>=? AND at<? ORDER BY at LIMIT 6", e.At.Add(-30*time.Minute).Unix(), e.Expires.Unix())
@@ -173,7 +177,15 @@ func (h *Hub) bookFlowView(ctx context.Context, q url.Values, now time.Time) (an
 			jobs = append(jobs, j)
 		}
 	}
-	return map[string]any{"prices": prices, "at": now, "mode": h.bookFlowMode, "rulesVersion": BookFlowRules, "collectionVersion": h.collectionVersion(), "origin": origin, "lastProcessedAt": last, "runtime": runtime, "contracts": contracts, "current": current, "items": items, "more": more, "limit": limit, "offset": offset, "from": from, "to": to, "storageBytes": used, "budgetBytes": bookFlowBudget, "scheduler": map[string]any{"jobs": jobs, "limitPerMinute": scheduler["limitPerMinute"], "usedLastMinute": scheduler["usedLastMinute"], "rateLimited": scheduler["rateLimited"]}, "report": report, "note": "原始盘口快照与同交易所成交的承接线索；不证明同一委托、撤单或资金身份，不是做多做空指令。站内观察，不发邮件、不进入模拟。", "metricDefinitions": map[string]string{"baseline": "此前30分钟同交易所同固定区域数量中位数，至少29个有效分钟", "return": "阶段实际发布后下一根完整5分钟现货K线开盘，无费用，非可成交价", "coverage": "实验起点后完整源分钟，两家盘口及足迹各自首次在三分钟内取得；等待取得期限结束后冻结，缺口不追认，最初不足一分钟不纳入", "independent": "每方向每阶段按时间取最早事件，其后4小时窗口内其他事件单列为重叠样本", "absorption": "五个完整分钟成交冲击且快照深度保持；不能确定成交与后续挂单来自同一订单"}}, nil
+	runStatus, err := h.bookFlowRunStatus(ctx, s, now)
+	if err != nil {
+		return nil, err
+	}
+	notices, err := h.bookNoticeViews(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"notifications": notices, "runStatus": runStatus, "statisticsScope": map[string]any{"rulesVersion": BookFlowRules, "collectionVersion": BookFlowCollection, "origin": origin, "intervalSample": "completeEvidence"}, "researchWriter": h.Store.research.writer.snapshot(), "prices": prices, "at": now, "mode": h.bookFlowMode, "rulesVersion": BookFlowRules, "activeCollectionVersion": h.collectionVersion(), "collectionVersion": BookFlowCollection, "origin": origin, "lastProcessedAt": last, "runtime": runtime, "contracts": contracts, "current": current, "items": items, "more": more, "limit": limit, "offset": offset, "from": from, "to": to, "storageBytes": used, "budgetBytes": bookFlowBudget, "scheduler": map[string]any{"jobs": jobs, "limitPerMinute": scheduler["limitPerMinute"], "usedLastMinute": scheduler["usedLastMinute"], "rateLimited": scheduler["rateLimited"]}, "report": report, "note": "原始盘口快照与同交易所成交的承接线索；不证明同一委托、撤单或资金身份，不是做多做空指令。市场观察提醒，效果验证中；不进入模拟。", "metricDefinitions": map[string]string{"baseline": "此前30分钟同交易所同固定区域数量中位数，至少29个有效分钟", "return": "阶段实际发布后下一根完整5分钟现货K线开盘，无费用，非可成交价", "coverage": "实验起点后完整源分钟，两家盘口及足迹各自首次在三分钟内取得；等待取得期限结束后冻结，缺口不追认，最初不足一分钟不纳入", "independent": "每方向每阶段按时间取最早事件，其后4小时窗口内其他事件单列为重叠样本", "absorption": "五个完整分钟成交冲击且快照深度保持；不能确定成交与后续挂单来自同一订单"}}, nil
 }
 func bookTrialView(t ShortTrial) any {
 	outcomes := []any{}
@@ -186,7 +198,7 @@ func bookTrialView(t ShortTrial) any {
 // Report limits are explicit: saturation makes stage eligibility false instead
 // of silently presenting a truncated subset as the full forward experiment.
 func (h *Hub) bookFlowReport(ctx context.Context, s bookFlowState, now time.Time) (any, error) {
-	trials, err := paperRows[ShortTrial](ctx, h.Store.shortDB(), "SELECT payload FROM book_flow WHERE kind='trial' ORDER BY at,id LIMIT 3001")
+	trials, err := paperRows[ShortTrial](ctx, h.Store.shortDB(), "SELECT payload FROM book_flow WHERE kind='trial' AND id LIKE ? ORDER BY at,id LIMIT 3001", BookFlowRules+"/%")
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +207,7 @@ func (h *Hub) bookFlowReport(ctx context.Context, s bookFlowState, now time.Time
 		trials = trials[:3000]
 	}
 	quality := map[string]bool{}
-	qr, err := h.Store.shortDB().QueryContext(ctx, "SELECT id,json_extract(payload,'$.completePath') FROM book_flow WHERE kind='event' ORDER BY at,id LIMIT 3001")
+	qr, err := h.Store.shortDB().QueryContext(ctx, "SELECT id,json_extract(payload,'$.completePath') FROM book_flow WHERE kind='event' AND id LIKE ? ORDER BY at,id LIMIT 3001", BookFlowRules+"/%")
 	if err != nil {
 		return nil, err
 	}
@@ -249,13 +261,17 @@ func (h *Hub) bookFlowReport(ctx context.Context, s bookFlowState, now time.Time
 			formal = formal[:3000]
 		}
 	}
-	for _, stage := range []string{"enhanced", "absorption", "following"} {
+	for _, stage := range []string{"enhanced", "persistent", "absorption", "following", "mail-persistent", "mail-absorption"} {
 		all, mature, positive, buy, sell, overlap := 0, 0, 0, 0, 0, 0
 		qualityN, qualityBuy, qualitySell, qualityPositive, qualitySum := 0, 0, 0, 0, 0.0
 		next := map[string]time.Time{}
 		values := []float64{}
 		daily := map[string][]float64{}
 		stageSignals := []Signal{}
+		horizon := map[int]map[string]int{}
+		for _, m := range []int{5, 15, 30, 60, 240} {
+			horizon[m] = map[string]int{"complete": 0, "pending": 0, "missing": 0, "completeEvidence": 0}
+		}
 		for _, t := range trials {
 			if t.Rule != BookFlowRules+"/"+stage {
 				continue
@@ -268,11 +284,22 @@ func (h *Hub) bookFlowReport(ctx context.Context, s bookFlowState, now time.Time
 			}
 			next[t.Direction] = t.Start.Add(4 * time.Hour)
 			for _, o := range t.Outcomes {
+				if bucket, ok := horizon[o.Minutes]; ok {
+					state := o.State
+					if state != "complete" && state != "pending" {
+						state = "missing"
+					}
+					bucket[state]++
+					if state == "complete" && quality[strings.TrimSuffix(t.ID, "/"+stage)] {
+						bucket["completeEvidence"]++
+					}
+				}
 				if o.Minutes != 240 || o.State != "complete" || o.Return == nil {
 					continue
 				}
 				mature++
 				if quality[strings.TrimSuffix(t.ID, "/"+stage)] {
+					daily[t.At.UTC().Format("2006-01-02")] = append(daily[t.At.UTC().Format("2006-01-02")], *o.Return)
 					qualityN++
 					qualitySum += *o.Return
 					if *o.Return > 0 {
@@ -285,7 +312,6 @@ func (h *Hub) bookFlowReport(ctx context.Context, s bookFlowState, now time.Time
 					}
 				}
 				values = append(values, *o.Return)
-				daily[t.At.UTC().Format("2006-01-02")] = append(daily[t.At.UTC().Format("2006-01-02")], *o.Return)
 				if *o.Return > 0 {
 					positive++
 				}
@@ -315,7 +341,7 @@ func (h *Hub) bookFlowReport(ctx context.Context, s bookFlowState, now time.Time
 		if qualityN > 0 {
 			qualityMean = finiteDecimal(flowPtr(qualitySum / float64(qualityN)))
 		}
-		groups = append(groups, map[string]any{"relativeFormal": bookRelativeFormal(priceEvents, stageSignals, formal, now), "completeEvidence": map[string]any{"independent4h": qualityN, "buy": qualityBuy, "sell": qualitySell, "positive": qualityPositive, "meanPercent": qualityMean}, "marketCoverage": bookMarketCoverage(priceEvents, stageSignals, now), "stage": stage, "all": all, "overlapping": overlap, "completeIndependent4h": mature, "buy": buy, "sell": sell, "positive4h": positive, "nonPositive4h": mature - positive, "positivePercent": rate, "meanPercent": mean, "medianPercent": median, "eligible": eligible, "interval95": interval})
+		groups = append(groups, map[string]any{"horizons": horizon, "relativeFormal": bookRelativeFormal(priceEvents, stageSignals, formal, now), "completeEvidence": map[string]any{"independent4h": qualityN, "buy": qualityBuy, "sell": qualitySell, "positive": qualityPositive, "meanPercent": qualityMean, "interval95": interval, "eligible": eligible}, "marketCoverage": bookMarketCoverage(priceEvents, stageSignals, now), "stage": stage, "all": all, "overlapping": overlap, "completeIndependent4h": mature, "buy": buy, "sell": sell, "positive4h": positive, "nonPositive4h": mature - positive, "positivePercent": rate, "meanPercent": mean, "medianPercent": median, "eligible": eligible, "interval95": interval, "intervalSample": "completeEvidence"})
 	}
 	return map[string]any{"formalMarketCoverage": bookMarketCoverage(priceEvents, formal, now), "marketCoverageNote": "复用原两根5分钟突破行情事件、一对一匹配、4小时窗口；仅包含已登记且非重构行情事件，未匹配不等同亏损，缺少行情事实不能当全市场覆盖。", "groups": groups, "observedMinutes": minutes, "timelyMinutes": timely, "bookTimelyMinutes": bookTimely, "coverage": coverageValue, "truncated": truncated, "assessment": "阶段门槛前仅描述样本，不判断策略有效；价格观察不等于成本后交易收益。", "minimumDays": 30, "minimumIndependent": 100, "minimumPerSide": 30, "minimumCoverage": .95}, nil
 }
@@ -394,7 +420,7 @@ func (h *Hub) bookFlowHealth(now time.Time) map[string]any {
 	runtime := h.bookFlowRuntime
 	h.mu.RUnlock()
 	runtime.Skipped = nil
-	v := map[string]any{"mode": h.bookFlowMode, "rulesVersion": BookFlowRules, "collectionVersion": h.collectionVersion(), "runtime": runtime, "origin": nil, "coverage": nil}
+	v := map[string]any{"mode": h.bookFlowMode, "rulesVersion": BookFlowRules, "activeCollectionVersion": h.collectionVersion(), "collectionVersion": BookFlowCollection, "runtime": runtime, "origin": nil, "coverage": nil}
 	if h.bookFlowMode == "off" {
 		return v
 	}
@@ -425,9 +451,13 @@ func (h *Hub) bookFlowHealth(now time.Time) map[string]any {
 			v["error"] = err.Error()
 			return v
 		}
-		contracts = append(contracts, c)
+		contracts = append(contracts, currentMinuteContract(c, now))
 	}
 	v["contracts"] = contracts
+	v["researchWriter"] = h.Store.research.writer.snapshot()
+	if acceptance, err := h.bookFlowAcceptance(ctx, now); err == nil {
+		v["collectionAcceptance"] = acceptance
+	}
 	jobs := []map[string]any{}
 	for _, j := range h.Scheduler.State()["jobs"].([]Job) {
 		if j.Mode != "live" || (!coreBook(j.Dataset) && !minuteFoot(j.Dataset)) {

@@ -6,9 +6,11 @@
 
 ![V2沿用的柱状布局，图为早期真实运行界面](docs/qa/production-desktop.png)
 
+v2.17.0 改进正在工程验收，尚未发布。挂单承接使用独立v2研究、60分钟采集验收和两阶段提醒；上线、运行、72小时稳定性与效果分别记录，见 [BOOK-FLOW](docs/BOOK-FLOW.md) 与 [STATUS](docs/STATUS.md)。
+
 ## 数据说明
 
-- 五家现货：Binance、OKX的USDT市场，加Coinbase、Kraken、Bitfinex的USD市场，共10个BTC/ETH市场；约2分钟快照。按有效Kraken汇率换算美元，失效FX不按1美元处理。币安仅提供即时价格和已完成5分钟K线。
+- 五家现货：Binance、OKX的USDT市场，加Coinbase、Kraken、Bitfinex的USD市场，共10个BTC/ETH市场；挂单承接v2配置下BTC Binance/OKX每60秒，其余8个盘口每240秒。按有效Kraken汇率换算美元，失效FX不按1美元处理。币安仅提供即时价格和已完成5分钟K线。
 - 支撑/阻力均为候选区域。历史金额分位、采样稳定程度和成交证据分别展示；不足7天/500个同类价位样本不评级。金额大不是必然反弹，采样间变化不能还原同一笔订单或确定撤单。
 - 主动净买入=主动买入额−主动卖出额，不是充值/提现。CVD显示固定起算点和缺口；三家足迹不冒充五家盘口全部成交。
 - CoinGlass覆盖交易所的OI、资金费率和已发生清算，保留实际单位、计费周期及来源时间。聚合OI不与分所重复相加；没有来源时间时明确标为仅有获取时间。
@@ -89,6 +91,6 @@ GET只读取本地，不触发上游。上游任意滚动60秒最多12次、最�
 
 验收状态见 [STATUS](docs/STATUS.md)。持续运行 72 小时的资源验收与短测分开记录。
 
-当前稳定版本为 [v2.6.0](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.6.0)。各版本验收起止、资源限制及尚未完成的实盘项目见 [STATUS](docs/STATUS.md)，短测通过不表示72小时验收完成。
+当前稳定版本为 [v2.16.0](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.16.0)。各版本验收起止、资源限制及尚未完成的实盘项目见 [STATUS](docs/STATUS.md)，短测通过不表示72小时验收完成。
 
 Hyperliquid 原生异常建仓雷达的规则、公开覆盖边界及邮件启用验收见 [实施说明](docs/HYPERLIQUID-RADAR.md)。

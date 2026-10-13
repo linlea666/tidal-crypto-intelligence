@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// Existing topics retain their shared six attempts. Radar owns the other six.
+// Retain historical topic counters; all topics now share six total attempts.
 // Legacy rows have no topic, and always remain in the existing pool.
 func (h *Hub) mailAttempts(ctx context.Context, now time.Time) (int, error) {
 	total, e := h.totalMailAttempts(ctx, now)
@@ -32,13 +32,18 @@ func (h *Hub) mailBudgetAllowed(ctx context.Context, now time.Time, topic string
 	if e != nil {
 		return false, e
 	}
+	if topic == "book-flow" {
+		var n int
+		e = h.Store.research.QueryRowContext(ctx, "SELECT count(*) FROM mail_batches b JOIN mail_batch_topics t ON t.batch_id=b.id WHERE b.attempted>? AND t.topic='book-flow'", now.Add(-time.Hour).UnixNano()).Scan(&n)
+		return total < 6 && n < 2, e
+	}
 	if topic == "hl-radar" {
-		return total < 12 && total-old < 6, nil
+		return total < 6 && total-old < 6, nil
 	}
 	if topic != "existing" {
 		return false, errors.New("未知邮件额度主题")
 	}
-	return total < 12 && old < 6, nil
+	return total < 6 && old < 6, nil
 }
 func (h *Hub) radarReceipt(now time.Time) bool {
 	if h.mail == nil {
@@ -90,7 +95,7 @@ func (h *Hub) radarSettingsView(ctx context.Context) (any, error) {
 	if e != nil {
 		return nil, e
 	}
-	return map[string]any{"emailEnabled": s.EmailEnabled, "configured": h.mail != nil, "receiptVerified": h.radarReceipt(time.Now()), "offline": h.offline, "limitPerHour": 6, "existingLimitPerHour": 6, "totalLimitPerHour": 12}, nil
+	return map[string]any{"emailEnabled": s.EmailEnabled, "configured": h.mail != nil, "receiptVerified": h.radarReceipt(time.Now()), "offline": h.offline, "limitPerHour": 6, "existingLimitPerHour": 6, "totalLimitPerHour": 6}, nil
 }
 func (h *Hub) radarExport(ctx context.Context, now time.Time) error {
 	rows, e := h.Store.radar.db.QueryContext(ctx, "SELECT id,payload FROM outbox WHERE exported=0 ORDER BY at,id LIMIT 32")
@@ -319,7 +324,10 @@ func (h *Hub) radarBackground(ctx context.Context) {
 				step, cancel = context.WithTimeout(ctx, 2*time.Second)
 				e = h.Store.radar.maintain(step, now)
 				if e == nil {
-					_, e = h.Store.research.ExecContext(step, "DELETE FROM notices WHERE kind LIKE 'hl-radar:%' AND created<?", now.Add(-90*24*time.Hour).Unix())
+					_, e = h.Store.research.ExecContext(context.WithValue(step, maintenanceWriteKey{}, true), "DELETE FROM notices WHERE id IN (SELECT id FROM notices WHERE kind LIKE 'hl-radar:%' AND created<? ORDER BY created LIMIT 256)", now.Add(-90*24*time.Hour).Unix())
+					if errors.Is(e, errMaintenanceDeferred) {
+						e = nil
+					}
 				}
 				if e == nil {
 					h.radar.mu.Lock()

@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-const BookFlowRules = "spot-book-flow-v1"
-const BookFlowCollection = "btc-spot-priority-v1"
+const BookFlowRules = "spot-book-flow-v2"
+const BookFlowCollection = "btc-spot-priority-v2"
 const bookFlowBudget = 32 << 20
 
 func minuteFootID(venue string) string { return ID("footprint", "BTC", venue, "spot") + ".minute-v1" }
@@ -27,6 +27,22 @@ func coreFiveFoot(d Dataset) bool {
 // Successful core requests and clean restarts return to the same minute
 // phases; failure backoff and global quota cooldown retain precedence.
 func bookFlowNext(d Dataset, now time.Time) (time.Time, bool) {
+	if d.Collection == BookFlowCollection && d.Kind == "book" && !coreBook(d) {
+		index := 0
+		for _, other := range Registry() {
+			if other.Kind != "book" || coreBook(other) {
+				continue
+			}
+			if other.ID == d.ID {
+				next := now.Truncate(4 * time.Minute).Add(time.Duration(12+index*30) * time.Second)
+				if !next.After(now) {
+					next = next.Add(4 * time.Minute)
+				}
+				return next, true
+			}
+			index++
+		}
+	}
 	if d.Collection != BookFlowCollection || (!coreBook(d) && !minuteFoot(d)) {
 		return time.Time{}, false
 	}
@@ -60,7 +76,7 @@ func bookFlowRegistry(mode string) []Dataset {
 		d.Collection = BookFlowCollection
 		switch d.Kind {
 		case "book":
-			d.Refresh, d.Priority = 300, 2
+			d.Refresh, d.Priority = 240, 2
 			if coreBook(*d) {
 				d.Refresh, d.Priority = 60, 0
 			}
@@ -92,15 +108,30 @@ func bookFlowRegistry(mode string) []Dataset {
 }
 
 type minuteContract struct {
-	Venue       string     `json:"venue"`
-	Attempts    int        `json:"attempts"`
-	Consecutive int        `json:"consecutive"`
-	LastSource  time.Time  `json:"lastSourceAt"`
-	LastFetched time.Time  `json:"lastFetchedAt"`
-	VerifiedAt  *time.Time `json:"verifiedAt"`
-	Cutover     *time.Time `json:"cutoverAt"`
-	ActivatedAt *time.Time `json:"activatedAt"`
-	Failure     string     `json:"failure,omitempty"`
+	Venue         string     `json:"venue"`
+	Attempts      int        `json:"attempts"`
+	Consecutive   int        `json:"consecutive"`
+	LastSource    time.Time  `json:"lastSourceAt"`
+	LastFetched   time.Time  `json:"lastFetchedAt"`
+	VerifiedAt    *time.Time `json:"verifiedAt"`
+	Cutover       *time.Time `json:"cutoverAt"`
+	ActivatedAt   *time.Time `json:"activatedAt"`
+	Failure       string     `json:"failure,omitempty"`
+	Healthy       *bool      `json:"healthy"`
+	LastSuccessAt *time.Time `json:"lastSuccessAt"`
+	LastFailureAt *time.Time `json:"lastFailureAt"`
+	LastFailure   string     `json:"lastFailure,omitempty"`
+	RecoveredAt   *time.Time `json:"recoveredAt"`
+}
+
+// A successful last request is historical once its freshness window expires.
+// Project this at read time; do not manufacture a failure timestamp in storage.
+func currentMinuteContract(c minuteContract, now time.Time) minuteContract {
+	if c.Healthy != nil && *c.Healthy && (c.LastSuccessAt == nil || c.LastSuccessAt.After(now) || now.Sub(*c.LastSuccessAt) > 3*time.Minute) {
+		c.Healthy = flowPtr(false)
+		c.Failure = "最近成功已过期，当前分钟契约健康待确认"
+	}
+	return c
 }
 
 func (w *Warehouse) bookFlowLoad(ctx context.Context, kind, id string, value any) error {
@@ -155,6 +186,11 @@ func (s *Scheduler) processMinuteContract(ctx context.Context, d Dataset, observ
 	if err != nil && err != sql.ErrNoRows {
 		return c, err
 	}
+	if err == nil && c.Healthy == nil {
+		if e := s.store.bookFlowSave(ctx, "contract-archive", "spot-book-flow-v1/"+d.ID, fetched, c, true); e != nil {
+			return c, e
+		}
+	}
 	c.Attempts++
 	valid := map[int64]Observation{}
 	var latest time.Time
@@ -176,11 +212,27 @@ func (s *Scheduler) processMinuteContract(ctx context.Context, d Dataset, observ
 		}
 	}
 	if fetchErr != nil || !complete {
+		healthy := false
+		c.Healthy = &healthy
+		c.LastFailureAt = &fetched
 		c.Consecutive = 0
 		c.Failure = "一分钟足迹契约或完整窗口未通过"
-	} else if latest.After(c.LastSource) && fetched.After(c.LastFetched) {
-		c.Consecutive++
-		c.LastSource, c.LastFetched = latest, fetched
+		if fetchErr != nil {
+			c.Failure = fetchErr.Error()
+		}
+		c.LastFailure = c.Failure
+	} else {
+		if latest.After(c.LastSource) && fetched.After(c.LastFetched) {
+			c.Consecutive++
+			c.LastSource, c.LastFetched = latest, fetched
+		}
+		if c.Healthy != nil && !*c.Healthy {
+			c.RecoveredAt = &fetched
+		}
+		healthy := true
+		c.Healthy = &healthy
+		c.LastSuccessAt = &fetched
+		c.Failure = ""
 	}
 	if c.VerifiedAt == nil && c.Consecutive >= 3 {
 		c.VerifiedAt = &fetched

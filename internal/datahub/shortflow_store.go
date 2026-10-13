@@ -55,7 +55,7 @@ CREATE TRIGGER IF NOT EXISTS sf_removed AFTER DELETE ON sf_records BEGIN UPDATE 
 		db.Close()
 		return err
 	}
-	w.shortResearch = db
+	w.shortResearch = newResearchDB(db, w.research.writer)
 	// Copy only bounded display metadata. Preserve the legacy rows and origins.
 	for _, key := range []string{"short-flow/current", "short-flow/report", "short-flow/gap", "short-flow/runtime-v2"} {
 		var raw []byte
@@ -477,7 +477,7 @@ func (h *Hub) shortFlowWorker(ctx context.Context) {
 
 // Fall back only if optional initialization failed; bounded contexts still
 // preserve the original service and surface the research gap.
-func (w *Warehouse) shortDB() *sql.DB {
+func (w *Warehouse) shortDB() *researchDB {
 	if w.shortResearch != nil {
 		return w.shortResearch
 	}

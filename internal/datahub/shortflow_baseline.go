@@ -267,7 +267,7 @@ func (w *Warehouse) commitShortBaseline(ctx context.Context, work shortBaselineV
 			return e
 		}
 	}
-	if _, e = tx.ExecContext(ctx, "DELETE FROM sf_records WHERE kind='baseline-v2' AND at<?", now.Add(-3*time.Hour).Unix()); e != nil {
+	if _, e = tx.ExecContext(ctx, "DELETE FROM sf_records WHERE (kind,id) IN (SELECT kind,id FROM sf_records WHERE kind='baseline-v2' AND at<? ORDER BY at LIMIT 256)", now.Add(-3*time.Hour).Unix()); e != nil {
 		return e
 	}
 	return tx.Commit()

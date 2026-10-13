@@ -218,8 +218,11 @@ func TestRadarMailPoolsFailureRestartAndRouting(t *testing.T) {
 				t.Fatal(e)
 			}
 			sent, e := h.deliverTopicNoticeBatch(context.Background(), now, []string{id}, "test", "test", topic)
-			if !sent || e == nil {
+			if topic == "hl-radar" && (!sent || e == nil) {
 				t.Fatal("attempt not counted", topic, e)
+			}
+			if topic == "existing" && (sent || e != nil) {
+				t.Fatal("global six-attempt cap bypassed", sent, e)
 			}
 		}
 		ok, e := h.mailBudgetAllowed(context.Background(), now, topic)
@@ -228,12 +231,12 @@ func TestRadarMailPoolsFailureRestartAndRouting(t *testing.T) {
 		}
 	}
 	total, e := h.totalMailAttempts(context.Background(), now)
-	if e != nil || total != 12 {
+	if e != nil || total != 6 {
 		t.Fatal(total, e)
 	}
 	old, _ := h.mailAttempts(context.Background(), now)
-	if old != 6 {
-		t.Fatal("old pool changed")
+	if old != 0 {
+		t.Fatal("suppressed attempts counted")
 	}
 	_, e = h.Store.research.Exec("INSERT INTO notices(id,kind,created,status,payload) VALUES('hl-protected','hl-radar:opening',?,'pending','{}')", now.Add(-time.Minute).Unix())
 	if e != nil {

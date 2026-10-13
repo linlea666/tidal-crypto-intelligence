@@ -3,7 +3,6 @@ package datahub
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -167,8 +166,8 @@ func TestPaperPublicationReadDoesNotQueueBehindResearchWriter(t *testing.T) {
 	blocked, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
 	_, _, _, err = h.Store.paperPublications(blocked, 0)
 	cancel()
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal("test did not reproduce writer-connection contention", err)
+	if err != nil {
+		t.Fatal("formal reader queued behind isolated writer", err)
 	}
 	read, stop := context.WithTimeout(ctx, 200*time.Millisecond)
 	defer stop()

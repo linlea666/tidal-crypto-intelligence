@@ -35,7 +35,7 @@ func QuiesceOnchain(ctx context.Context, root string) error {
 			return closeErr
 		}
 	}
-	return nil
+	return quiesceBookFlow(ctx, root)
 }
 
 // Restore is not an ordinary process restart. Run after restoring the selected
@@ -70,5 +70,32 @@ func RestoreOnchainBoundary(ctx context.Context, root string) error {
 			return ce
 		}
 	}
-	return nil
+	return quiesceBookFlow(ctx, root)
+}
+
+// Stop new mail before rollback/restore; retain every event, clock and failure.
+func quiesceBookFlow(ctx context.Context, root string) error {
+	path := filepath.Join(root, "research.sqlite")
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	db, err := database(path)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	var n int
+	if err = db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='book_flow'").Scan(&n); err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	_, err = db.ExecContext(ctx, `BEGIN IMMEDIATE;
+ UPDATE book_flow SET payload=json_set(payload,'$.emailEnabled',json('false')) WHERE kind='settings';
+ UPDATE notices SET status=CASE WHEN status='sending' OR attempted>0 THEN 'unknown_after_rollback' ELSE 'suppressed_rollback' END WHERE kind LIKE 'book-flow:%' AND status IN ('pending','sending');
+ COMMIT;`)
+	return err
 }

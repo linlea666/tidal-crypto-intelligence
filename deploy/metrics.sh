@@ -47,10 +47,15 @@ try:
  with open(root+'/data/collector-health.json') as f: record['collector']=json.load(f)
 except Exception as e: record['collectorError']=str(e)
 try:
- import urllib.request
+ import urllib.request, urllib.error
  start=time.monotonic()
  record['health']=json.load(urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=5))
- record['ready']=json.load(urllib.request.urlopen('http://127.0.0.1:8080/readyz',timeout=5))
+ try:
+  record['ready']=json.load(urllib.request.urlopen('http://127.0.0.1:8080/readyz',timeout=5));record['readyStatus']=200
+ except urllib.error.HTTPError as e:
+  record['readyStatus']=e.code
+  record['ready']=json.load(e)
+  record['error']='ready HTTP '+str(e.code)
  record['healthQueryMs']=round((time.monotonic()-start)*1000,2)
 except Exception as e: record['error']=str(e)
 with open(root+'/metrics/'+datetime.datetime.utcnow().strftime('%Y-%m-%d')+'.jsonl','a') as f: f.write(json.dumps(record)+'\n')

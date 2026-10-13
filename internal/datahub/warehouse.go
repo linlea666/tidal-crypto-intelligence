@@ -46,8 +46,8 @@ type Warehouse struct {
 	radar                      *radarStore
 	paper                      *paperStore
 	onchain                    *costStore
-	research                   *sql.DB
-	shortResearch              *sql.DB
+	research                   *researchDB
+	shortResearch              *researchDB
 	shortRuntime               *ShortRuntime
 	shortProjection            map[string]json.RawMessage
 	shortGapVolatile           *shortGap
@@ -153,12 +153,12 @@ func (w *Warehouse) Close() error {
 		_, _ = w.onchain.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 		_ = w.onchain.db.Close()
 	}
-	if w.shortResearch != nil {
-		_ = w.shortResearch.Close()
-	}
 	if w.research != nil {
 		_, _ = w.research.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 		_ = w.research.Close()
+	}
+	if w.shortResearch != nil {
+		_ = w.shortResearch.Close()
 	}
 	_, _ = w.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
 	return w.db.Close()

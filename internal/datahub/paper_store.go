@@ -310,7 +310,7 @@ type paperPublication struct {
 }
 
 func (w *Warehouse) paperPublications(ctx context.Context, after int64) ([]paperPublication, string, int64, error) {
-	return readPaperPublications(ctx, w.research, after)
+	return readPaperPublications(ctx, w.research.DB, after)
 }
 
 // The live paper actor must not queue behind the research writer's sole

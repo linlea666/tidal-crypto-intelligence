@@ -45,6 +45,9 @@ func TestFrozenStudyInputSurvivesPruningRevisionRestartAndBackup(t *testing.T) {
 	if err != nil || m.State != "failed" {
 		t.Fatal(m, err)
 	}
+	if err = h.Store.maintainResearch(ctx, now.Add(2*24*time.Hour), 90); err != nil {
+		t.Fatal(err)
+	}
 	var n int
 	if err = h.Store.research.QueryRow("SELECT count(*) FROM facts").Scan(&n); err != nil || n != 312 {
 		t.Fatal("expired lease retained source", n, err)
@@ -125,7 +128,7 @@ func TestFrozenStudyInputSurvivesPruningRevisionRestartAndBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	restored := &Warehouse{research: db}
+	restored := &Warehouse{research: newResearchDB(db, nil)}
 	got = 0
 	if err = restored.FactsAsOf(frozen, d.ID, s.From, s.To, now, func(o Observation) error { got++; return nil }); err != nil || got != 600 {
 		t.Fatal("backup lost frozen input", got, err)
@@ -245,7 +248,7 @@ func TestBoundedShortWriteHonorsRemainingBudget(t *testing.T) {
 		t.Fatal("busy handler escaped stage budget", time.Since(start), err)
 	}
 	var timeout int
-	if err = w.shortDB().QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil || timeout != 1500 {
+	if err = w.shortDB().QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil || timeout != 50 {
 		t.Fatal("connection policy not restored", timeout, err)
 	}
 }

@@ -89,7 +89,7 @@ func Open(cfg Config) (*Hub, error) {
 	}
 	h := &Hub{Store: w, registry: map[string]Dataset{}, views: map[string]cachedView{}, flights: map[string]*viewFlight{}, baselines: map[string]Baseline{}, boot: time.Now().UTC(), offline: cfg.Offline, mail: cfg.Mail}
 	h.bookFlowMode = cfg.BookFlowMode
-	_ = w.LoadState("book-flow/runtime", &h.bookFlowRuntime)
+	_ = w.LoadState("book-flow/runtime/"+BookFlowRules, &h.bookFlowRuntime)
 	h.bookFlowRuntime.Registered = false
 	if h.bookFlowMode == "" {
 		h.bookFlowMode = "off"
@@ -298,18 +298,21 @@ func (h *Hub) maintain(ctx context.Context) {
 		_ = h.Store.SaveState("baselineBuildError", message)
 	}
 }
-func (h *Hub) Ready() bool {
+func (h *Hub) Ready() bool { return h.Readiness()["ok"].(bool) }
+func (h *Hub) Readiness() map[string]any {
+	reasons := []string{}
+	books := map[string]int{}
 	now := time.Now()
 	fxd, _ := h.Dataset("fx.usd.kraken")
 	fx, ok := h.Store.Latest(fxd.ID)
 	if !ok || !fx.Fresh(fxd, now) {
-		return false
+		reasons = append(reasons, "fx_unavailable")
 	}
 	for _, a := range Assets() {
 		d, _ := h.Dataset(ID("price", a, "Binance", "spot"))
 		o, ok := h.Store.Latest(d.ID)
 		if !ok || !o.Fresh(d, now) {
-			return false
+			reasons = append(reasons, a+"_price_unavailable")
 		}
 		valid := 0
 		for _, d := range Registry() {
@@ -319,11 +322,12 @@ func (h *Hub) Ready() bool {
 				}
 			}
 		}
+		books[a] = valid
 		if valid < 3 {
-			return false
+			reasons = append(reasons, a+"_spot_books_below_3")
 		}
 	}
-	return true
+	return map[string]any{"ok": len(reasons) == 0, "reasons": reasons, "validSpotBooks": books, "minimumSpotBooks": 3}
 }
 func directGet(ctx context.Context, u string) (any, error) {
 	req, e := http.NewRequestWithContext(ctx, "GET", u, nil)
