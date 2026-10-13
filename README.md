@@ -91,8 +91,8 @@ GET只读取本地，不触发上游。上游任意滚动60秒最多12次、最�
 
 [CoinGlass](https://docs.coinglass.com) · [Binance](https://github.com/binance/binance-spot-api-docs) · [Kraken](https://docs.kraken.com/api/)
 
-验收状态见 [STATUS](docs/STATUS.md)。持续运行 72 小时的资源验收与短测分开记录。
+验收状态见 [STATUS](docs/STATUS.md)。本轮72小时观察已取消；独立资源回放、run预热与长期效果分别记录。
 
-当前稳定版本为 [v2.16.0](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.16.0)。各版本验收起止、资源限制及尚未完成的实盘项目见 [STATUS](docs/STATUS.md)，短测通过不表示72小时验收完成。
+当前稳定版本为 [v2.17.1](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.17.1)，v2.17.2补丁待检查和发布。各版本资源、运行与效果验收分别见 [STATUS](docs/STATUS.md)，发布或短测通过不表示运行及策略效果已验收。
 
 Hyperliquid 原生异常建仓雷达的规则、公开覆盖边界及邮件启用验收见 [实施说明](docs/HYPERLIQUID-RADAR.md)。
