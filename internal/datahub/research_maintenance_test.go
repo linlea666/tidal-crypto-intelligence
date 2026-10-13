@@ -3,6 +3,7 @@ package datahub
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,5 +110,73 @@ func TestResearchMaintenanceDefersToLiveTransaction(t *testing.T) {
 	}
 	if time.Since(start) > 50*time.Millisecond {
 		t.Fatal("cleanup waited behind live transaction")
+	}
+}
+
+func TestResearchRetentionSeeksTimeWithoutScanningAllFacts(t *testing.T) {
+	w := testStore(t)
+	ctx := context.Background()
+	// LIMIT bounds deleted rows, not inspected rows. The production file has
+	// 331,447 facts and no expired facts: this must seek on time rather than
+	// inspect every retained revision while holding the shared writer.
+	rows, err := w.research.QueryContext(ctx, `EXPLAIN QUERY PLAN SELECT dataset,ts,res,revision FROM facts WHERE ts<? AND NOT EXISTS(SELECT 1 FROM study_inputs i WHERE i.state='building' AND facts.ts>=i.from_ts AND facts.ts<i.to_ts) LIMIT 256`, time.Now().Add(-90*24*time.Hour).Unix())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	sought := false
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err = rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(detail, "SCAN facts") {
+			t.Fatal("unbounded retained-fact scan", detail)
+		}
+		if strings.Contains(detail, "SEARCH facts") && strings.Contains(detail, "ts<?") {
+			sought = true
+		}
+	}
+	if err = rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if !sought {
+		t.Fatal("retention did not seek its expiry boundary")
+	}
+}
+
+func TestResearchUsageRestoredBeforeDeferredMaintenance(t *testing.T) {
+	root := t.TempDir()
+	w, err := OpenWarehouse(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.research.Exec("INSERT INTO documents VALUES('budget-test','retained','BTC',?,zeroblob(1048576))", time.Now().Unix()); err != nil {
+		w.Close()
+		t.Fatal(err)
+	}
+	w.Close()
+	w, err = OpenWarehouse(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	before := w.Status().ResearchBytes
+	if before < 1<<20 {
+		t.Fatal("restarted budget forgot retained data", before)
+	}
+	tx, err := w.research.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err = w.maintainResearch(ctx, time.Now(), 90); err != nil {
+		t.Fatal(err)
+	}
+	if w.Status().ResearchBytes < before {
+		t.Fatal("deferred maintenance reset budget")
 	}
 }

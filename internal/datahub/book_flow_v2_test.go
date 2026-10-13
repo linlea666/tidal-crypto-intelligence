@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -475,5 +476,37 @@ func TestBookIntervalUsesCompleteEvidenceCohort(t *testing.T) {
 		if g.Stage == "persistent" && (!g.Eligible || g.Quality.N != 100 || g.Quality.Mean != "1" || g.Interval.Low != "1" || g.Interval.High != "1" || g.Mean == "1") {
 			t.Fatal(string(b))
 		}
+	}
+}
+
+func TestBookFlowViewDoesNotQueueBehindFormalResearch(t *testing.T) {
+	h, err := Open(Config{Root: t.TempDir(), Offline: true, BookFlowMode: "collect"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Store.Close()
+	now := time.Now().UTC()
+	if _, err = h.Store.shortDB().Exec("INSERT INTO notices(id,signal_id,kind,created,status,payload) VALUES('book-test','event-test','book-flow:persistent',?,'disabled',?)", now.Unix(), []byte(`{"templateVersion":"book-flow-two-stage-v1"}`)); err != nil {
+		t.Fatal(err)
+	}
+	// A formal history reader can retain its connection while decoding. The
+	// complete book view, including mail audit, must use the bounded short pool.
+	busy, err := h.Store.research.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	v, err := h.bookFlowView(ctx, url.Values{"asset": {"BTC"}}, now)
+	if err != nil {
+		t.Fatal("book view waited for formal history", err)
+	}
+	notices := v.(map[string]any)["notifications"].([]any)
+	if len(notices) != 1 || notices[0].(map[string]any)["id"] != "book-test" {
+		t.Fatal("audit hidden instead of read", notices)
+	}
+	if h.Store.research.Stats().MaxOpenConnections != 1 || h.Store.shortDB().Stats().MaxOpenConnections != 1 {
+		t.Fatal("connection budget expanded")
 	}
 }

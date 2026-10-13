@@ -68,10 +68,20 @@ func database(path string) (*sql.DB, error) {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
-	_, e = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000; PRAGMA wal_autocheckpoint=256;`)
-	if e != nil {
+	// journal_mode itself can encounter WAL recovery or another connection's
+	// last-close lock. Install the bounded handler before touching the journal,
+	// and retry each idempotent setup statement within the same open budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, q := range []string{"PRAGMA journal_mode=WAL", "PRAGMA synchronous=NORMAL", "PRAGMA wal_autocheckpoint=256"} {
+		if _, e = boundedExec(ctx, db, 50, q); e != nil {
+			db.Close()
+			return nil, fmt.Errorf("database open %s: %w", q, e)
+		}
+	}
+	if _, e = db.ExecContext(ctx, "PRAGMA busy_timeout=5000"); e != nil {
 		db.Close()
-		return nil, e
+		return nil, fmt.Errorf("database open busy policy: %w", e)
 	}
 	return db, nil
 }
@@ -362,22 +372,31 @@ func historyObservation(d Dataset, o Observation) Observation {
 
 // Ingest is idempotent by dataset/source-time/content. A successful read of an old
 // timestamp updates fetchedAt only; it cannot rejuvenate observedAt.
-func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
+func (w *Warehouse) Ingest(d Dataset, o Observation) (didChange bool, err error) {
+	phase := "identity"
+	defer func() {
+		if err != nil {
+			err = fmt.Errorf("ingest %s %s: %w", d.ID, phase, err)
+		}
+	}()
 	if o.Dataset != d.ID || o.Time().IsZero() || o.Time().After(o.FetchedAt.Add(30*time.Second)) {
 		return false, errors.New("invalid observation identity/time")
 	}
 	o.Revision = digest(o)
 	w.write.Lock()
 	defer w.write.Unlock()
+	phase = "research fact"
 	if err := w.recordFact(d, &o); err != nil {
 		return false, err
 	}
 	if d.Kind == "large" || d.Kind == "large-history" {
+		phase = "orders"
 		if err := w.ingestOrders(d, o); err != nil {
 			return false, err
 		}
 	}
 	previous, exists := w.Latest(d.ID)
+	phase = "latest"
 	changed := !exists || previous.Revision != o.Revision
 	if !exists || !o.Time().Before(previous.Time()) {
 		if d.Kind != "price" {
@@ -390,6 +409,7 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 			}
 		}
 		w.putHot(d.ID, o)
+		phase = "derived snapshot"
 		w.recordLiquidationMap(d, o)
 		if err := w.recordOrderZoneSample(d, o); err != nil {
 			return false, err
@@ -417,6 +437,7 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 	if o.ObservedAt == nil {
 		t = t.Truncate(time.Duration(res) * time.Second)
 	}
+	phase = "dirty rollups"
 	for _, target := range targets(d) {
 		if target <= res {
 			continue
@@ -431,11 +452,13 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 	if e != nil {
 		return false, e
 	}
+	phase = "history open"
 	db, e := openPartition(w.partition(res, t, d.Kind == "whales"))
 	if e != nil {
 		return false, e
 	}
 	defer db.Close()
+	phase = "history revision"
 	var old string
 	e = db.QueryRow("SELECT revision FROM records WHERE dataset=? AND ts=?", d.ID, t.Unix()).Scan(&old)
 	if e != nil && e != sql.ErrNoRows {
@@ -444,6 +467,7 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 	if old == o.Revision {
 		return false, nil
 	}
+	phase = "history write"
 	_, e = db.Exec("INSERT INTO records VALUES(?,?,?,?) ON CONFLICT(dataset,ts) DO UPDATE SET revision=excluded.revision,payload=excluded.payload", d.ID, t.Unix(), o.Revision, b)
 	if e != nil {
 		return false, e
@@ -452,6 +476,7 @@ func (w *Warehouse) Ingest(d Dataset, o Observation) (bool, error) {
 	if old != "" {
 		correction = 1
 	}
+	phase = "progress"
 	_, e = w.db.Exec("INSERT INTO progress VALUES(?,?,?,1,?) ON CONFLICT(dataset) DO UPDATE SET first_ts=min(first_ts,excluded.first_ts),last_ts=max(last_ts,excluded.last_ts),updates=updates+1,corrections=corrections+excluded.corrections", d.ID, t.Unix(), t.Unix(), correction)
 	if e != nil {
 		return false, e

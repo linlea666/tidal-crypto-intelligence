@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // Both research pools share this gate. Waiting for a writer is cancellable and
@@ -20,18 +22,20 @@ type researchWriter struct {
 	waiting int
 }
 type researchWriteStats struct {
-	Writes               int64      `json:"writes"`
-	Failures             int64      `json:"failures"`
-	WaitMS               float64    `json:"waitMs"`
-	TransactionMS        float64    `json:"transactionMs"`
-	CommitMS             float64    `json:"commitMs"`
-	LastOperation        string     `json:"lastOperation"`
-	LastFailure          string     `json:"lastFailure,omitempty"`
-	LastFailureOperation string     `json:"lastFailureOperation,omitempty"`
-	LastFailureAt        *time.Time `json:"lastFailureAt"`
-	MaxWaitMS            float64    `json:"maxWaitMs"`
-	MaxTransactionMS     float64    `json:"maxTransactionMs"`
-	MaxCommitMS          float64    `json:"maxCommitMs"`
+	Writes                  int64      `json:"writes"`
+	Failures                int64      `json:"failures"`
+	WaitMS                  float64    `json:"waitMs"`
+	TransactionMS           float64    `json:"transactionMs"`
+	CommitMS                float64    `json:"commitMs"`
+	LastOperation           string     `json:"lastOperation"`
+	LastFailure             string     `json:"lastFailure,omitempty"`
+	LastFailureOperation    string     `json:"lastFailureOperation,omitempty"`
+	LastFailureAt           *time.Time `json:"lastFailureAt"`
+	MaxWaitMS               float64    `json:"maxWaitMs"`
+	MaxTransactionMS        float64    `json:"maxTransactionMs"`
+	MaxTransactionOperation string     `json:"maxTransactionOperation,omitempty"`
+	MaxTransactionAt        *time.Time `json:"maxTransactionAt"`
+	MaxCommitMS             float64    `json:"maxCommitMs"`
 }
 type researchDB struct {
 	*sql.DB
@@ -99,7 +103,12 @@ func (w *researchWriter) acquire(ctx context.Context, op string) (func(error, ti
 		w.stats.Writes++
 		w.stats.TransactionMS = float64(time.Since(acquired).Microseconds()) / 1000
 		w.stats.CommitMS = float64(commit.Microseconds()) / 1000
-		w.stats.MaxTransactionMS = max(w.stats.MaxTransactionMS, w.stats.TransactionMS)
+		if w.stats.TransactionMS > w.stats.MaxTransactionMS {
+			w.stats.MaxTransactionMS = w.stats.TransactionMS
+			w.stats.MaxTransactionOperation = op
+			at := time.Now().UTC()
+			w.stats.MaxTransactionAt = &at
+		}
 		w.stats.MaxCommitMS = max(w.stats.MaxCommitMS, w.stats.CommitMS)
 		if e != nil {
 			at := time.Now().UTC()
@@ -126,6 +135,9 @@ func sqlOperation(q string) string {
 }
 func retryResearchExec(ctx context.Context, db sqlExecutor, query string, args ...any) (sql.Result, error) {
 	for attempt := 0; ; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		// Recalculate the tail budget after every retry; a fixed 50ms SQLite
 		// busy handler must not run past an almost exhausted stage deadline.
 		if deadline, ok := ctx.Deadline(); ok {
@@ -142,7 +154,7 @@ func retryResearchExec(ctx context.Context, db sqlExecutor, query string, args .
 		r, err := db.ExecContext(ctx, query, args...)
 		// Never retry a snapshot conflict or an ambiguous commit. SQLite BUSY
 		// statements have made no change; all retries share the caller's budget.
-		if err == nil || !strings.Contains(err.Error(), "SQLITE_BUSY") || strings.Contains(err.Error(), "SQLITE_BUSY_SNAPSHOT") || attempt >= 3 {
+		if err == nil || !retryableSQLiteBusy(err) || attempt >= 3 {
 			return r, err
 		}
 		t := time.NewTimer(time.Duration(attempt+1) * 10 * time.Millisecond)
@@ -152,6 +164,21 @@ func retryResearchExec(ctx context.Context, db sqlExecutor, query string, args .
 			return nil, ctx.Err()
 		case <-t.C:
 		}
+	}
+}
+
+func retryableSQLiteBusy(err error) bool {
+	// modernc includes the extended number (e.g. 261) without necessarily
+	// including SQLITE_BUSY in Error(). Never classify errors by that text.
+	var coded interface{ Code() int }
+	if !errors.As(err, &coded) {
+		return false
+	}
+	switch coded.Code() {
+	case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_BUSY_RECOVERY, sqlite3.SQLITE_BUSY_TIMEOUT:
+		return true
+	default:
+		return false // Includes SQLITE_BUSY_SNAPSHOT and uncertain I/O failures.
 	}
 }
 func (db *researchDB) Exec(query string, args ...any) (sql.Result, error) {

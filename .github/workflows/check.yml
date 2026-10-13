@@ -8,6 +8,7 @@ permissions:
   contents: read
 jobs:
   verify:
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -27,6 +28,7 @@ jobs:
         working-directory: web
       - run: bash -n deploy/*.sh
   resource-replay:
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -47,7 +49,7 @@ jobs:
           retention-days: 30
 
   resource-long:
-    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'resource-long')
+    if: github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'resource-long') && (github.event.action != 'labeled' || github.event.label.name == 'resource-long')
     runs-on: ubuntu-latest
     timeout-minutes: 345
     steps:
@@ -69,7 +71,7 @@ jobs:
             tmp/resource-v24/*.pprof
           retention-days: 30
   baseline-reference:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.event.action != 'labeled'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

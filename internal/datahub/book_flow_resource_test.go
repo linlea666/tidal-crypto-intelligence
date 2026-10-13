@@ -34,7 +34,7 @@ func bookFlowResourceInput(t *testing.T, h *Hub, now time.Time) {
 		o.Dataset = d.ID
 		o.FetchedAt = now
 		if _, err := h.Store.Ingest(d, o); err != nil {
-			t.Fatal(err)
+			t.Fatalf("book input %s at %s: %v", venue, now.Format(time.RFC3339Nano), err)
 		}
 		md, _ := h.Dataset(minuteFootID(venue))
 		raw := [][]any{}
@@ -49,14 +49,14 @@ func bookFlowResourceInput(t *testing.T, h *Hub, now time.Time) {
 		}
 		for _, o := range rows {
 			if _, err = h.Store.Ingest(md, o); err != nil {
-				t.Fatal(err)
+				t.Fatalf("minute input %s source %s: %v", venue, o.Time().Format(time.RFC3339Nano), err)
 			}
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_, err = h.Scheduler.processMinuteContract(ctx, md, rows, now, nil)
 		cancel()
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("minute contract %s at %s: %v", venue, now.Format(time.RFC3339Nano), err)
 		}
 	}
 }

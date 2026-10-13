@@ -6,7 +6,7 @@
 
 ![V2沿用的柱状布局，图为早期真实运行界面](docs/qa/production-desktop.png)
 
-v2.17.0 改进正在工程验收，尚未发布。挂单承接使用独立v2研究、60分钟采集验收和两阶段提醒；上线、运行、72小时稳定性与效果分别记录，见 [BOOK-FLOW](docs/BOOK-FLOW.md) 与 [STATUS](docs/STATUS.md)。
+v2.17.0 已正式发布，生产处于collect采集验收。挂单承接使用独立v2研究、60分钟采集验收和两阶段提醒；早期运行超时仍在核查，run、新邮件及72小时尚未验收，见 [BOOK-FLOW](docs/BOOK-FLOW.md) 与 [STATUS](docs/STATUS.md)。
 
 ## 数据说明
 
