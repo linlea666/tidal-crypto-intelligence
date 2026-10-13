@@ -34,7 +34,7 @@ func (h *Hub) deliverTopicNoticeBatch(ctx context.Context, now time.Time, ids []
 	if err != nil || !allowed {
 		return false, err
 	}
-	tx, err := h.Store.research.BeginTx(ctx, nil)
+	tx, err := h.Store.research.BeginNamedTx(ctx, nil, "deliverTopicNoticeBatch")
 	if err != nil {
 		return false, err
 	}
@@ -77,7 +77,7 @@ func (h *Hub) deliverTopicNoticeBatch(ctx context.Context, now time.Time, ids []
 	// The SMTP deadline must not prevent recording its outcome.
 	persist, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resultTx, e := h.Store.research.BeginTx(persist, nil)
+	resultTx, e := h.Store.research.BeginNamedTx(persist, nil, "deliverTopicNoticeBatch-result")
 	if e != nil {
 		return true, e
 	}

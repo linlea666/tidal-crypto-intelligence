@@ -247,7 +247,7 @@ func (w *Warehouse) commitShortBaseline(ctx context.Context, work shortBaselineV
 	if len(a) > shortFlowRowLimit || len(b) > shortFlowRowLimit {
 		return errors.New("基线检查点工作集超限")
 	}
-	tx, e := w.shortDB().BeginTx(ctx, nil)
+	tx, e := w.shortDB().BeginNamedTx(ctx, nil, "commitShortBaseline")
 	if e != nil {
 		return e
 	}

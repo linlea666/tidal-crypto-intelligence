@@ -31,11 +31,19 @@ type researchWriteStats struct {
 	LastFailure             string     `json:"lastFailure,omitempty"`
 	LastFailureOperation    string     `json:"lastFailureOperation,omitempty"`
 	LastFailureAt           *time.Time `json:"lastFailureAt"`
+	LastFailurePhase        string     `json:"lastFailurePhase,omitempty"`
+	LastFailureGateWaitMS   float64    `json:"lastFailureGateWaitMs"`
+	LastFailureConnWaitMS   float64    `json:"lastFailureConnectionWaitMs"`
 	MaxWaitMS               float64    `json:"maxWaitMs"`
 	MaxTransactionMS        float64    `json:"maxTransactionMs"`
 	MaxTransactionOperation string     `json:"maxTransactionOperation,omitempty"`
 	MaxTransactionAt        *time.Time `json:"maxTransactionAt"`
 	MaxCommitMS             float64    `json:"maxCommitMs"`
+}
+
+type researchWriteDetail struct {
+	phase      string
+	connWaitMS float64
 }
 type researchDB struct {
 	*sql.DB
@@ -65,8 +73,13 @@ func (w *researchWriter) snapshot() researchWriteStats {
 	defer w.mu.Unlock()
 	return w.stats
 }
-func (w *researchWriter) acquire(ctx context.Context, op string) (func(error, time.Duration), error) {
+func (w *researchWriter) acquire(ctx context.Context, op string, detail ...*researchWriteDetail) (func(error, time.Duration), error) {
 	start := time.Now()
+	var trace *researchWriteDetail
+	if len(detail) > 0 {
+		trace = detail[0]
+		trace.phase = "writer_queue"
+	}
 	var err error
 	if ctx.Value(maintenanceWriteKey{}) != nil {
 		w.mu.Lock()
@@ -118,6 +131,13 @@ func (w *researchWriter) acquire(ctx context.Context, op string) (func(error, ti
 			w.stats.LastFailureOperation = op
 			w.stats.LastFailureAt = &at
 			w.stats.LastOperation = op
+			w.stats.LastFailureGateWaitMS = float64(acquired.Sub(start).Microseconds()) / 1000
+			w.stats.LastFailurePhase = ""
+			w.stats.LastFailureConnWaitMS = 0
+			if trace != nil {
+				w.stats.LastFailurePhase = trace.phase
+				w.stats.LastFailureConnWaitMS = trace.connWaitMS
+			}
 		}
 		w.mu.Unlock()
 	}
@@ -192,12 +212,21 @@ func (db *researchDB) ExecContext(ctx context.Context, query string, args ...any
 	if name, ok := ctx.Value(researchOperationKey{}).(string); ok {
 		op = name + ": " + op
 	}
-	finish, err := db.writer.acquire(ctx, op)
+	detail := &researchWriteDetail{}
+	finish, err := db.writer.acquire(ctx, op, detail)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { finish(err, 0) }()
-	return boundedExec(ctx, db.writer.db, 50, query, args...)
+	detail.phase = "connection"
+	started := time.Now()
+	conn, err := db.writer.db.Conn(ctx)
+	detail.connWaitMS = float64(time.Since(started).Microseconds()) / 1000
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	return boundedConnExec(ctx, conn, 50, &detail.phase, query, args...)
 }
 
 type researchTx struct {
@@ -206,33 +235,48 @@ type researchTx struct {
 	finish  func(error, time.Duration)
 	once    sync.Once
 	failure error
+	detail  *researchWriteDetail
 }
 
 func (db *researchDB) Begin() (*researchTx, error) { return db.BeginTx(context.Background(), nil) }
 func (db *researchDB) BeginTx(ctx context.Context, opts *sql.TxOptions) (*researchTx, error) {
-	finish, err := db.writer.acquire(ctx, "transaction")
+	return db.BeginNamedTx(ctx, opts, "transaction")
+}
+
+// name is a fixed call-site label, never a dataset payload or query argument.
+func (db *researchDB) BeginNamedTx(ctx context.Context, opts *sql.TxOptions, name string) (*researchTx, error) {
+	detail := &researchWriteDetail{}
+	finish, err := db.writer.acquire(ctx, name, detail)
 	if err != nil {
 		return nil, err
 	}
+	detail.phase = "connection"
+	started := time.Now()
 	conn, err := db.writer.db.Conn(ctx)
+	detail.connWaitMS = float64(time.Since(started).Microseconds()) / 1000
 	if err != nil {
 		finish(err, 0)
 		return nil, err
 	}
+	detail.phase = "sqlite_policy"
 	if _, err = conn.ExecContext(ctx, "PRAGMA busy_timeout=50"); err != nil {
 		conn.Close()
 		finish(err, 0)
 		return nil, err
 	}
+	detail.phase = "transaction_begin"
 	tx, err := conn.BeginTx(ctx, opts)
 	if err != nil {
 		conn.Close()
 		finish(err, 0)
 		return nil, err
 	}
-	return &researchTx{Tx: tx, conn: conn, finish: finish}, nil
+	return &researchTx{Tx: tx, conn: conn, finish: finish, detail: detail}, nil
 }
 func (tx *researchTx) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	if tx.failure == nil {
+		tx.detail.phase = "statement"
+	}
 	r, err := retryResearchExec(ctx, tx.Tx, q, args...)
 	if err != nil {
 		err = fmt.Errorf("%s: %w", sqlOperation(q), err)
@@ -242,6 +286,9 @@ func (tx *researchTx) ExecContext(ctx context.Context, q string, args ...any) (s
 }
 func (tx *researchTx) Commit() error {
 	start := time.Now()
+	if tx.failure == nil {
+		tx.detail.phase = "commit"
+	}
 	err := tx.Tx.Commit()
 	tx.once.Do(func() { tx.conn.Close(); tx.finish(errors.Join(tx.failure, err), time.Since(start)) })
 	return err

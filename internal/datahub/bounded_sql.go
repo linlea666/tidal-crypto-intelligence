@@ -20,6 +20,17 @@ func boundedExec(ctx context.Context, db interface {
 		return nil, err
 	}
 	defer conn.Close()
+	return boundedConnExec(ctx, conn, normalMS, nil, query, args...)
+}
+
+// phase is optional, local to one write attempt, and never includes arguments.
+func boundedConnExec(ctx context.Context, conn *sql.Conn, normalMS int, phase *string, query string, args ...any) (sql.Result, error) {
+	mark := func(value string) {
+		if phase != nil {
+			*phase = value
+		}
+	}
+	mark("budget")
 	waitMS := min(normalMS, 100)
 	if deadline, ok := ctx.Deadline(); ok {
 		waitMS = min(waitMS, int(time.Until(deadline).Milliseconds())-5)
@@ -27,7 +38,8 @@ func boundedExec(ctx context.Context, db interface {
 			return nil, context.DeadlineExceeded
 		}
 	}
-	if _, err = conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", waitMS)); err != nil {
+	mark("sqlite_policy")
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", waitMS)); err != nil {
 		return nil, err
 	}
 	defer func() {
@@ -35,5 +47,6 @@ func boundedExec(ctx context.Context, db interface {
 		defer cancel()
 		_, _ = conn.ExecContext(reset, fmt.Sprintf("PRAGMA busy_timeout=%d", normalMS))
 	}()
+	mark("statement")
 	return retryResearchExec(ctx, conn, query, args...)
 }
