@@ -223,7 +223,7 @@ func bookMailTrial(ctx context.Context, tx *researchTx, id string, accepted time
 }
 
 func (h *Hub) bookNoticeViews(ctx context.Context, event string) ([]any, error) {
-	rows, err := h.Store.research.QueryContext(ctx, `SELECT n.id,n.signal_id,n.kind,n.created,n.status,n.attempted,json_extract(n.payload,'$.templateVersion'),json_extract(n.payload,'$.enabledAt'),r.completed,r.status
+	rows, err := h.Store.shortDB().QueryContext(ctx, `SELECT n.id,n.signal_id,n.kind,n.created,n.status,n.attempted,json_extract(n.payload,'$.templateVersion'),json_extract(n.payload,'$.enabledAt'),r.completed,r.status
  FROM notices n LEFT JOIN mail_batch_items i ON i.notice_id=n.id LEFT JOIN mail_results r ON r.batch_id=i.batch_id
  WHERE n.kind LIKE 'book-flow:%' AND (?='' OR n.signal_id=?) ORDER BY n.created DESC,n.id LIMIT 20`, event, event)
 	if err != nil {

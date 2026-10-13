@@ -23,6 +23,7 @@ func (w *Warehouse) initResearch() error {
  PRAGMA max_page_count=126976;
  CREATE TABLE IF NOT EXISTS facts(dataset TEXT, ts INTEGER,res INTEGER, revision TEXT, available INTEGER, payload BLOB, PRIMARY KEY(dataset,ts,res,revision)) WITHOUT ROWID;
  CREATE INDEX IF NOT EXISTS facts_available ON facts(dataset,ts,res,available);
+ CREATE INDEX IF NOT EXISTS facts_time ON facts(ts);
  CREATE TABLE IF NOT EXISTS documents(kind TEXT,id TEXT,asset TEXT,at INTEGER,payload BLOB,PRIMARY KEY(kind,id)) WITHOUT ROWID;
  CREATE INDEX IF NOT EXISTS documents_time ON documents(kind,asset,at);
  CREATE TABLE IF NOT EXISTS gaps(start INTEGER PRIMARY KEY,end INTEGER,reason TEXT);
@@ -68,7 +69,9 @@ func (w *Warehouse) initResearch() error {
 		db.Close()
 		return e
 	}
-	return nil
+	// Maintenance may yield to live work. Recover the real on-disk budget
+	// before any collector can use the initially empty in-memory counter.
+	return w.refreshResearchUsage(context.Background())
 }
 func researchKind(d Dataset) bool {
 	switch d.Kind {
@@ -249,12 +252,20 @@ func (w *Warehouse) maintainResearch(ctx context.Context, now time.Time, days in
 	if _, e := w.research.ExecContext(ctx, "PRAGMA wal_checkpoint(PASSIVE)"); e != nil {
 		return e
 	}
+	return w.refreshResearchUsage(ctx)
+}
+
+func (w *Warehouse) refreshResearchUsage(ctx context.Context) error {
 	var pages, free, size int64
 	if e := w.research.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pages); e != nil {
 		return e
 	}
-	_ = w.research.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&free)
-	_ = w.research.QueryRowContext(ctx, "PRAGMA page_size").Scan(&size)
+	if err := w.research.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&free); err != nil {
+		return err
+	}
+	if err := w.research.QueryRowContext(ctx, "PRAGMA page_size").Scan(&size); err != nil {
+		return err
+	}
 	used := pages * size
 	if st, e := os.Stat(filepath.Join(w.root, "research.sqlite-wal")); e == nil {
 		used += st.Size()

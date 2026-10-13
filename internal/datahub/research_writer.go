@@ -20,18 +20,20 @@ type researchWriter struct {
 	waiting int
 }
 type researchWriteStats struct {
-	Writes               int64      `json:"writes"`
-	Failures             int64      `json:"failures"`
-	WaitMS               float64    `json:"waitMs"`
-	TransactionMS        float64    `json:"transactionMs"`
-	CommitMS             float64    `json:"commitMs"`
-	LastOperation        string     `json:"lastOperation"`
-	LastFailure          string     `json:"lastFailure,omitempty"`
-	LastFailureOperation string     `json:"lastFailureOperation,omitempty"`
-	LastFailureAt        *time.Time `json:"lastFailureAt"`
-	MaxWaitMS            float64    `json:"maxWaitMs"`
-	MaxTransactionMS     float64    `json:"maxTransactionMs"`
-	MaxCommitMS          float64    `json:"maxCommitMs"`
+	Writes                  int64      `json:"writes"`
+	Failures                int64      `json:"failures"`
+	WaitMS                  float64    `json:"waitMs"`
+	TransactionMS           float64    `json:"transactionMs"`
+	CommitMS                float64    `json:"commitMs"`
+	LastOperation           string     `json:"lastOperation"`
+	LastFailure             string     `json:"lastFailure,omitempty"`
+	LastFailureOperation    string     `json:"lastFailureOperation,omitempty"`
+	LastFailureAt           *time.Time `json:"lastFailureAt"`
+	MaxWaitMS               float64    `json:"maxWaitMs"`
+	MaxTransactionMS        float64    `json:"maxTransactionMs"`
+	MaxTransactionOperation string     `json:"maxTransactionOperation,omitempty"`
+	MaxTransactionAt        *time.Time `json:"maxTransactionAt"`
+	MaxCommitMS             float64    `json:"maxCommitMs"`
 }
 type researchDB struct {
 	*sql.DB
@@ -99,7 +101,12 @@ func (w *researchWriter) acquire(ctx context.Context, op string) (func(error, ti
 		w.stats.Writes++
 		w.stats.TransactionMS = float64(time.Since(acquired).Microseconds()) / 1000
 		w.stats.CommitMS = float64(commit.Microseconds()) / 1000
-		w.stats.MaxTransactionMS = max(w.stats.MaxTransactionMS, w.stats.TransactionMS)
+		if w.stats.TransactionMS > w.stats.MaxTransactionMS {
+			w.stats.MaxTransactionMS = w.stats.TransactionMS
+			w.stats.MaxTransactionOperation = op
+			at := time.Now().UTC()
+			w.stats.MaxTransactionAt = &at
+		}
 		w.stats.MaxCommitMS = max(w.stats.MaxCommitMS, w.stats.CommitMS)
 		if e != nil {
 			at := time.Now().UTC()
