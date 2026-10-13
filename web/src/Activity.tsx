@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Chart } from "./Chart";
 import { amount, clock, price, useAPI } from "./data";
 import {
@@ -12,6 +12,7 @@ import type { Asset } from "./types";
 import { SignalsPage, StudiesPage, WalletPage } from "./Research";
 import { BookFlowPage } from "./BookFlow";
 import { PaperPage } from "./Paper";
+import { MarketBrief, type BriefTarget } from "./MarketBrief";
 
 type FlowWindow = {
   buyCents: number;
@@ -50,7 +51,7 @@ type Event = {
   note: string;
   after?: { endAt: string | null };
 };
-type Activity = {
+export type Activity = {
   orderHistoryGap: boolean;
   pressureReaction: string;
   asset: Asset;
@@ -116,11 +117,16 @@ const stamp = (s: string) =>
     hour12: false,
   });
 export function ActivityPage({ asset }: { asset: Asset }) {
-  const [tab, setTab] = useState("snapshot");
+  const [tab, setTab] = useState("brief");
+  const [hours, setHours] = useState(1);
+  const [target, setTarget] = useState<BriefTarget>({ tab: "brief" });
+  useEffect(() => { setTab("brief"); setTarget({ tab: "brief" }); }, [asset]);
+  function navigate(next: BriefTarget) { setTarget(next); setTab(next.tab); }
   return (
     <>
       <nav className="research-tabs" aria-label="大资金动向视图">
         {[
+          ["brief", "市场解读"],
           ["snapshot", "当前动向"],
           ["signals", "异动预警"],
           ["book-flow", "挂单与承接"],
@@ -142,7 +148,7 @@ export function ActivityPage({ asset }: { asset: Asset }) {
                 ? "仅BTC启用"
                 : ""
             }
-            onClick={() => setTab(id)}
+            onClick={() => navigate({ tab: id })}
           >
             {name}
             {asset !== "BTC" &&
@@ -152,7 +158,8 @@ export function ActivityPage({ asset }: { asset: Asset }) {
           </button>
         ))}
       </nav>
-      {tab === "book-flow" ? (asset === "BTC" ? <BookFlowPage /> : <p>挂单与承接观察仅支持BTC。</p>) : tab === "paper" ? (
+      {tab !== "brief" && <button className="brief-back" onClick={() => navigate({ tab: "brief" })}>返回市场解读 · 保留最近{hours}小时窗口</button>}
+      {tab === "brief" ? <MarketBrief asset={asset} hours={hours} onHours={setHours} onNavigate={navigate} /> : tab === "book-flow" ? (asset === "BTC" ? <BookFlowPage key={`${target.eventId || ""}/${target.section || ""}`} initialEventId={target.eventId} initialSection={target.section} /> : <p>挂单与承接观察仅支持BTC。</p>) : tab === "paper" ? (
         asset === "BTC" ? (
           <PaperPage />
         ) : (
@@ -165,14 +172,13 @@ export function ActivityPage({ asset }: { asset: Asset }) {
       ) : tab === "wallet" ? (
         <WalletPage asset={asset} />
       ) : (
-        <ActivitySnapshot asset={asset} />
+        <ActivitySnapshot asset={asset} hours={hours} onHours={setHours} />
       )}
     </>
   );
 }
-function ActivitySnapshot({ asset }: { asset: Asset }) {
-  const [hours, setHours] = useState(1),
-    [span, setSpan] = useState(5),
+function ActivitySnapshot({ asset, hours, onHours }: { asset: Asset; hours: number; onHours: (hours: number) => void }) {
+  const [span, setSpan] = useState(5),
     [advanced, setAdvanced] = useState(false);
   const { data: d, error } = useAPI<Activity>(
     `activity?asset=${asset}&hours=${hours}&range=${span}`,
@@ -231,7 +237,7 @@ function ActivitySnapshot({ asset }: { asset: Asset }) {
       <div className="toolbar page-toolbar">
         <label>
           统计窗口{" "}
-          <select value={hours} onChange={(e) => setHours(+e.target.value)}>
+          <select value={hours} onChange={(e) => onHours(+e.target.value)}>
             {[1, 4, 24].map((n) => (
               <option key={n} value={n}>
                 最近{n}小时
