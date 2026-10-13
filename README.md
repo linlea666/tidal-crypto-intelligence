@@ -6,6 +6,8 @@
 
 ![V2沿用的柱状布局，图为早期真实运行界面](docs/qa/production-desktop.png)
 
+v2.17.1 collect期间新增两次短周期状态保存超时，正在验证v2.17.2原周期剩余预算与诊断历史补丁；run尚未启用，新提醒关闭。详见[当前状态](docs/STATUS.md)。
+
 v2.17.1 已部署，首次大历史库索引初始化故障已处理，失败记录保留。生产处于collect，待部署后的核心覆盖恢复至95%后启动真实run、预热30分钟并完成收件验收；新邮件尚未开启。72小时观察已按用户指令取消，长期效果尚未验收，见 [BOOK-FLOW](docs/BOOK-FLOW.md) 与 [STATUS](docs/STATUS.md)。
 
 ## 数据说明
@@ -89,8 +91,8 @@ GET只读取本地，不触发上游。上游任意滚动60秒最多12次、最�
 
 [CoinGlass](https://docs.coinglass.com) · [Binance](https://github.com/binance/binance-spot-api-docs) · [Kraken](https://docs.kraken.com/api/)
 
-验收状态见 [STATUS](docs/STATUS.md)。持续运行 72 小时的资源验收与短测分开记录。
+验收状态见 [STATUS](docs/STATUS.md)。本轮72小时观察已取消；独立资源回放、run预热与长期效果分别记录。
 
-当前稳定版本为 [v2.16.0](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.16.0)。各版本验收起止、资源限制及尚未完成的实盘项目见 [STATUS](docs/STATUS.md)，短测通过不表示72小时验收完成。
+当前稳定版本为 [v2.17.1](https://github.com/linlea666/tidal-crypto-intelligence/releases/tag/v2.17.1)，v2.17.2补丁待检查和发布。各版本资源、运行与效果验收分别见 [STATUS](docs/STATUS.md)，发布或短测通过不表示运行及策略效果已验收。
 
 Hyperliquid 原生异常建仓雷达的规则、公开覆盖边界及邮件启用验收见 [实施说明](docs/HYPERLIQUID-RADAR.md)。

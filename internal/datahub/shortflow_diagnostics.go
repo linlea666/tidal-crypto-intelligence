@@ -31,11 +31,15 @@ type ShortStage struct {
 	Operations           map[string]ShortOperation `json:"operations"`
 }
 type ShortRuntime struct {
-	Version          string                `json:"pipelineVersion"`
-	Origin           time.Time             `json:"origin"`
-	At               time.Time             `json:"at"`
-	Stages           map[string]ShortStage `json:"stages"`
-	PersistenceError string                `json:"persistenceError,omitempty"`
+	Version                  string                `json:"pipelineVersion"`
+	Origin                   time.Time             `json:"origin"`
+	At                       time.Time             `json:"at"`
+	Stages                   map[string]ShortStage `json:"stages"`
+	PersistenceError         string                `json:"persistenceError,omitempty"`
+	PersistenceFailures      int                   `json:"persistenceFailures,omitempty"`
+	LastPersistenceFailureAt *time.Time            `json:"lastPersistenceFailureAt,omitempty"`
+	LastPersistenceFailure   string                `json:"lastPersistenceFailure,omitempty"`
+	PersistenceRecoveredAt   *time.Time            `json:"persistenceRecoveredAt,omitempty"`
 }
 type shortTraceKey struct{}
 type shortTrace struct {
@@ -97,6 +101,11 @@ func (w *Warehouse) shortRuntimeView() *ShortRuntime {
 	return &out
 }
 func (w *Warehouse) recordShortRuntime(name string, now time.Time, elapsed time.Duration, trace *shortTrace, e error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	w.recordShortRuntimeContext(ctx, name, now, elapsed, trace, e)
+}
+func (w *Warehouse) recordShortRuntimeContext(ctx context.Context, name string, now time.Time, elapsed time.Duration, trace *shortTrace, e error) {
 	r := w.shortRuntimeView()
 	if r == nil {
 		r = &ShortRuntime{Version: ShortPipeline, Origin: now, Stages: map[string]ShortStage{}}
@@ -134,11 +143,17 @@ func (w *Warehouse) recordShortRuntime(name string, now time.Time, elapsed time.
 		s.Success = flowPtr(now)
 	}
 	r.Stages[name] = s
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	previousRecovery := r.PersistenceRecoveredAt
+	if r.PersistenceError != "" {
+		r.PersistenceRecoveredAt = flowPtr(time.Now().UTC())
+	}
 	r.PersistenceError = ""
 	if e := w.shortSaveState(ctx, "short-flow/runtime-v2", r); e != nil {
 		r.PersistenceError = "诊断持久化失败；当前运行数据仅在内存中"
+		r.PersistenceFailures++
+		r.LastPersistenceFailureAt = flowPtr(time.Now().UTC())
+		r.LastPersistenceFailure = e.Error()
+		r.PersistenceRecoveredAt = previousRecovery
 	}
 	w.mu.Lock()
 	w.shortRuntime = r
