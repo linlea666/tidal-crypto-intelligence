@@ -325,7 +325,7 @@ func (s *Scheduler) priority(j *Job, now time.Time) float64 {
 			// Deliberately slow backgrounds must not repeatedly jump ahead of
 			// timely core work merely because their strict usage TTL is shorter.
 			ttlDeadline := j.Dataset.TTL - 30
-			if j.Dataset.Collection == BookFlowCollection {
+			if j.Dataset.Collection == BookFlowCollection && j.Dataset.Kind != "book" {
 				ttlDeadline = max(ttlDeadline, j.Dataset.Refresh*2)
 			}
 			if elapsed > float64(ttlDeadline) {

@@ -40,7 +40,7 @@ func (w *Warehouse) liquidationLoad(ctx context.Context, kind, id string, v any)
 	return liquidationLoad(ctx, w.research, kind, id, v)
 }
 
-func liquidationLoad(ctx context.Context, db *sql.DB, kind, id string, v any) error {
+func liquidationLoad(ctx context.Context, db sqlReader, kind, id string, v any) error {
 	var b []byte
 	e := db.QueryRowContext(ctx, "SELECT payload FROM lz_records WHERE kind=? AND id=?", kind, id).Scan(&b)
 	if e != nil {
@@ -281,7 +281,7 @@ func (h *Hub) liquidationCandleSeries(ctx context.Context, a string, from, to, a
 	return liquidationCandleSeries(ctx, h.Store.research, a, from, to, asOf, timely)
 }
 
-func liquidationCandleSeries(ctx context.Context, db *sql.DB, a string, from, to, asOf time.Time, timely bool) (map[int64]Candle, error) {
+func liquidationCandleSeries(ctx context.Context, db sqlReader, a string, from, to, asOf time.Time, timely bool) (map[int64]Candle, error) {
 	out := map[int64]Candle{}
 	if to.Sub(from) > 31*24*time.Hour {
 		return nil, errors.New("清算K线窗口过大")

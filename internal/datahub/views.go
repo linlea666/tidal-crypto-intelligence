@@ -580,6 +580,8 @@ func (h *Hub) Read(ctx context.Context, path string, q url.Values) (json.RawMess
 				return h.bookFlowView(ctx, q, time.Now().UTC())
 			}
 			return h.alertAudit(ctx, q, time.Now().UTC())
+		case "book-flow/settings":
+			return h.bookSettingsView(ctx)
 		case "book-flow":
 			return h.bookFlowView(ctx, q, time.Now().UTC())
 		case "studies":

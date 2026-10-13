@@ -3,6 +3,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p tmp/resource-v24
+python3 - <<'PYIDENTITY'
+import json,subprocess,pathlib
+get=lambda *args:subprocess.check_output(['git',*args],text=True).strip()
+pathlib.Path('tmp/resource-v24/source.json').write_text(json.dumps({'revision':get('rev-parse','HEAD'),'tree':get('rev-parse','HEAD^{tree}'),'trackedChanges':get('status','--porcelain','--untracked-files=no')},indent=2))
+PYIDENTITY
 rm -f tmp/resource-v24/samples.jsonl tmp/resource-v24/runtime.jsonl
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go test -c ./internal/datahub -o tmp/resource-v24/replay.test
 mode=${TIDAL_REPLAY_MODE:-replay}

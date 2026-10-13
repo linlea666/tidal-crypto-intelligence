@@ -67,9 +67,29 @@ func bookFlowResourceStart(t *testing.T, h *Hub) func() {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); h.bookFlowWorker(ctx) }()
+	mailDone := make(chan struct{})
+	go func() {
+		defer close(mailDone)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				step, stop := context.WithTimeout(ctx, 2*time.Second)
+				err := h.processBookNotices(step, time.Now().UTC())
+				stop()
+				if err != nil && ctx.Err() == nil {
+					t.Errorf("book notification resource: %v", err)
+				}
+			}
+		}
+	}()
 	return func() {
 		cancel()
 		<-done
+		<-mailDone
 		h.mu.RLock()
 		runtime := h.bookFlowRuntime
 		h.mu.RUnlock()
@@ -143,7 +163,7 @@ func TestBookFlowBrowserFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.bookFlowRuntime = bookFlowRuntime{At: &now, Success: &now, Registered: true}
-	if err = h.Store.SaveState("book-flow/runtime", h.bookFlowRuntime); err != nil {
+	if err = h.Store.SaveState("book-flow/runtime/"+BookFlowRules, h.bookFlowRuntime); err != nil {
 		t.Fatal(err)
 	}
 	t.Log("offline fixture only; no upstream calls, orders or email")

@@ -83,6 +83,11 @@ func (h *Hub) deliverTopicNoticeBatch(ctx context.Context, now time.Time, ids []
 	}
 	defer resultTx.Rollback()
 	for _, id := range ids {
+		if topic == "book-flow" && status == "sent" {
+			if e := bookMailTrial(persist, resultTx, id, time.Now().UTC()); e != nil {
+				return true, e
+			}
+		}
 		if _, e := resultTx.ExecContext(persist, "UPDATE notices SET status=? WHERE id=? AND status='sending'", status, id); e != nil {
 			return true, e
 		}

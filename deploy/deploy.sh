@@ -46,6 +46,8 @@ if [[ -s "$root/deployed-version" && -f "$root/state.env" ]]; then
 fi
 # Online SQLite backup includes WAL transactions and avoids copying live WAL files.
 backup_batch="$version-$(date -u +%s)"
+# Configuration stays on the server in a private archive, never in the release.
+if [[ -d "$root/secrets" ]]; then tar -czf "$root/backups/config-$backup_batch.tar.gz" -C "$root" secrets; chmod 600 "$root/backups/config-$backup_batch.tar.gz"; fi
 if [[ -f "$root/data/state.sqlite" ]]; then
   sqlite3 "$root/data/state.sqlite" ".timeout 10000" ".backup '$root/backups/state-$version.sqlite'"
 fi
@@ -75,6 +77,10 @@ mv -Tf "$root/current.next" "$root/current"
     sed -n -E '/^TIDAL_ONCHAIN_(DISABLED|EVENTS_DISABLED)=(true|false)$/p; /^TIDAL_PAPER_MODE=(off|collect|run)$/p; /^TIDAL_BOOK_FLOW_MODE=(off|collect|run)$/p' "$root/state.env"
   fi
 } > "$root/state.env.next"
+# v2 research must pass its own collection acceptance before explicit run.
+if [[ "$version" == v2.17.0 ]] && ! [[ -f "$root/deployed-version" && $(cut -d ' ' -f 1 "$root/deployed-version") == v2.17.0 ]]; then
+  sed -i 's/^TIDAL_BOOK_FLOW_MODE=run$/TIDAL_BOOK_FLOW_MODE=collect/' "$root/state.env.next"
+fi
 mv "$root/state.env.next" "$root/state.env"
 compose=(docker compose --env-file "$root/state.env" -f "$root/current/compose.yaml")
 rollback() {

@@ -125,7 +125,7 @@ func TestBookFlowProfileBudgetAndStrictFreshness(t *testing.T) {
 			t.Fatal("slower polling rejuvenated old whale", d)
 		}
 	}
-	if math.Abs(cost-9.77361111111111) > .00001 {
+	if math.Abs(cost-10.17361111111111) > .00001 {
 		t.Fatal("quota planning drift", cost)
 	}
 	q := Quota{}
@@ -249,6 +249,8 @@ func TestBookFlowAtomicStateForwardOnlyAndGET(t *testing.T) {
 		t.Fatal(state.Blocked)
 	}
 	before := h.Scheduler.State()["calls"]
+	var rowsBefore, rowsAfter int
+	h.Store.shortDB().QueryRow("SELECT count(*) FROM book_flow").Scan(&rowsBefore)
 	for _, path := range []string{"book-flow", "alert-audit"} {
 		q := url.Values{}
 		if path == "alert-audit" {
@@ -259,11 +261,15 @@ func TestBookFlowAtomicStateForwardOnlyAndGET(t *testing.T) {
 			t.Fatal(path, err)
 		}
 	}
+	h.Store.shortDB().QueryRow("SELECT count(*) FROM book_flow").Scan(&rowsAfter)
+	if rowsAfter != rowsBefore {
+		t.Fatal("GET changed research ledger", rowsBefore, rowsAfter)
+	}
 	if h.Scheduler.State()["calls"] != before {
 		t.Fatal("GET fetched upstream")
 	}
 	var notices int
-	h.Store.research.QueryRow("SELECT count(*) FROM notices").Scan(&notices)
+	h.Store.research.QueryRow("SELECT count(*) FROM notices WHERE status != 'disabled'").Scan(&notices)
 	if notices != 0 {
 		t.Fatal("new mail")
 	}

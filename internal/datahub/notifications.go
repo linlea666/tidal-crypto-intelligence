@@ -187,10 +187,10 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	}
 	// Crash-after-send is intentionally at-most-once: never repeat an ambiguous
 	// SMTP delivery. Persisted in-flight notices become unknown on restart.
-	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'onchain-cost:%' AND kind NOT LIKE 'hl-radar:%')) AND status='sending' AND attempted<=?", h.boot.Unix()); e != nil {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='unknown_after_restart' WHERE (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'onchain-cost:%' AND kind NOT LIKE 'hl-radar:%' AND kind NOT LIKE 'book-flow:%')) AND status='sending' AND attempted<=?", h.boot.Unix()); e != nil {
 		return e
 	}
-	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_restart' WHERE (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'onchain-cost:%' AND kind NOT LIKE 'hl-radar:%')) AND status='pending' AND created<=?", h.boot.Unix()); e != nil {
+	if _, e := h.Store.research.ExecContext(ctx, "UPDATE notices SET status='suppressed_restart' WHERE (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'onchain-cost:%' AND kind NOT LIKE 'hl-radar:%' AND kind NOT LIKE 'book-flow:%')) AND status='pending' AND created<=?", h.boot.Unix()); e != nil {
 		return e
 	}
 	attempts, e := h.mailAttempts(ctx, now)
@@ -203,7 +203,7 @@ func (h *Hub) processNotices(ctx context.Context, now time.Time) error {
 	candidateAllowed := h.candidateMailAllowed(ctx, now)
 	var cutover time.Time
 	cutoverActive := h.Store.LoadState("signals/multifactor-cutover", &cutover)
-	rows, e := h.Store.research.QueryContext(ctx, "SELECT id,payload FROM notices WHERE status='pending' AND (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'onchain-cost:%' AND kind NOT LIKE 'hl-radar:%')) ORDER BY created LIMIT 100")
+	rows, e := h.Store.research.QueryContext(ctx, "SELECT id,payload FROM notices WHERE status='pending' AND (kind IS NULL OR (kind NOT LIKE 'vix:%' AND kind NOT LIKE 'onchain-cost:%' AND kind NOT LIKE 'hl-radar:%' AND kind NOT LIKE 'book-flow:%')) ORDER BY created LIMIT 100")
 	if e != nil {
 		return e
 	}
@@ -349,6 +349,11 @@ func (h *Hub) signalMailWorker(ctx context.Context) {
 			step, cancel := context.WithTimeout(ctx, 30*time.Second)
 			err := h.processNotices(step, now)
 			cancel()
+			if err == nil && h.bookFlowMode != "off" {
+				step, cancel = context.WithTimeout(ctx, 30*time.Second)
+				err = h.processBookNotices(step, time.Now().UTC())
+				cancel()
+			}
 			if ctx.Err() != nil {
 				return
 			}

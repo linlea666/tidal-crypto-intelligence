@@ -72,7 +72,7 @@ func vixLoad(ctx context.Context, q vixQuerier, statement string, value any, arg
 	}
 	return json.Unmarshal(b, value)
 }
-func vixSaveState(ctx context.Context, tx *sql.Tx, state vixState) error {
+func vixSaveState(ctx context.Context, tx *researchTx, state vixState) error {
 	b, err := json.Marshal(state)
 	if err != nil {
 		return err
@@ -80,7 +80,7 @@ func vixSaveState(ctx context.Context, tx *sql.Tx, state vixState) error {
 	_, err = tx.ExecContext(ctx, "INSERT INTO vix_state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload", b)
 	return err
 }
-func vixSaveFeed(ctx context.Context, tx *sql.Tx, feed VIXFeed) error {
+func vixSaveFeed(ctx context.Context, tx *researchTx, feed VIXFeed) error {
 	b, err := json.Marshal(feed)
 	if err != nil {
 		return err
@@ -195,7 +195,7 @@ func (h *Hub) ingestVIX(ctx context.Context, points []VIXPoint, now time.Time) e
 	return nil
 }
 
-func (h *Hub) evaluateVIX(ctx context.Context, tx *sql.Tx, s *vixState, p VIXPoint, now time.Time) error {
+func (h *Hub) evaluateVIX(ctx context.Context, tx *researchTx, s *vixState, p VIXPoint, now time.Time) error {
 	if s.LastPoint != nil {
 		if !p.At.After(s.LastPoint.At) {
 			if p.At.Equal(s.LastPoint.At) && p.Value != s.LastPoint.Value {

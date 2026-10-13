@@ -2,7 +2,6 @@ package datahub
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -34,7 +33,7 @@ func progressTerminal(p *PriceProgress) bool {
 
 // Read only the frozen tail, not today's current window. The fact ledger bounds
 // revisions by when they were first actually available, including after restart.
-func (h *Hub) finalPriceProgress(ctx context.Context, db *sql.DB, s Signal, now time.Time) (PriceProgress, error) {
+func (h *Hub) finalPriceProgress(ctx context.Context, db sqlReader, s Signal, now time.Time) (PriceProgress, error) {
 	end := s.ConfirmedThrough.Add(4 * time.Hour)
 	asOf := minTime(now, end.Add(progressGrace))
 	acc := newFlowAccumulator(300)

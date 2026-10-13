@@ -73,11 +73,12 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if s.Hub != nil {
-			if !s.Hub.Ready() {
-				problem(w, 503, "waiting for fresh V2 prices, FX and spot books")
-				return
+			readiness := s.Hub.Readiness()
+			if !readiness["ok"].(bool) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(503)
 			}
-			jsonOut(w, map[string]bool{"ok": true})
+			jsonOut(w, readiness)
 			return
 		}
 		for _, a := range []string{"BTC", "ETH"} {

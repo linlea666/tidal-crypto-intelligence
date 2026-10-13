@@ -68,7 +68,7 @@ func (w *Warehouse) studySnapshot(ctx context.Context, id string) (studySnapshot
 	}
 	return m, err
 }
-func writeSnapshot(ctx context.Context, tx *sql.Tx, m studySnapshot) error {
+func writeSnapshot(ctx context.Context, tx *researchTx, m studySnapshot) error {
 	b, err := json.Marshal(m)
 	if err != nil {
 		return err

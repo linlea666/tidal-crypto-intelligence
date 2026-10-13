@@ -9,7 +9,12 @@ import (
 
 // A SQLite busy handler may outlive context cancellation. Reserve time before
 // entering it, on the existing single connection; restore its normal policy.
-func boundedExec(ctx context.Context, db *sql.DB, normalMS int, query string, args ...any) (sql.Result, error) {
+func boundedExec(ctx context.Context, db interface {
+	Conn(context.Context) (*sql.Conn, error)
+}, normalMS int, query string, args ...any) (sql.Result, error) {
+	if research, ok := db.(*researchDB); ok {
+		return research.ExecContext(ctx, query, args...)
+	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return nil, err
@@ -30,5 +35,5 @@ func boundedExec(ctx context.Context, db *sql.DB, normalMS int, query string, ar
 		defer cancel()
 		_, _ = conn.ExecContext(reset, fmt.Sprintf("PRAGMA busy_timeout=%d", normalMS))
 	}()
-	return conn.ExecContext(ctx, query, args...)
+	return retryResearchExec(ctx, conn, query, args...)
 }
