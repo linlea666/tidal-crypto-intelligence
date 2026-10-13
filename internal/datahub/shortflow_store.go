@@ -88,6 +88,11 @@ func (w *Warehouse) shortLoad(ctx context.Context, kind, id string, v any) error
 
 func (w *Warehouse) shortSaveState(ctx context.Context, key string, v any) error {
 	defer shortMeasure(ctx, "current_write", time.Now())
+	// Only fixed internal names enter diagnostics, never payloads or caller IDs.
+	switch key {
+	case "short-flow/current", "short-flow/report", "short-flow/runtime-v2", "short-flow/gap":
+		ctx = context.WithValue(ctx, researchOperationKey{}, key)
+	}
 	b, e := json.Marshal(v)
 	if e != nil {
 		return e
@@ -176,7 +181,10 @@ type shortGap struct {
 }
 
 func (w *Warehouse) shortGap(now time.Time, e error, pause ...bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	w.shortGapContext(context.Background(), now, e, pause...)
+}
+func (w *Warehouse) shortGapContext(parent context.Context, now time.Time, e error, pause ...bool) {
+	ctx, cancel := context.WithTimeout(parent, 200*time.Millisecond)
 	defer cancel()
 	var g shortGap
 	err := w.shortStateResult(ctx, "short-flow/gap", &g)
@@ -191,8 +199,8 @@ func (w *Warehouse) shortGap(now time.Time, e error, pause ...bool) {
 	g.Count++
 	_ = w.shortSaveState(ctx, "short-flow/gap", g)
 }
-func (w *Warehouse) shortResume() {
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+func (w *Warehouse) shortResume(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, 200*time.Millisecond)
 	defer cancel()
 	var g shortGap
 	if w.shortState(ctx, "short-flow/gap", &g) && g.Paused {
@@ -433,11 +441,12 @@ func (h *Hub) shortFlowWorker(ctx context.Context) {
 	phase, successes := 0, 0
 	for {
 		now := time.Now().UTC()
+		started := time.Now()
+		cycle, finishCycle := context.WithDeadline(ctx, started.Add(2*time.Second))
 		// Reserve 350ms of the two-second slice for diagnostics and recovery state.
-		step, cancel := context.WithTimeout(ctx, 1650*time.Millisecond)
+		step, cancel := context.WithTimeout(cycle, 1650*time.Millisecond)
 		trace := &shortTrace{Operations: map[string]time.Duration{}}
 		step = context.WithValue(step, shortTraceKey{}, trace)
-		started := time.Now()
 		hubWait := h.Store.db.Stats().WaitDuration
 		researchWait := h.Store.shortDB().Stats().WaitDuration
 		var e error
@@ -451,21 +460,27 @@ func (h *Hub) shortFlowWorker(ctx context.Context) {
 		}
 		cancel()
 		if ctx.Err() != nil {
+			finishCycle()
 			return
 		}
 		trace.Operations["hub_pool_wait"] = h.Store.db.Stats().WaitDuration - hubWait
 		trace.Operations["research_pool_wait"] = h.Store.shortDB().Stats().WaitDuration - researchWait
-		h.Store.recordShortRuntime([]string{"observation", "baseline", "study"}[phase%3], now, time.Since(started), trace, e)
+		// Use time left by a fast phase instead of imposing a separate 100ms
+		// checkpoint deadline. Keep 200ms for gap/recovery within the same slice.
+		diagnostic, stopDiagnostic := context.WithDeadline(cycle, started.Add(1800*time.Millisecond))
+		h.Store.recordShortRuntimeContext(diagnostic, []string{"observation", "baseline", "study"}[phase%3], now, time.Since(started), trace, e)
+		stopDiagnostic()
 		if e != nil {
 			successes = 0
 			class := shortErrorClass(e)
-			h.Store.shortGap(now, fmt.Errorf("短周期阶段%d: %w", phase%3, e), class == "write" || class == "capacity")
+			h.Store.shortGapContext(cycle, now, fmt.Errorf("短周期阶段%d: %w", phase%3, e), class == "write" || class == "capacity")
 		} else {
 			successes++
 			if successes >= 3 {
-				h.Store.shortResume()
+				h.Store.shortResume(cycle)
 			}
 		}
+		finishCycle()
 		phase++
 		select {
 		case <-ctx.Done():

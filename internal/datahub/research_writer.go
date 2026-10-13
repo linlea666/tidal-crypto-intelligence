@@ -49,6 +49,7 @@ type sqlExecutor interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 type maintenanceWriteKey struct{}
+type researchOperationKey struct{}
 
 var errMaintenanceDeferred = errors.New("research maintenance deferred to live writer")
 
@@ -187,7 +188,11 @@ func (db *researchDB) Exec(query string, args ...any) (sql.Result, error) {
 	return db.ExecContext(ctx, query, args...)
 }
 func (db *researchDB) ExecContext(ctx context.Context, query string, args ...any) (result sql.Result, err error) {
-	finish, err := db.writer.acquire(ctx, sqlOperation(query))
+	op := sqlOperation(query)
+	if name, ok := ctx.Value(researchOperationKey{}).(string); ok {
+		op = name + ": " + op
+	}
+	finish, err := db.writer.acquire(ctx, op)
 	if err != nil {
 		return nil, err
 	}
