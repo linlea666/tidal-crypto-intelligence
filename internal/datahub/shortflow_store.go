@@ -45,7 +45,8 @@ CREATE TRIGGER IF NOT EXISTS sf_removed AFTER DELETE ON sf_records BEGIN UPDATE 
 	// existing collectors/readers, the database file, or its page ceiling.
 	u := url.URL{Scheme: "file", Path: filepath.Join(w.root, "research.sqlite")}
 	u.RawQuery = "mode=rw&_pragma=busy_timeout(1500)&_pragma=cache_size(-256)&_pragma=max_page_count(126976)&_pragma=synchronous(NORMAL)"
-	db, err := sql.Open("sqlite", u.String())
+	connectionTrace := &researchConnectionTrace{}
+	db, err := tracedResearchDatabase(u.String(), connectionTrace)
 	if err != nil {
 		return err
 	}
@@ -56,6 +57,7 @@ CREATE TRIGGER IF NOT EXISTS sf_removed AFTER DELETE ON sf_records BEGIN UPDATE 
 		return err
 	}
 	w.shortResearch = newResearchDB(db, w.research.writer)
+	w.research.writer.connectionTrace = connectionTrace
 	// Copy only bounded display metadata. Preserve the legacy rows and origins.
 	for _, key := range []string{"short-flow/current", "short-flow/report", "short-flow/gap", "short-flow/runtime-v2"} {
 		var raw []byte
