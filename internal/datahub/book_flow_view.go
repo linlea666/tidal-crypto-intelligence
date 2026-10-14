@@ -407,22 +407,35 @@ func bookMarketCoverage(events []PriceEpisode, signals []Signal, now time.Time) 
 // to the very same price episode; unmatched episodes never get an invented lead.
 func bookRelativeFormal(events []PriceEpisode, signals, formal []Signal, now time.Time) any {
 	a, b := matchEpisodes(events, signals, now), matchEpisodes(events, formal, now)
-	times := map[string]time.Time{}
-	for _, s := range append(append([]Signal(nil), signals...), formal...) {
-		times[s.ID] = s.At
+	observationTimes, formalTimes := map[string]time.Time{}, map[string]time.Time{}
+	for _, s := range signals {
+		if s.ID != "" && !s.At.IsZero() {
+			observationTimes[s.ID] = s.At
+		}
+	}
+	for _, s := range formal {
+		if s.ID != "" && !s.At.IsZero() {
+			formalTimes[s.ID] = s.At
+		}
 	}
 	matched := map[string]string{}
 	for _, m := range b.Matches {
-		matched[m.EventID] = m.SignalID
+		if m.SignalID != "" && m.Timing != "missed" {
+			matched[m.EventID] = m.SignalID
+		}
 	}
 	values := []float64{}
 	pairs := []any{}
 	for _, m := range a.Matches {
 		f, ok := matched[m.EventID]
-		if !ok {
+		observed, observationOK := observationTimes[m.SignalID]
+		formalAt, formalOK := formalTimes[f]
+		// matchEpisodes includes a row for every missed price episode. Missing
+		// IDs/times must not turn into a zero-time pair or affect its median.
+		if !ok || m.Timing == "missed" || !observationOK || !formalOK {
 			continue
 		}
-		lead := times[f].Sub(times[m.SignalID]).Minutes()
+		lead := formalAt.Sub(observed).Minutes()
 		values = append(values, lead)
 		pairs = append(pairs, map[string]any{"eventId": m.EventID, "observationId": m.SignalID, "formalId": f, "leadMinutes": finiteDecimal(&lead)})
 	}
