@@ -15,31 +15,47 @@ import (
 // Both research pools share this gate. Waiting for a writer is cancellable and
 // happens before obtaining a connection, so readers retain their own pool.
 type researchWriter struct {
-	gate    chan struct{}
-	db      *sql.DB
-	mu      sync.Mutex
-	stats   researchWriteStats
-	waiting int
+	gate            chan struct{}
+	db              *sql.DB
+	mu              sync.Mutex
+	stats           researchWriteStats
+	waiting         int
+	connectionTrace *researchConnectionTrace
 }
 type researchWriteStats struct {
-	Writes                  int64      `json:"writes"`
-	Failures                int64      `json:"failures"`
-	WaitMS                  float64    `json:"waitMs"`
-	TransactionMS           float64    `json:"transactionMs"`
-	CommitMS                float64    `json:"commitMs"`
-	LastOperation           string     `json:"lastOperation"`
-	LastFailure             string     `json:"lastFailure,omitempty"`
-	LastFailureOperation    string     `json:"lastFailureOperation,omitempty"`
-	LastFailureAt           *time.Time `json:"lastFailureAt"`
-	LastFailurePhase        string     `json:"lastFailurePhase,omitempty"`
-	LastFailureGateWaitMS   float64    `json:"lastFailureGateWaitMs"`
-	LastFailureConnWaitMS   float64    `json:"lastFailureConnectionWaitMs"`
-	MaxWaitMS               float64    `json:"maxWaitMs"`
-	MaxTransactionMS        float64    `json:"maxTransactionMs"`
-	MaxTransactionOperation string     `json:"maxTransactionOperation,omitempty"`
-	MaxTransactionAt        *time.Time `json:"maxTransactionAt"`
-	MaxCommitMS             float64    `json:"maxCommitMs"`
+	Writes                  int64                  `json:"writes"`
+	Failures                int64                  `json:"failures"`
+	WaitMS                  float64                `json:"waitMs"`
+	TransactionMS           float64                `json:"transactionMs"`
+	CommitMS                float64                `json:"commitMs"`
+	LastOperation           string                 `json:"lastOperation"`
+	LastFailure             string                 `json:"lastFailure,omitempty"`
+	LastFailureOperation    string                 `json:"lastFailureOperation,omitempty"`
+	LastFailureAt           *time.Time             `json:"lastFailureAt"`
+	LastFailurePhase        string                 `json:"lastFailurePhase,omitempty"`
+	LastFailureGateWaitMS   float64                `json:"lastFailureGateWaitMs"`
+	LastFailureConnWaitMS   float64                `json:"lastFailureConnectionWaitMs"`
+	MaxWaitMS               float64                `json:"maxWaitMs"`
+	MaxTransactionMS        float64                `json:"maxTransactionMs"`
+	MaxTransactionOperation string                 `json:"maxTransactionOperation,omitempty"`
+	MaxTransactionAt        *time.Time             `json:"maxTransactionAt"`
+	MaxCommitMS             float64                `json:"maxCommitMs"`
+	RecentFailures          []researchWriteFailure `json:"recentFailures,omitempty"`
 }
+
+type researchWriteFailure struct {
+	At                  time.Time                  `json:"at"`
+	Operation           string                     `json:"operation"`
+	Phase               string                     `json:"phase"`
+	Error               string                     `json:"error"`
+	EntryBudgetMS       *float64                   `json:"entryBudgetMs"`
+	GateWaitMS          float64                    `json:"gateWaitMs"`
+	ConnectionWaitMS    float64                    `json:"connectionWaitMs"`
+	ConnectionAtEntry   researchConnectionSnapshot `json:"connectionAtEntry"`
+	ConnectionAtFailure researchConnectionSnapshot `json:"connectionAtFailure"`
+}
+
+const researchFailureHistoryLimit = 16
 
 type researchWriteDetail struct {
 	phase      string
@@ -71,10 +87,18 @@ func newResearchDB(db *sql.DB, writer *researchWriter) *researchDB {
 func (w *researchWriter) snapshot() researchWriteStats {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.stats
+	out := w.stats
+	out.RecentFailures = append([]researchWriteFailure(nil), w.stats.RecentFailures...)
+	return out
 }
 func (w *researchWriter) acquire(ctx context.Context, op string, detail ...*researchWriteDetail) (func(error, time.Duration), error) {
 	start := time.Now()
+	var entryBudget *float64
+	if deadline, ok := ctx.Deadline(); ok {
+		ms := float64(deadline.Sub(start).Microseconds()) / 1000
+		entryBudget = &ms
+	}
+	connectionAtEntry := w.connectionTrace.snapshot()
 	var trace *researchWriteDetail
 	if len(detail) > 0 {
 		trace = detail[0]
@@ -92,6 +116,14 @@ func (w *researchWriter) acquire(ctx context.Context, op string, detail ...*rese
 		case w.gate <- struct{}{}:
 		default:
 			return nil, errMaintenanceDeferred
+		}
+	} else if ctx.Err() != nil {
+		// A spent parent budget is not evidence that another writer held the
+		// gate. Preserve failure counting, but don't randomly select a free gate
+		// when both the gate and Done are ready.
+		err = ctx.Err()
+		if trace != nil {
+			trace.phase = "caller_budget"
 		}
 	} else {
 		w.mu.Lock()
@@ -137,6 +169,16 @@ func (w *researchWriter) acquire(ctx context.Context, op string, detail ...*rese
 			if trace != nil {
 				w.stats.LastFailurePhase = trace.phase
 				w.stats.LastFailureConnWaitMS = trace.connWaitMS
+			}
+			failure := researchWriteFailure{At: at, Operation: op, Phase: w.stats.LastFailurePhase,
+				Error: e.Error(), EntryBudgetMS: entryBudget, GateWaitMS: w.stats.LastFailureGateWaitMS,
+				ConnectionWaitMS: w.stats.LastFailureConnWaitMS, ConnectionAtEntry: connectionAtEntry,
+				ConnectionAtFailure: w.connectionTrace.snapshot()}
+			if len(w.stats.RecentFailures) == researchFailureHistoryLimit {
+				copy(w.stats.RecentFailures, w.stats.RecentFailures[1:])
+				w.stats.RecentFailures[len(w.stats.RecentFailures)-1] = failure
+			} else {
+				w.stats.RecentFailures = append(w.stats.RecentFailures, failure)
 			}
 		}
 		w.mu.Unlock()
